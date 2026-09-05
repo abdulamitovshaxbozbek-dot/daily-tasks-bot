@@ -1,19 +1,9 @@
 const express = require('express');
-const { Pool } = require('pg');
 require('dotenv').config();
+const pool = require('./db');
 
 const app = express();
 app.use(express.json());
-
-// DATABASE POOL
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
-  max: 20,
-  min: 5,
-  connectionTimeoutMillis: 10000,
-  idleTimeoutMillis: 30000
-});
 
 // HEALTH CHECK
 app.get('/health', (req, res) => {
@@ -34,5 +24,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
-
-module.exports = pool;
