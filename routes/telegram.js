@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const pool = require('../server');
+const pool = require('../db');
 const TelegramAPI = require('node-telegram-bot-api');
 
 const bot = new TelegramAPI(process.env.TELEGRAM_TOKEN);
