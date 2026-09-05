@@ -6,264 +6,264 @@ const TelegramAPI = require('node-telegram-bot-api');
 
 const bot = new TelegramAPI(process.env.TELEGRAM_TOKEN);
 
-// =========================
-// CONFIG
-// =========================
+// ================================
+// SOZLAMALAR
+// ================================
 
-const ADMIN_CHAT_ID = 8908985083;
+const ADMIN_CHAT_ID = '8908985083';
 const TIMEZONE = 'Asia/Tashkent';
 
-const MORNING_TIMES = [
-  '02:00',
-  '03:00',
-  '04:00',
-  '05:00',
-  '06:00',
-  '07:00',
-  '08:00',
-  '09:00',
-  '10:00'
-];
+// ================================
+// YORDAMCHI FUNKSIYALAR
+// ================================
 
-// =========================
-// HELPERS
-// =========================
-
-function getTashkentDate(offsetDays = 0) {
-  const now = new Date();
-
-  const parts = new Intl.DateTimeFormat('en-CA', {
+// Tashkent bo'yicha YYYY-MM-DD
+function getTashkentDate(date = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
     timeZone: TIMEZONE,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit'
+  }).format(date);
+}
+
+// Tashkent bo'yicha kechagi sana
+function getYesterdayDate() {
+  const now = new Date();
+
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: TIMEZONE,
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric'
   }).formatToParts(now);
 
-  const year = parts.find(p => p.type === 'year').value;
-  const month = parts.find(p => p.type === 'month').value;
-  const day = parts.find(p => p.type === 'day').value;
+  const year = Number(parts.find(x => x.type === 'year').value);
+  const month = Number(parts.find(x => x.type === 'month').value);
+  const day = Number(parts.find(x => x.type === 'day').value);
 
-  const date = new Date(
-    Date.UTC(
-      Number(year),
-      Number(month) - 1,
-      Number(day) + offsetDays
-    )
-  );
+  const tashkentDate = new Date(year, month - 1, day);
+  tashkentDate.setDate(tashkentDate.getDate() - 1);
 
-  return date.toISOString().slice(0, 10);
+  return tashkentDate.toISOString().slice(0, 10);
+}
+
+// YYYY-MM-DD dan chiroyli sana
+function formatUzDate(dateString) {
+  const date = new Date(`${dateString}T12:00:00`);
+
+  const months = [
+    'yanvar',
+    'fevral',
+    'mart',
+    'aprel',
+    'may',
+    'iyun',
+    'iyul',
+    'avgust',
+    'sentabr',
+    'oktabr',
+    'noyabr',
+    'dekabr'
+  ];
+
+  return `${date.getDate()}-${months[date.getMonth()]}, ${date.getFullYear()}`;
 }
 
 function normalizeTask(text) {
   return text
     .toLowerCase()
-    .replace(/^\s*(\d+[\.\)]|[-•*])\s*/, '')
+    .replace(/^\s*\d+[\.\)\-]\s*/, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-function cleanTask(text) {
+function cleanTaskText(text) {
   return text
-    .replace(/^\s*(\d+[\.\)]|[-•*])\s*/, '')
-    .replace(/\s+/g, ' ')
+    .replace(/^\s*\d+[\.\)\-]\s*/, '')
     .trim();
 }
 
-function progressBar(percent, length = 10) {
-  const filled = Math.round((percent / 100) * length);
+function progressBar(percent) {
+  const filled = Math.round(percent / 10);
+  const empty = 10 - filled;
 
-  return '🟩'.repeat(filled) + '⬜'.repeat(length - filled);
+  return '🟩'.repeat(filled) + '⬜'.repeat(empty);
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+function getMotivation(percent) {
+  if (percent === 100) {
+    return {
+      title: '🔥 Ajoyib natija!',
+      text: 'Barcha vazifalaringizni bajardingiz. Shu tempni davom ettiring! 🚀'
+    };
+  }
+
+  if (percent >= 70) {
+    return {
+      title: '👍 Yaxshi natija!',
+      text: "Natija yomon emas. Ertaga yana bir qadam oldinga! 💪"
+    };
+  }
+
+  if (percent >= 40) {
+    return {
+      title: '💪 Harakat davom etsin!',
+      text: "Bugun ham foydali ishlar qilindi. Ertaga bundan ham yaxshiroq bo'ladi!"
+    };
+  }
+
+  if (percent > 0) {
+    return {
+      title: '🌱 Boshlanish bor!',
+      text: "Muhimi — to'xtamaslik. Ertaga yangi imkoniyat!"
+    };
+  }
+
+  return {
+    title: '📭 Bugun natija yo‘q',
+    text: "Ertaga yangidan boshlaymiz. Kichik qadamlar katta natijaga olib boradi! 💪"
+  };
+}
+
+function calculateStats(tasks) {
+  const stats = {
+    total: tasks.length,
+    completed: 0,
+    failed: 0,
+    pending: 0
+  };
+
+  for (const task of tasks) {
+    if (task.status === 'completed') stats.completed++;
+    else if (task.status === 'failed') stats.failed++;
+    else stats.pending++;
+  }
+
+  stats.percent =
+    stats.total > 0
+      ? Math.round((stats.completed / stats.total) * 100)
+      : 0;
+
+  return stats;
 }
 
 function isAdmin(chatId) {
-  return Number(chatId) === ADMIN_CHAT_ID;
+  return String(chatId) === ADMIN_CHAT_ID;
 }
 
-// =========================
-// STATE MANAGEMENT
-// =========================
-
-async function changeUserState(userId, newState, reason = null) {
-  const client = await pool.connect();
-
-  try {
-    await client.query('BEGIN');
-
-    const current = await client.query(
-      `SELECT state
-       FROM users
-       WHERE id = $1
-       FOR UPDATE`,
-      [userId]
-    );
-
-    if (current.rows.length === 0) {
-      throw new Error('User topilmadi');
-    }
-
-    const oldState = current.rows[0].state;
-
-    await client.query(
-      `UPDATE users
-       SET state = $1
-       WHERE id = $2`,
-      [newState, userId]
-    );
-
-    if (oldState !== newState) {
-      await client.query(
-        `INSERT INTO user_state_history
-         (user_id, old_state, new_state, reason)
-         VALUES ($1, $2, $3, $4)`,
-        [userId, oldState, newState, reason]
-      );
-    }
-
-    await client.query('COMMIT');
-
-    return {
-      oldState,
-      newState
-    };
-
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-
-  } finally {
-    client.release();
-  }
-}
-
-// =========================
-// ROUTER
-// =========================
+// ================================
+// ASOSIY WEBHOOK
+// ================================
 
 router.post('/', async (req, res) => {
   const startTime = Date.now();
 
   try {
-    const trigger = req.body;
+    const trigger = req.body || {};
+
+    const message = trigger.message;
+    const callbackQuery = trigger.callback_query;
 
     const chatId =
-      trigger.message?.chat?.id ||
-      trigger.callback_query?.message?.chat?.id;
-
-    const messageText =
-      (trigger.message?.text || '').trim();
-
-    const callbackData =
-      trigger.callback_query?.data || null;
-
-    const callbackQueryId =
-      trigger.callback_query?.id || null;
-
-    const callbackMessage =
-      trigger.callback_query?.message || null;
-
-    const username =
-      trigger.message?.chat?.username ||
-      trigger.callback_query?.from?.username ||
-      '';
-
-    const firstName =
-      trigger.message?.chat?.first_name ||
-      trigger.callback_query?.from?.first_name ||
-      "Do'st";
+      message?.chat?.id ||
+      callbackQuery?.message?.chat?.id;
 
     if (!chatId) {
-      return res.status(400).json({
-        ok: false,
-        error: 'chatId topilmadi'
+      return res.json({
+        ok: true,
+        ignored: true,
+        reason: 'No chat ID'
       });
     }
 
-    let route = 'extra';
+    const messageText = (message?.text || '').trim();
+    const callbackData = callbackQuery?.data || '';
 
-    // =========================
-    // ROUTE DETECTION
-    // =========================
+    const username =
+      message?.chat?.username ||
+      callbackQuery?.from?.username ||
+      '';
+
+    const firstName =
+      message?.chat?.first_name ||
+      callbackQuery?.from?.first_name ||
+      "Do'st";
+
+    let route = 'extra';
 
     if (messageText === '/start') {
       route = 'start';
-
-    } else if (callbackData?.startsWith('morning_time|')) {
-      route = 'morning_callback';
-
-    } else if (callbackData?.startsWith('task_status|')) {
-      route = 'task_status';
-
-    } else if (messageText === '/yakunladim') {
-      route = 'yakunladim';
-
-    } else if (messageText === '/hisobot') {
-      route = 'hisobot';
-
-    } else if (messageText === '/haftalik') {
-      route = 'haftalik';
-
-    } else if (messageText === '/oylik') {
-      route = 'oylik';
-
-    } else if (messageText === '/yillik') {
-      route = 'yillik';
-
-    } else if (messageText === '/admin') {
-      route = 'admin';
-
-    } else if (messageText.startsWith('/xabar')) {
-      route = 'broadcast';
-
-    } else if (
-      messageText &&
-      !messageText.startsWith('/')
-    ) {
-      route = 'task_text';
     }
 
-    // =========================
-    // ROUTE EXECUTION
-    // =========================
+    else if (callbackData.startsWith('morning_time|')) {
+      route = 'morning_callback';
+    }
+
+    else if (callbackData.startsWith('task_status|')) {
+      route = 'task_status';
+    }
+
+    else if (messageText === '/yakunladim') {
+      route = 'yakunladim';
+    }
+
+    else if (messageText === '/hisobot') {
+      route = 'hisobot';
+    }
+
+    else if (messageText === '/haftalik') {
+      route = 'haftalik';
+    }
+
+    else if (messageText === '/oylik') {
+      route = 'oylik';
+    }
+
+    else if (messageText === '/yillik') {
+      route = 'yillik';
+    }
+
+    else if (messageText === '/admin') {
+      route = 'admin';
+    }
+
+    else if (messageText.startsWith('/xabar')) {
+      route = 'broadcast';
+    }
+
+    else if (messageText && !messageText.startsWith('/')) {
+      route = 'task_text';
+    }
 
     switch (route) {
 
       case 'start':
-        await handleStart(
-          chatId,
-          firstName,
-          username
-        );
+        await handleStart(chatId, firstName, username);
         break;
 
       case 'morning_callback':
         await handleMorningTime(
           chatId,
           callbackData,
-          callbackQueryId
+          callbackQuery.id
         );
         break;
 
       case 'task_text':
-        await handleTaskWrite(
-          chatId,
-          messageText
-        );
+        await handleTaskWrite(chatId, messageText);
         break;
 
       case 'yakunladim':
-        await handleYakunladim(chatId);
+        await handleFinishDay(chatId);
         break;
 
       case 'task_status':
         await handleTaskStatus(
           chatId,
           callbackData,
-          callbackQueryId,
-          callbackMessage
+          callbackQuery.id,
+          callbackQuery.message
         );
         break;
 
@@ -288,14 +288,17 @@ router.post('/', async (req, res) => {
         break;
 
       case 'broadcast':
-        await handleBroadcast(
-          chatId,
-          messageText
-        );
+        await handleBroadcast(chatId, messageText);
         break;
 
       default:
-        await handleExtra(chatId);
+        if (messageText.startsWith('/')) {
+          await bot.sendMessage(
+            chatId,
+            "⚠️ Bu buyruq mavjud emas."
+          );
+        }
+        break;
     }
 
     const duration = Date.now() - startTime;
@@ -311,35 +314,32 @@ router.post('/', async (req, res) => {
     });
 
   } catch (error) {
-
     console.error('TELEGRAM ERROR:', error);
 
-    res.status(500).json({
-      ok: false,
-      error: error.message
-    });
+    if (!res.headersSent) {
+      res.status(500).json({
+        ok: false,
+        error: error.message
+      });
+    }
   }
 });
 
-// =========================
+// ================================
 // /START
-// =========================
+// ================================
 
-async function handleStart(
-  chatId,
-  firstName,
-  username
-) {
+async function handleStart(chatId, firstName, username) {
 
-  const result = await pool.query(
+  const userResult = await pool.query(
     `SELECT *
      FROM users
      WHERE telegram_chat_id = $1`,
     [chatId]
   );
 
-  // USER ALREADY EXISTS
-  if (result.rows.length > 0) {
+  // Eski user qayta ro'yxatdan o'tmaydi
+  if (userResult.rows.length > 0) {
 
     await bot.sendMessage(
       chatId,
@@ -353,10 +353,10 @@ Siz allaqachon ro'yxatdan o'tgansiz. ✅
     return;
   }
 
-  // CREATE USER
-
-  const newUser = await pool.query(
-    `INSERT INTO users (
+  // Yangi user
+  await pool.query(
+    `INSERT INTO users
+    (
       telegram_chat_id,
       telegram_username,
       first_name,
@@ -364,8 +364,7 @@ Siz allaqachon ro'yxatdan o'tgansiz. ✅
       state,
       subscription_status
     )
-    VALUES ($1, $2, $3, $4, $5, $6)
-    RETURNING id`,
+    VALUES ($1, $2, $3, $4, $5, $6)`,
     [
       chatId,
       username,
@@ -376,57 +375,50 @@ Siz allaqachon ro'yxatdan o'tgansiz. ✅
     ]
   );
 
-  const userId = newUser.rows[0].id;
+  const times = [
+    '02:00',
+    '03:00',
+    '04:00',
+    '05:00',
+    '06:00',
+    '07:00',
+    '08:00',
+    '09:00',
+    '10:00'
+  ];
 
-  await pool.query(
-    `INSERT INTO user_state_history
-    (
-      user_id,
-      old_state,
-      new_state,
-      reason
-    )
-    VALUES ($1, $2, $3, $4)`,
-    [
-      userId,
-      null,
-      'waiting_morning_time',
-      'user_started'
-    ]
-  );
+  const keyboard = [];
 
-  // BUTTONS 02:00 - 10:00
+  for (let i = 0; i < times.length; i += 3) {
 
-  const buttons = [];
-
-  for (let i = 0; i < MORNING_TIMES.length; i += 3) {
-
-    buttons.push(
-      MORNING_TIMES
-        .slice(i, i + 3)
-        .map(time => ({
-          text: time,
-          callback_data: `morning_time|${time}`
-        }))
+    keyboard.push(
+      times.slice(i, i + 3).map(time => ({
+        text: time,
+        callback_data: `morning_time|${time}`
+      }))
     );
   }
 
   await bot.sendMessage(
     chatId,
-    `👋 Assalomu alaykum, ${firstName}!
+    `🌅 Assalomu alaykum, ${firstName}!
 
-🌅 Ertalab qaysi vaqtda vazifalaringizni so'raylik?`,
+📋 Kunlik vazifalar botiga xush kelibsiz.
+
+Tizim to'liq ishga tushishi uchun savolimga javob bering:
+
+🕐 Kuningizni soat nechchida rejalashtirasiz? Vaqtni tanlang:`,
     {
       reply_markup: {
-        inline_keyboard: buttons
+        inline_keyboard: keyboard
       }
     }
   );
 }
 
-// =========================
-// MORNING TIME
-// =========================
+// ================================
+// ERTALABKI VAQT
+// ================================
 
 async function handleMorningTime(
   chatId,
@@ -434,22 +426,10 @@ async function handleMorningTime(
   callbackQueryId
 ) {
 
-  const [, time] = callbackData.split('|');
-
-  if (!MORNING_TIMES.includes(time)) {
-
-    await bot.answerCallbackQuery(
-      callbackQueryId,
-      {
-        text: 'Noto‘g‘ri vaqt tanlandi'
-      }
-    );
-
-    return;
-  }
+  const time = callbackData.split('|')[1];
 
   const userResult = await pool.query(
-    `SELECT *
+    `SELECT state
      FROM users
      WHERE telegram_chat_id = $1`,
     [chatId]
@@ -460,7 +440,8 @@ async function handleMorningTime(
     await bot.answerCallbackQuery(
       callbackQueryId,
       {
-        text: 'Avval /start bering'
+        text: 'Avval /start bering.',
+        show_alert: true
       }
     );
 
@@ -469,14 +450,13 @@ async function handleMorningTime(
 
   const user = userResult.rows[0];
 
-  if (
-    user.state !== 'waiting_morning_time'
-  ) {
+  if (user.state !== 'waiting_morning_time') {
 
     await bot.answerCallbackQuery(
       callbackQueryId,
       {
-        text: 'Vaqt allaqachon tanlangan'
+        text: 'Siz allaqachon vaqt tanlagansiz.',
+        show_alert: false
       }
     );
 
@@ -485,54 +465,40 @@ async function handleMorningTime(
 
   await pool.query(
     `UPDATE users
-     SET morning_time = $1
-     WHERE id = $2`,
-    [
-      time,
-      user.id
-    ]
+     SET
+       morning_time = $1,
+       state = 'active'
+     WHERE telegram_chat_id = $2`,
+    [time, chatId]
   );
 
-  await changeUserState(
-    user.id,
-    'active',
-    'morning_time_selected'
-  );
-
-  await bot.answerCallbackQuery(
-    callbackQueryId,
-    {
-      text: `Ertalabki vaqt: ${time}`
-    }
-  );
+  await bot.answerCallbackQuery(callbackQueryId);
 
   await bot.sendMessage(
     chatId,
-    `✅ Ertalabki vaqt belgilandi: ${time}
+    `✅ **Ertalabki vaqt belgilandi:** ${time}
 
-🚀 Endi vazifalaringizni yuborishingiz mumkin!
+🚀 Hammasi tayyor. Endi kunlik vazifalaringizni yuborishingiz mumkin.
 
-Masalan:
+⏰ Belgilangan vaqtda sizga eslatma yuboramiz.
 
-Kitob o'qish
-Sport qilish
-Ingliz tili
+📢 Yangiliklar va yangilanishlar: @kunlikvazifalar_news
 
-🤲 Kuningiz barakatli o'tsin!`
+🤲 Kuningiz barakali o'tsin!`,
+    {
+      parse_mode: 'Markdown'
+    }
   );
 }
 
-// =========================
-// ADD TASKS
-// =========================
+// ================================
+// VAZIFA QO'SHISH
+// ================================
 
-async function handleTaskWrite(
-  chatId,
-  text
-) {
+async function handleTaskWrite(chatId, text) {
 
   const userResult = await pool.query(
-    `SELECT *
+    `SELECT id, state
      FROM users
      WHERE telegram_chat_id = $1`,
     [chatId]
@@ -542,7 +508,7 @@ async function handleTaskWrite(
 
     await bot.sendMessage(
       chatId,
-      `⚠️ Avval /start buyrug'ini bering.`
+      "⚠️ Avval /start buyrug'ini bering."
     );
 
     return;
@@ -552,23 +518,20 @@ async function handleTaskWrite(
 
   if (user.state !== 'active') {
 
-    if (
-      user.state ===
-      'waiting_morning_time'
-    ) {
+    if (user.state === 'completed') {
 
       await bot.sendMessage(
         chatId,
-        `⚠️ Avval ertalabki vaqtni tanlang.`
+        `🏁 Siz bugungi vazifalarni yakunlab bo'lgansiz.
+
+📊 Natijani ko'rish uchun /hisobot buyrug'ini yuboring.`
       );
 
     } else {
 
       await bot.sendMessage(
         chatId,
-        `⚠️ Bugungi kun yakunlangan.
-
-Yangi vazifalarni ertaga yuborishingiz mumkin.`
+        "⚠️ Avval /start buyrug'ini bering."
       );
     }
 
@@ -577,16 +540,16 @@ Yangi vazifalarni ertaga yuborishingiz mumkin.`
 
   const today = getTashkentDate();
 
-  const lines = text
+  const taskLines = text
     .split('\n')
-    .map(cleanTask)
+    .map(cleanTaskText)
     .filter(Boolean);
 
-  if (lines.length === 0) {
+  if (taskLines.length === 0) {
 
     await bot.sendMessage(
       chatId,
-      `⚠️ Vazifa topilmadi.`
+      "⚠️ Vazifa matni bo'sh."
     );
 
     return;
@@ -595,42 +558,38 @@ Yangi vazifalarni ertaga yuborishingiz mumkin.`
   const existingResult = await pool.query(
     `SELECT task_text
      FROM tasks
-     WHERE user_id = $1
-     AND task_date = $2`,
-    [
-      user.id,
-      today
-    ]
+     WHERE
+       user_id = $1
+       AND task_date = $2`,
+    [user.id, today]
   );
 
-  const existingNormalized = new Set(
-    existingResult.rows.map(
-      row => normalizeTask(row.task_text)
+  const existingTasks = new Set(
+    existingResult.rows.map(row =>
+      normalizeTask(row.task_text)
     )
   );
 
-  let added = 0;
-  let duplicates = 0;
+  let addedCount = 0;
+  let duplicateCount = 0;
 
-  const currentMessageTasks = new Set();
+  const currentInputTasks = new Set();
 
-  for (const originalText of lines) {
+  for (const rawTaskText of taskLines) {
 
-    const normalized =
-      normalizeTask(originalText);
+    const normalized = normalizeTask(rawTaskText);
 
     if (
-      !normalized ||
-      existingNormalized.has(normalized) ||
-      currentMessageTasks.has(normalized)
+      existingTasks.has(normalized) ||
+      currentInputTasks.has(normalized)
     ) {
-
-      duplicates++;
+      duplicateCount++;
       continue;
     }
 
     await pool.query(
-      `INSERT INTO tasks (
+      `INSERT INTO tasks
+      (
         user_id,
         task_date,
         task_text,
@@ -640,56 +599,51 @@ Yangi vazifalarni ertaga yuborishingiz mumkin.`
       [
         user.id,
         today,
-        originalText
+        rawTaskText
       ]
     );
 
-    existingNormalized.add(normalized);
-    currentMessageTasks.add(normalized);
+    existingTasks.add(normalized);
+    currentInputTasks.add(normalized);
 
-    added++;
+    addedCount++;
   }
 
-  let message = '';
+  let response = '';
 
-  if (added > 0) {
+  if (addedCount > 0) {
 
-    message +=
-      `🎉 ${added} ta yangi vazifa qo'shildi!\n`;
+    response +=
+      `🎉 ${addedCount} ta yangi vazifa qabul qilindi va saqlandi!\n\n`;
   }
 
-  if (duplicates > 0) {
+  if (duplicateCount > 0) {
 
-    message +=
-      `🔄 ${duplicates} ta duplicate vazifa o'tkazib yuborildi.\n`;
+    response +=
+      `🔄 ${duplicateCount} ta vazifa bugun allaqachon qo'shilgan.\n\n♻️ Qayta saqlanmadi.\n\n`;
   }
 
-  if (added === 0 && duplicates > 0) {
+  response += `🤲 Kuningiz barakatli o'tsin!`;
 
-    message =
-      `📋 Bu vazifalar bugun allaqachon mavjud.`;
+  if (addedCount > 0) {
+
+    response +=
+      `\n\n🏁 Kuningizni yakunlaganingizda /yakunladim buyrug'ini yuboring.`;
   }
 
-  message += `
-
-🤲 Kuningiz barakatli o'tsin!
-
-🏁 Ishlaringiz tugaganda /yakunladim buyrug'ini bering.`;
-
-  await bot.sendMessage(
-    chatId,
-    message
-  );
+  await bot.sendMessage(chatId, response);
 }
 
-// =========================
+// ================================
 // /YAKUNLADIM
-// =========================
+// A VARIANT:
+// STATE SHU ZAHOTI COMPLETED
+// ================================
 
-async function handleYakunladim(chatId) {
+async function handleFinishDay(chatId) {
 
   const userResult = await pool.query(
-    `SELECT *
+    `SELECT id, state
      FROM users
      WHERE telegram_chat_id = $1`,
     [chatId]
@@ -699,7 +653,7 @@ async function handleYakunladim(chatId) {
 
     await bot.sendMessage(
       chatId,
-      `⚠️ Avval /start bering.`
+      "⚠️ Avval /start buyrug'ini bering."
     );
 
     return;
@@ -707,11 +661,13 @@ async function handleYakunladim(chatId) {
 
   const user = userResult.rows[0];
 
-  if (user.state !== 'active') {
+  if (user.state === 'completed') {
 
     await bot.sendMessage(
       chatId,
-      `⚠️ Hozir vazifalarni yakunlash mumkin emas.`
+      `🏁 Siz bugungi kunni allaqachon yakunlagansiz.
+
+📊 Natijani ko'rish uchun /hisobot buyrug'ini yuboring.`
     );
 
     return;
@@ -722,9 +678,10 @@ async function handleYakunladim(chatId) {
   const tasksResult = await pool.query(
     `SELECT *
      FROM tasks
-     WHERE user_id = $1
-     AND task_date = $2
-     AND status = 'pending'
+     WHERE
+       user_id = $1
+       AND task_date = $2
+       AND status = 'pending'
      ORDER BY created_at ASC`,
     [
       user.id,
@@ -732,128 +689,111 @@ async function handleYakunladim(chatId) {
     ]
   );
 
-  const tasks =
-    tasksResult.rows;
-
-  if (tasks.length === 0) {
+  if (tasksResult.rows.length === 0) {
 
     await bot.sendMessage(
       chatId,
-      `📭 Bugun belgilanmagan vazifalar yo'q.
-
-📊 Hisobot uchun /hisobot bering.`
+      `📭 Bugun uchun belgilanmagan vazifalar topilmadi.`
     );
 
     return;
   }
 
-  await bot.sendMessage(
-    chatId,
-    `🏁 Bugungi vazifalarni baholaymiz.
-
-Har bir vazifa uchun natijani tanlang:`
+  // A VARIANT
+  // User /yakunladim bosishi bilan completed
+  await pool.query(
+    `UPDATE users
+     SET state = 'completed'
+     WHERE id = $1`,
+    [user.id]
   );
 
-  for (const task of tasks) {
+  let number = 1;
 
-    const sentMessage =
-      await bot.sendMessage(
-        chatId,
-        `📌 ${task.task_text}`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: '✅ Bajarildi',
-                  callback_data:
-                    `task_status|completed|${task.id}`
-                },
-                {
-                  text: '❌ Bajarilmadi',
-                  callback_data:
-                    `task_status|failed|${task.id}`
-                }
-              ]
+  for (const task of tasksResult.rows) {
+
+    await bot.sendMessage(
+      chatId,
+      `📋 ${number}. ${task.task_text}
+
+Vazifa holatini belgilang:`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: '✅ Bajarildi',
+                callback_data:
+                  `task_status|completed|${task.id}`
+              },
+              {
+                text: '❌ Bajarilmadi',
+                callback_data:
+                  `task_status|failed|${task.id}`
+              }
             ]
-          }
+          ]
         }
-      );
-
-    await pool.query(
-      `UPDATE tasks
-       SET telegram_message_id = $1
-       WHERE id = $2`,
-      [
-        sentMessage.message_id,
-        task.id
-      ]
+      }
     );
+
+    number++;
   }
 }
 
-// =========================
+// ================================
 // TASK STATUS
-// =========================
+// ================================
 
 async function handleTaskStatus(
   chatId,
   callbackData,
   callbackQueryId,
-  callbackMessage
+  message
 ) {
 
-  const parts =
-    callbackData.split('|');
+  const parts = callbackData.split('|');
 
-  const status =
-    parts[1];
-
-  const taskId =
-    parts[2];
+  const status = parts[1];
+  const taskId = parts[2];
 
   if (
-    !['completed', 'failed']
-      .includes(status)
+    status !== 'completed' &&
+    status !== 'failed'
   ) {
 
     await bot.answerCallbackQuery(
       callbackQueryId,
       {
-        text: 'Noto‘g‘ri status'
+        text: 'Noto‘g‘ri status.'
       }
     );
 
     return;
   }
 
-  const updateResult = await pool.query(
+  const result = await pool.query(
     `UPDATE tasks
      SET status = $1
      WHERE id = $2
-     RETURNING user_id`,
+     RETURNING *`,
     [
       status,
       taskId
     ]
   );
 
-  if (
-    updateResult.rows.length === 0
-  ) {
+  if (result.rows.length === 0) {
 
     await bot.answerCallbackQuery(
       callbackQueryId,
       {
-        text: 'Vazifa topilmadi'
+        text: 'Vazifa topilmadi.'
       }
     );
 
     return;
   }
-
-  const userId =
-    updateResult.rows[0].user_id;
 
   const emoji =
     status === 'completed'
@@ -863,18 +803,15 @@ async function handleTaskStatus(
   await bot.answerCallbackQuery(
     callbackQueryId,
     {
-      text:
-        status === 'completed'
-          ? 'Bajarildi!'
-          : 'Bajarilmadi!'
+      text: `${emoji} Saqlandi!`
     }
   );
 
   try {
 
     await bot.deleteMessage(
-      chatId,
-      callbackMessage.message_id
+      message.chat.id,
+      message.message_id
     );
 
   } catch (error) {
@@ -887,256 +824,209 @@ async function handleTaskStatus(
 
   const today = getTashkentDate();
 
-  const pendingResult =
-    await pool.query(
-      `SELECT COUNT(*)::int AS count
-       FROM tasks
-       WHERE user_id = $1
+  const userResult = await pool.query(
+    `SELECT id
+     FROM users
+     WHERE telegram_chat_id = $1`,
+    [chatId]
+  );
+
+  if (userResult.rows.length === 0) return;
+
+  const pendingResult = await pool.query(
+    `SELECT COUNT(*)::int AS count
+     FROM tasks
+     WHERE
+       user_id = $1
        AND task_date = $2
        AND status = 'pending'`,
-      [
-        userId,
-        today
-      ]
-    );
+    [
+      userResult.rows[0].id,
+      today
+    ]
+  );
 
-  const pending =
+  const pendingCount =
     pendingResult.rows[0].count;
 
-  if (pending === 0) {
-
-    const stateResult =
-      await pool.query(
-        `UPDATE users
-         SET state = 'completed'
-         WHERE id = $1
-         AND state = 'active'
-         RETURNING id`,
-        [userId]
-      );
-
-    if (
-      stateResult.rows.length > 0
-    ) {
-
-      await pool.query(
-        `INSERT INTO user_state_history
-        (
-          user_id,
-          old_state,
-          new_state,
-          reason
-        )
-        VALUES ($1, 'active', 'completed', 'all_tasks_marked')`,
-        [userId]
-      );
-
-      await bot.sendMessage(
-        chatId,
-        `🎉 Barcha vazifalar belgilandi!
-
-📊 Natijani ko'rish uchun /hisobot bering.`
-      );
-    }
-  }
-}
-
-// =========================
-// DAILY REPORT
-// =========================
-
-async function handleDailyReport(chatId) {
-
-  const userResult =
-    await pool.query(
-      `SELECT *
-       FROM users
-       WHERE telegram_chat_id = $1`,
-      [chatId]
-    );
-
-  if (
-    userResult.rows.length === 0
-  ) {
+  if (pendingCount === 0) {
 
     await bot.sendMessage(
       chatId,
-      `⚠️ User topilmadi.`
+      `🎉 Barcha vazifalar belgilandi!
+
+📊 Endi /hisobot buyrug'ini bersangiz, bugungi hisobotingizni yuboraman.`
+    );
+  }
+}
+
+// ================================
+// /HISOBOT
+// BUGUN + KECHA
+// ================================
+
+async function handleDailyReport(chatId) {
+
+  const userResult = await pool.query(
+    `SELECT id
+     FROM users
+     WHERE telegram_chat_id = $1`,
+    [chatId]
+  );
+
+  if (userResult.rows.length === 0) {
+
+    await bot.sendMessage(
+      chatId,
+      "⚠️ User topilmadi."
     );
 
     return;
   }
 
-  const user =
-    userResult.rows[0];
+  const userId = userResult.rows[0].id;
 
-  const today =
-    getTashkentDate();
+  const today = getTashkentDate();
+  const yesterday = getYesterdayDate();
 
-  const yesterday =
-    getTashkentDate(-1);
+  const todayResult = await pool.query(
+    `SELECT *
+     FROM tasks
+     WHERE
+       user_id = $1
+       AND task_date = $2
+     ORDER BY created_at ASC`,
+    [
+      userId,
+      today
+    ]
+  );
 
-  const result =
-    await pool.query(
-      `SELECT
-        task_date,
-        status,
-        COUNT(*)::int AS count
-      FROM tasks
-      WHERE user_id = $1
-      AND task_date IN ($2, $3)
-      GROUP BY task_date, status`,
-      [
-        user.id,
-        today,
-        yesterday
-      ]
-    );
+  const yesterdayResult = await pool.query(
+    `SELECT *
+     FROM tasks
+     WHERE
+       user_id = $1
+       AND task_date = $2`,
+    [
+      userId,
+      yesterday
+    ]
+  );
 
-  const stats = {
-    today: {
-      completed: 0,
-      failed: 0,
-      pending: 0
-    },
-    yesterday: {
-      completed: 0,
-      failed: 0,
-      pending: 0
-    }
-  };
+  const todayTasks = todayResult.rows;
+  const yesterdayTasks = yesterdayResult.rows;
 
-  for (
-    const row of result.rows
-  ) {
+  const stats = calculateStats(todayTasks);
+  const yesterdayStats = calculateStats(yesterdayTasks);
 
-    if (
-      row.task_date === today
-    ) {
+  let text =
+`📊 **KUNLIK XULOSA**
 
-      stats.today[row.status] =
-        row.count;
+📅 ${formatUzDate(today)}
 
-    } else {
+━━━━━━━━━━━━━━━━━━━━
 
-      stats.yesterday[row.status] =
-        row.count;
-    }
-  }
+👍 **${stats.percent}%**
 
-  const todayTotal =
-    Object.values(
-      stats.today
-    ).reduce(
-      (a, b) => a + b,
-      0
-    );
+${progressBar(stats.percent)}
 
-  const yesterdayTotal =
-    Object.values(
-      stats.yesterday
-    ).reduce(
-      (a, b) => a + b,
-      0
-    );
+**${stats.completed} / ${stats.total} vazifa bajarildi**
 
-  const todayPercent =
-    todayTotal > 0
-      ? Math.round(
-          stats.today.completed /
-          todayTotal *
-          100
-        )
-      : 0;
+━━━━━━━━━━━━━━━━━━━━
 
-  const yesterdayPercent =
-    yesterdayTotal > 0
-      ? Math.round(
-          stats.yesterday.completed /
-          yesterdayTotal *
-          100
-        )
-      : 0;
+📋 **VAZIFALAR**
 
-  const difference =
-    todayPercent -
-    yesterdayPercent;
+`;
 
-  let comparison = '';
+  if (todayTasks.length === 0) {
 
-  if (
-    yesterdayTotal === 0
-  ) {
-
-    comparison =
-      `📅 Kechagi ma'lumot mavjud emas.`;
-
-  } else if (
-    difference > 0
-  ) {
-
-    comparison =
-      `📈 Kechagidan ${difference}% yaxshiroq!`;
-
-  } else if (
-    difference < 0
-  ) {
-
-    comparison =
-      `📉 Kechagiga nisbatan ${Math.abs(difference)}% past.`;
+    text += `ℹ️ Bugun uchun vazifalar topilmadi.\n`;
 
   } else {
 
-    comparison =
-      `➖ Kechagi natija bilan bir xil.`;
+    for (const task of todayTasks) {
+
+      const icon =
+        task.status === 'completed'
+          ? '☑️'
+          : task.status === 'failed'
+            ? '❌'
+            : '⏳';
+
+      text += `${icon} ${task.task_text}\n`;
+    }
   }
 
-  let motivation = '';
+  text +=
+`\n━━━━━━━━━━━━━━━━━━━━
 
-  if (
-    todayPercent === 100 &&
-    todayTotal > 0
-  ) {
+📈 **NATIJA**
 
-    motivation =
-      `🔥 Zo'r! Bugungi barcha vazifalarni bajardingiz!`;
+🟩 Bajarildi     **${stats.completed}**
 
-  } else if (
-    todayPercent >= 70
-  ) {
+🟥 Bajarilmadi   **${stats.failed}**
+`;
 
-    motivation =
-      `💪 Juda yaxshi natija! Shu tempni davom ettiring.`;
+  if (stats.pending > 0) {
+    text += `\n⏳ Belgilanmagan **${stats.pending}**\n`;
+  }
 
-  } else if (
-    todayPercent >= 40
-  ) {
+  text +=
+`
+🎯 **${stats.percent}% natija**
 
-    motivation =
-      `🚀 Yaxshi. Ertaga yanada kuchliroq bo'lasiz!`;
+${progressBar(stats.percent)}
+
+━━━━━━━━━━━━━━━━━━━━
+
+📅 **KECHA**
+
+`;
+
+  if (yesterdayStats.total === 0) {
+
+    text += `ℹ️ Ma'lumot yo'q\n`;
 
   } else {
 
-    motivation =
-      `🌱 Har bir kichik qadam ham natija. Ertaga qayta urinib ko'ramiz!`;
+    text +=
+`🎯 **${yesterdayStats.percent}%**
+
+${yesterdayStats.completed} / ${yesterdayStats.total} vazifa bajarildi
+`;
+
+    const difference =
+      stats.percent - yesterdayStats.percent;
+
+    if (difference > 0) {
+      text += `\n📈 Kechagiga nisbatan **+${difference}%** yaxshiroq!\n`;
+    }
+
+    else if (difference < 0) {
+      text += `\n📉 Kechagiga nisbatan **${difference}%** pastroq.\n`;
+    }
+
+    else {
+      text += `\n➖ Kechagi natija bilan bir xil.\n`;
+    }
   }
 
-  const text =
-`📊 *KUNLIK XULOSA*
+  const motivation =
+    getMotivation(stats.percent);
 
-${progressBar(todayPercent)}
+  text +=
+`
+━━━━━━━━━━━━━━━━━━━━
 
-🎯 *Natija: ${todayPercent}%*
+💡 **XULOSA**
 
-✅ Bajarildi: ${stats.today.completed}
-❌ Bajarilmadi: ${stats.today.failed}
-⏳ Belgilanmagan: ${stats.today.pending}
+${motivation.title}
 
-📋 Jami: ${todayTotal}
+${motivation.text}
 
-${comparison}
-
-${motivation}`;
+🎯 **Kechagi o'zingdan kuchliroq bo'l!**
+`;
 
   await bot.sendMessage(
     chatId,
@@ -1145,395 +1035,447 @@ ${motivation}`;
       parse_mode: 'Markdown'
     }
   );
-
-  if (
-    user.state === 'active'
-  ) {
-
-    await changeUserState(
-      user.id,
-      'completed',
-      'daily_report'
-    );
-  }
 }
 
-// =========================
-// WEEKLY REPORT
-// =========================
+// ================================
+// /HAFTALIK
+// O'TGAN TO'LIQ HAFTA
+// ================================
 
-async function handleWeeklyReport(
-  chatId
-) {
+async function handleWeeklyReport(chatId) {
 
-  const user =
-    await getUser(chatId);
+  const userResult = await pool.query(
+    `SELECT id
+     FROM users
+     WHERE telegram_chat_id = $1`,
+    [chatId]
+  );
 
-  if (!user) return;
+  if (userResult.rows.length === 0) {
 
-  const today =
-    getTashkentDate();
-
-  const start =
-    getTashkentDate(-6);
-
-  const result =
-    await pool.query(
-      `SELECT
-        task_date,
-        status,
-        COUNT(*)::int AS count
-      FROM tasks
-      WHERE user_id = $1
-      AND task_date BETWEEN $2 AND $3
-      GROUP BY task_date, status
-      ORDER BY task_date`,
-      [
-        user.id,
-        start,
-        today
-      ]
+    await bot.sendMessage(
+      chatId,
+      "⚠️ User topilmadi."
     );
 
-  const days = {};
-
-  for (
-    const row of result.rows
-  ) {
-
-    if (!days[row.task_date]) {
-
-      days[row.task_date] = {
-        completed: 0,
-        failed: 0,
-        pending: 0
-      };
-    }
-
-    days[row.task_date][row.status] =
-      row.count;
+    return;
   }
 
-  let total = 0;
-  let completed = 0;
+  const userId = userResult.rows[0].id;
+
+  const todayString = getTashkentDate();
+  const today = new Date(`${todayString}T12:00:00`);
+
+  // Dushanba = 1
+  const day =
+    today.getDay() === 0
+      ? 7
+      : today.getDay();
+
+  const currentMonday = new Date(today);
+  currentMonday.setDate(
+    today.getDate() - day + 1
+  );
+
+  const start = new Date(currentMonday);
+  start.setDate(
+    currentMonday.getDate() - 7
+  );
+
+  const end = new Date(currentMonday);
+  end.setDate(
+    currentMonday.getDate() - 1
+  );
+
+  const startDate =
+    start.toISOString().slice(0, 10);
+
+  const endDate =
+    end.toISOString().slice(0, 10);
+
+  const result = await pool.query(
+    `SELECT *
+     FROM tasks
+     WHERE
+       user_id = $1
+       AND task_date >= $2
+       AND task_date <= $3
+     ORDER BY task_date ASC`,
+    [
+      userId,
+      startDate,
+      endDate
+    ]
+  );
+
+  const tasks = result.rows;
+  const stats = calculateStats(tasks);
+
+  const days = [
+    'Dushanba',
+    'Seshanba',
+    'Chorshanba',
+    'Payshanba',
+    'Juma',
+    'Shanba',
+    'Yakshanba'
+  ];
+
+  const dailyStats = {};
+
+  for (let i = 0; i < 7; i++) {
+
+    const date = new Date(start);
+    date.setDate(start.getDate() + i);
+
+    const key =
+      date.toISOString().slice(0, 10);
+
+    dailyStats[key] = {
+      name: days[i],
+      completed: 0,
+      total: 0,
+      percent: 0
+    };
+  }
+
+  for (const task of tasks) {
+
+    if (!dailyStats[task.task_date]) continue;
+
+    dailyStats[task.task_date].total++;
+
+    if (task.status === 'completed') {
+      dailyStats[task.task_date].completed++;
+    }
+  }
+
+  for (const key in dailyStats) {
+
+    const item = dailyStats[key];
+
+    item.percent =
+      item.total > 0
+        ? Math.round(
+            item.completed / item.total * 100
+          )
+        : 0;
+  }
+
+  let text =
+`📊 HAFTALIK XULOSA
+
+📅 ${formatUzDate(startDate)} – ${formatUzDate(endDate)}
+
+━━━━━━━━━━━━━━━━━━━━
+
+🔥 ${stats.percent}%
+
+${progressBar(stats.percent)}
+
+${stats.completed} / ${stats.total} vazifa bajarildi
+
+━━━━━━━━━━━━━━━━━━━━
+
+📆 HAFTA KUNLARI
+
+`;
 
   let bestDay = null;
-  let bestPercent = -1;
-
   let worstDay = null;
-  let worstPercent = 101;
+  let activeDays = 0;
+  let perfectDays = 0;
 
-  const lines = [];
+  for (const key of Object.keys(dailyStats)) {
 
-  for (
-    const date of Object.keys(days)
-  ) {
+    const item = dailyStats[key];
 
-    const stat =
-      days[date];
+    if (item.total === 0) {
 
-    const dayTotal =
-      stat.completed +
-      stat.failed +
-      stat.pending;
+      text += `⬜ ${item.name} — Ma'lumot yo'q\n`;
+      continue;
+    }
 
-    const percent =
-      dayTotal > 0
-        ? Math.round(
-            stat.completed /
-            dayTotal *
-            100
-          )
-        : 0;
+    activeDays++;
 
-    total += dayTotal;
-    completed += stat.completed;
+    if (item.percent === 100) {
+      perfectDays++;
+    }
 
-    lines.push(
-      `📅 ${date}: ${percent}% (${stat.completed}/${dayTotal})`
-    );
+    text +=
+      `🟩 ${item.name} — ${item.percent}% (${item.completed}/${item.total})\n`;
 
     if (
-      dayTotal > 0 &&
-      percent > bestPercent
+      !bestDay ||
+      item.percent > bestDay.percent
     ) {
-
-      bestPercent = percent;
-      bestDay = date;
+      bestDay = item;
     }
 
     if (
-      dayTotal > 0 &&
-      percent < worstPercent
+      !worstDay ||
+      item.percent < worstDay.percent
     ) {
-
-      worstPercent = percent;
-      worstDay = date;
+      worstDay = item;
     }
   }
 
-  const percent =
-    total > 0
-      ? Math.round(
-          completed / total * 100
-        )
-      : 0;
+  text +=
+`
+━━━━━━━━━━━━━━━━━━━━
 
-  const text =
-`📊 *HAFTALIK XULOSA*
+📈 NATIJA
 
-${progressBar(percent)}
+🟩 Bajarildi     ${stats.completed}
 
-🎯 Umumiy natija: *${percent}%*
+🟥 Bajarilmadi   ${stats.failed}
 
-✅ Bajarildi: ${completed}/${total}
+🎯 ${stats.percent}% natija
 
-${bestDay ? `🏆 Eng yaxshi kun: ${bestDay} — ${bestPercent}%` : ''}
-${worstDay ? `📉 Sust kun: ${worstDay} — ${worstPercent}%` : ''}
+${progressBar(stats.percent)}
 
-*Kunlar bo'yicha:*
+━━━━━━━━━━━━━━━━━━━━
 
-${lines.length ? lines.join('\n') : 'Ma\'lumot mavjud emas.'}`;
+🏆 ENG YAXSHI KUN
 
-  await bot.sendMessage(
-    chatId,
-    text,
-    {
-      parse_mode: 'Markdown'
-    }
-  );
+`;
+
+  text += bestDay
+    ? `🔥 ${bestDay.name} — ${bestDay.percent}%`
+    : `ℹ️ Ma'lumot yo'q`;
+
+  text +=
+`
+
+📉 ENG SUST KUN
+
+`;
+
+  text += worstDay
+    ? `📉 ${worstDay.name} — ${worstDay.percent}%`
+    : `ℹ️ Ma'lumot yo'q`;
+
+  text +=
+`
+
+━━━━━━━━━━━━━━━━━━━━
+
+📈 OLDINGI HAFTA
+
+ℹ️ Ma'lumot yo'q
+
+━━━━━━━━━━━━━━━━━━━━
+
+🔥 100% kunlar: ${perfectDays} ta
+
+📆 Faol kunlar: ${activeDays} ta
+
+━━━━━━━━━━━━━━━━━━━━
+
+💡 HAFTA XULOSASI
+
+`;
+
+  if (stats.total === 0) {
+
+    text +=
+      `📭 Bu hafta uchun vazifalar topilmadi.`;
+
+  } else {
+
+    const motivation =
+      getMotivation(stats.percent);
+
+    text +=
+      `${motivation.title}\n\n${motivation.text}`;
+  }
+
+  await bot.sendMessage(chatId, text);
 }
 
-// =========================
-// MONTHLY REPORT
-// =========================
+// ================================
+// /OYLIK
+// JORIY OY
+// ================================
 
-async function handleMonthlyReport(
-  chatId
-) {
+async function handleMonthlyReport(chatId) {
 
-  const user =
-    await getUser(chatId);
+  const userResult = await pool.query(
+    `SELECT id
+     FROM users
+     WHERE telegram_chat_id = $1`,
+    [chatId]
+  );
 
-  if (!user) return;
+  if (userResult.rows.length === 0) {
+    await bot.sendMessage(chatId, '⚠️ User topilmadi.');
+    return;
+  }
 
-  const today =
-    getTashkentDate();
+  const todayString = getTashkentDate();
+  const today = new Date(`${todayString}T12:00:00`);
 
-  const [year, month] =
-    today.split('-');
+  const start = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    1
+  );
 
-  const start =
-    `${year}-${month}-01`;
+  const startDate =
+    start.toISOString().slice(0, 10);
 
-  const result =
-    await pool.query(
-      `SELECT
-        status,
-        COUNT(*)::int AS count
-      FROM tasks
-      WHERE user_id = $1
-      AND task_date >= $2
-      AND task_date <= $3
-      GROUP BY status`,
-      [
-        user.id,
-        start,
-        today
-      ]
-    );
+  const userId =
+    userResult.rows[0].id;
 
-  const stats = {
-    completed: 0,
-    failed: 0,
-    pending: 0
-  };
+  const result = await pool.query(
+    `SELECT *
+     FROM tasks
+     WHERE
+       user_id = $1
+       AND task_date >= $2
+       AND task_date <= $3`,
+    [
+      userId,
+      startDate,
+      todayString
+    ]
+  );
 
-  result.rows.forEach(row => {
-    stats[row.status] =
-      row.count;
-  });
+  const stats =
+    calculateStats(result.rows);
 
-  const total =
-    stats.completed +
-    stats.failed +
-    stats.pending;
+  const monthName = new Intl.DateTimeFormat(
+    'uz-UZ',
+    {
+      month: 'long',
+      year: 'numeric'
+    }
+  ).format(today);
 
-  const percent =
-    total > 0
-      ? Math.round(
-          stats.completed /
-          total *
-          100
-        )
-      : 0;
+  const motivation =
+    getMotivation(stats.percent);
 
   const text =
-`📊 *OYLIK XULOSA*
+`📊 OYLIK XULOSA
 
-${progressBar(percent)}
+📅 ${monthName}
 
-🎯 Natija: *${percent}%*
+━━━━━━━━━━━━━━━━━━━━
 
-✅ Bajarildi: ${stats.completed}
-❌ Bajarilmadi: ${stats.failed}
-⏳ Belgilanmagan: ${stats.pending}
+🔥 ${stats.percent}%
 
-📋 Jami: ${total}`;
+${progressBar(stats.percent)}
 
-  await bot.sendMessage(
-    chatId,
-    text,
-    {
-      parse_mode: 'Markdown'
-    }
-  );
+${stats.completed} / ${stats.total} vazifa bajarildi
+
+━━━━━━━━━━━━━━━━━━━━
+
+📈 NATIJA
+
+🟩 Bajarildi     ${stats.completed}
+
+🟥 Bajarilmadi   ${stats.failed}
+
+⏳ Belgilanmagan ${stats.pending}
+
+━━━━━━━━━━━━━━━━━━━━
+
+💡 OY XULOSASI
+
+${motivation.title}
+
+${motivation.text}
+
+🎯 Har bir kun — yangi imkoniyat!`;
+
+  await bot.sendMessage(chatId, text);
 }
 
-// =========================
-// YEARLY REPORT
-// =========================
+// ================================
+// /YILLIK
+// JORIY YIL
+// ================================
 
-async function handleYearlyReport(
-  chatId
-) {
+async function handleYearlyReport(chatId) {
 
-  const user =
-    await getUser(chatId);
+  const userResult = await pool.query(
+    `SELECT id
+     FROM users
+     WHERE telegram_chat_id = $1`,
+    [chatId]
+  );
 
-  if (!user) return;
+  if (userResult.rows.length === 0) {
+    await bot.sendMessage(chatId, '⚠️ User topilmadi.');
+    return;
+  }
 
-  const today =
-    getTashkentDate();
-
+  const today = getTashkentDate();
   const year =
-    today.slice(0, 4);
+    Number(today.slice(0, 4));
 
-  const start =
+  const startDate =
     `${year}-01-01`;
 
-  const result =
-    await pool.query(
-      `SELECT
-        TO_CHAR(
-          task_date,
-          'YYYY-MM'
-        ) AS month,
-        status,
-        COUNT(*)::int AS count
-      FROM tasks
-      WHERE user_id = $1
-      AND task_date >= $2
-      AND task_date <= $3
-      GROUP BY month, status
-      ORDER BY month`,
-      [
-        user.id,
-        start,
-        today
-      ]
-    );
+  const result = await pool.query(
+    `SELECT *
+     FROM tasks
+     WHERE
+       user_id = $1
+       AND task_date >= $2
+       AND task_date <= $3`,
+    [
+      userResult.rows[0].id,
+      startDate,
+      today
+    ]
+  );
 
-  const months = {};
+  const stats =
+    calculateStats(result.rows);
 
-  for (
-    const row of result.rows
-  ) {
-
-    if (!months[row.month]) {
-
-      months[row.month] = {
-        completed: 0,
-        failed: 0,
-        pending: 0
-      };
-    }
-
-    months[row.month][row.status] =
-      row.count;
-  }
-
-  let total = 0;
-  let completed = 0;
-
-  const lines = [];
-
-  let bestMonth = null;
-  let bestPercent = -1;
-
-  for (
-    const month of Object.keys(months)
-  ) {
-
-    const stat =
-      months[month];
-
-    const monthTotal =
-      stat.completed +
-      stat.failed +
-      stat.pending;
-
-    const percent =
-      monthTotal > 0
-        ? Math.round(
-            stat.completed /
-            monthTotal *
-            100
-          )
-        : 0;
-
-    total += monthTotal;
-    completed += stat.completed;
-
-    lines.push(
-      `📅 ${month}: ${percent}% (${stat.completed}/${monthTotal})`
-    );
-
-    if (
-      percent > bestPercent
-    ) {
-
-      bestPercent = percent;
-      bestMonth = month;
-    }
-  }
-
-  const percent =
-    total > 0
-      ? Math.round(
-          completed /
-          total *
-          100
-        )
-      : 0;
+  const motivation =
+    getMotivation(stats.percent);
 
   const text =
-`📊 *YILLIK XULOSA*
+`📊 YILLIK XULOSA
 
-${progressBar(percent)}
+📅 ${year}-yil
 
-🎯 Umumiy natija: *${percent}%*
+━━━━━━━━━━━━━━━━━━━━
 
-✅ Bajarildi: ${completed}/${total}
+🔥 ${stats.percent}%
 
-${bestMonth ? `🏆 Eng yaxshi oy: ${bestMonth} — ${bestPercent}%` : ''}
+${progressBar(stats.percent)}
 
-*Oylar bo'yicha:*
+${stats.completed} / ${stats.total} vazifa bajarildi
 
-${lines.length ? lines.join('\n') : 'Ma\'lumot mavjud emas.'}`;
+━━━━━━━━━━━━━━━━━━━━
 
-  await bot.sendMessage(
-    chatId,
-    text,
-    {
-      parse_mode: 'Markdown'
-    }
-  );
+📈 NATIJA
+
+🟩 Bajarildi     ${stats.completed}
+
+🟥 Bajarilmadi   ${stats.failed}
+
+⏳ Belgilanmagan ${stats.pending}
+
+━━━━━━━━━━━━━━━━━━━━
+
+💡 YIL XULOSASI
+
+${motivation.title}
+
+${motivation.text}
+
+🏆 Yangi yil — yangi natijalar!`;
+
+  await bot.sendMessage(chatId, text);
 }
 
-// =========================
-// ADMIN
-// =========================
+// ================================
+// /ADMIN
+// ================================
 
 async function handleAdmin(chatId) {
 
@@ -1541,7 +1483,7 @@ async function handleAdmin(chatId) {
 
     await bot.sendMessage(
       chatId,
-      `⛔ Sizda admin huquqi yo'q.`
+      '⛔ Sizda admin huquqi yo‘q.'
     );
 
     return;
@@ -1550,40 +1492,39 @@ async function handleAdmin(chatId) {
   const today =
     getTashkentDate();
 
-  const weekAgo =
-    getTashkentDate(-6);
+  const result = await pool.query(
+    `
+    SELECT
+      COUNT(*)::int AS total_users,
+
+      COUNT(*) FILTER (
+        WHERE state = 'active'
+      )::int AS active_users,
+
+      COUNT(*) FILTER (
+        WHERE state = 'completed'
+      )::int AS completed_users,
+
+      COUNT(*) FILTER (
+        WHERE subscription_status = 'trial'
+      )::int AS trial_users,
+
+      COUNT(*) FILTER (
+        WHERE subscription_status = 'paid'
+      )::int AS paid_users,
+
+      COUNT(*) FILTER (
+        WHERE created_at >= NOW() - INTERVAL '7 days'
+      )::int AS new_users
+
+    FROM users
+    `
+  );
 
   const stats =
-    await pool.query(
-      `
-      SELECT
-        COUNT(*)::int AS total_users,
+    result.rows[0];
 
-        COUNT(*) FILTER (
-          WHERE state = 'active'
-        )::int AS active_users,
-
-        COUNT(*) FILTER (
-          WHERE state = 'completed'
-        )::int AS completed_users,
-
-        COUNT(*) FILTER (
-          WHERE subscription_status = 'trial'
-        )::int AS trial_users,
-
-        COUNT(*) FILTER (
-          WHERE subscription_status = 'paid'
-        )::int AS paid_users,
-
-        COUNT(*) FILTER (
-          WHERE created_at >= $1::date
-        )::int AS new_users
-      FROM users
-      `,
-      [weekAgo]
-    );
-
-  const morningTimes =
+  const timeResult =
     await pool.query(
       `
       SELECT
@@ -1597,47 +1538,52 @@ async function handleAdmin(chatId) {
       `
     );
 
-  const s =
-    stats.rows[0];
+  let text =
+`🛠 ADMIN PANEL
 
-  const timesText =
-    morningTimes.rows.length
-      ? morningTimes.rows
-          .map(
-            r =>
-              `🕐 ${String(r.morning_time).slice(0, 5)} — ${r.count} ta`
-          )
-          .join('\n')
-      : 'Ma\'lumot yo\'q';
+━━━━━━━━━━━━━━━━━━━━
 
-  const text =
-`👑 *ADMIN PANEL*
+👥 Jami userlar: ${stats.total_users}
 
-👥 Jami userlar: *${s.total_users}*
-🟢 Faol: *${s.active_users}*
-🏁 Yakunlagan: *${s.completed_users}*
+🟢 Faol: ${stats.active_users}
 
-🆓 Trial: *${s.trial_users}*
-💳 Paid: *${s.paid_users}*
+🏁 Yakunlagan: ${stats.completed_users}
 
-📅 Oxirgi 7 kunda yangi: *${s.new_users}*
+🎁 Trial: ${stats.trial_users}
 
-🌅 *Mashhur ertalabki vaqtlar:*
+💳 Paid: ${stats.paid_users}
 
-${timesText}`;
+🆕 Oxirgi 7 kunda: ${stats.new_users}
 
-  await bot.sendMessage(
-    chatId,
-    text,
-    {
-      parse_mode: 'Markdown'
+━━━━━━━━━━━━━━━━━━━━
+
+⏰ MASHHUR VAQTLAR
+
+`;
+
+  if (timeResult.rows.length === 0) {
+
+    text +=
+      `ℹ️ Ma'lumot yo'q`;
+
+  } else {
+
+    for (
+      const item of timeResult.rows
+    ) {
+
+      text +=
+        `🕐 ${String(item.morning_time).slice(0, 5)} — ${item.count} ta\n`;
     }
-  );
+  }
+
+  await bot.sendMessage(chatId, text);
 }
 
-// =========================
-// BROADCAST
-// =========================
+// ================================
+// /XABAR
+// FAQAT ADMIN
+// ================================
 
 async function handleBroadcast(
   chatId,
@@ -1648,28 +1594,29 @@ async function handleBroadcast(
 
     await bot.sendMessage(
       chatId,
-      `⛔ Sizda admin huquqi yo'q.`
+      '⛔ Sizda admin huquqi yo‘q.'
     );
 
     return;
   }
 
-  let content =
-    messageText
-      .replace(/^\/xabar\s*/i, '')
-      .trim();
+  let text =
+    messageText.replace(
+      /^\/xabar\s*/,
+      ''
+    ).trim();
 
-  if (!content) {
+  if (!text) {
 
     await bot.sendMessage(
       chatId,
-      `⚠️ Format:
+      `📢 Xabar yuborish formati:
 
 /xabar Sizning xabaringiz
 
 Qo'shimcha:
 
-@ism:Ali
+@ism:Shaxboz
 @limit:20`
     );
 
@@ -1680,48 +1627,37 @@ Qo'shimcha:
   let limit = null;
 
   const nameMatch =
-    content.match(
-      /@ism:([^\n]+)/i
-    );
+    text.match(/@ism:([^\s]+)/);
 
   if (nameMatch) {
 
     nameFilter =
-      nameMatch[1].trim();
+      nameMatch[1];
 
-    content =
-      content
-        .replace(
-          nameMatch[0],
-          ''
-        )
-        .trim();
+    text = text.replace(
+      nameMatch[0],
+      ''
+    ).trim();
   }
 
   const limitMatch =
-    content.match(
-      /@limit:(\d+)/i
-    );
+    text.match(/@limit:(\d+)/);
 
   if (limitMatch) {
 
     limit =
       Number(limitMatch[1]);
 
-    content =
-      content
-        .replace(
-          limitMatch[0],
-          ''
-        )
-        .trim();
+    text = text.replace(
+      limitMatch[0],
+      ''
+    ).trim();
   }
 
   let query =
-    `SELECT id,
-            telegram_chat_id,
-            first_name
-     FROM users`;
+    `SELECT id, telegram_chat_id, first_name
+     FROM users
+     WHERE telegram_chat_id IS NOT NULL`;
 
   const params = [];
 
@@ -1732,19 +1668,11 @@ Qo'shimcha:
     );
 
     query +=
-      ` WHERE first_name ILIKE $${params.length}`;
+      ` AND first_name ILIKE $${params.length}`;
   }
 
-  query +=
-    ` ORDER BY created_at ASC`;
-
   if (limit) {
-
-    query +=
-      ` LIMIT ${Math.max(
-        1,
-        Math.min(limit, 10000)
-      )}`;
+    query += ` LIMIT ${limit}`;
   }
 
   const usersResult =
@@ -1756,157 +1684,54 @@ Qo'shimcha:
   const users =
     usersResult.rows;
 
-  if (
-    users.length === 0
-  ) {
-
-    await bot.sendMessage(
-      chatId,
-      `📭 Mos user topilmadi.`
-    );
-
-    return;
-  }
-
-  const broadcastId =
-    `broadcast_${Date.now()}`;
-
   let sent = 0;
   let failed = 0;
 
-  await bot.sendMessage(
-    chatId,
-    `📢 Broadcast boshlandi.
+  for (let i = 0; i < users.length; i++) {
 
-👥 Userlar: ${users.length}`
-  );
-
-  for (
-    let i = 0;
-    i < users.length;
-    i++
-  ) {
-
-    const user =
-      users[i];
+    const user = users[i];
 
     try {
 
       await bot.sendMessage(
         user.telegram_chat_id,
-        content
+        text
       );
 
       sent++;
-
-      await pool.query(
-        `INSERT INTO broadcast_logs
-        (
-          broadcast_id,
-          user_id,
-          status,
-          sent_at
-        )
-        VALUES ($1, $2, $3, NOW())`,
-        [
-          broadcastId,
-          user.id,
-          'sent'
-        ]
-      );
 
     } catch (error) {
 
       failed++;
 
-      await pool.query(
-        `INSERT INTO broadcast_logs
-        (
-          broadcast_id,
-          user_id,
-          status,
-          error_message
-        )
-        VALUES ($1, $2, $3, $4)`,
-        [
-          broadcastId,
-          user.id,
-          'failed',
-          error.message
-        ]
+      console.error(
+        `Broadcast error ${user.telegram_chat_id}:`,
+        error.message
       );
     }
 
-    // 20 tadan keyin batch pause
-
+    // Har 20 userdan keyin
     if (
-      (i + 1) % 20 === 0
+      (i + 1) % 20 === 0 &&
+      i + 1 < users.length
     ) {
 
-      await sleep(150);
+      await new Promise(resolve =>
+        setTimeout(resolve, 150)
+      );
     }
   }
 
   await bot.sendMessage(
     chatId,
-    `📢 *Broadcast tugadi*
+    `📢 Xabar yuborish yakunlandi.
 
 ✅ Yuborildi: ${sent}
-❌ Xato: ${failed}
-👥 Jami: ${users.length}`,
-    {
-      parse_mode: 'Markdown'
-    }
+
+❌ Xatolik: ${failed}
+
+👥 Jami: ${users.length}`
   );
-}
-
-// =========================
-// EXTRA COMMAND
-// =========================
-
-async function handleExtra(chatId) {
-
-  await bot.sendMessage(
-    chatId,
-    `❓ Buyruq topilmadi.
-
-Mavjud buyruqlar:
-
-/yakunladim — bugungi vazifalarni yakunlash
-/hisobot — kunlik hisobot
-/haftalik — haftalik hisobot
-/oylik — oylik hisobot
-/yillik — yillik hisobot`
-  );
-}
-
-// =========================
-// GET USER
-// =========================
-
-async function getUser(chatId) {
-
-  const result =
-    await pool.query(
-      `SELECT *
-       FROM users
-       WHERE telegram_chat_id = $1`,
-      [chatId]
-    );
-
-  if (
-    result.rows.length === 0
-  ) {
-
-    await bot.sendMessage(
-      chatId,
-      `⚠️ Avval /start buyrug'ini bering.`
-    );
-
-    return null;
-  }
-
-  return result.rows[0];
 }
 
 module.exports = router;
