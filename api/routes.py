@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 from typing import Optional
+import os
 
 from fastapi import APIRouter, HTTPException, Header, Depends, Query
 from pydantic import BaseModel, Field
@@ -16,7 +17,7 @@ router = APIRouter(prefix="/api")
 # =========================================================
 
 def verify_api_key(x_api_key: Optional[str] = Header(default=None)):
-    expected = __import__("os").environ.get("API_KEY")
+    expected = os.environ.get("API_KEY")
 
     # API_KEY Render'da hali qo'yilmagan bo'lsa,
     # development/test rejimida endpoint ishlaydi.
@@ -85,22 +86,30 @@ def get_today():
 
 def calculate_stats(tasks):
     total = len(tasks)
+
     completed = sum(
-        1 for task in tasks
+        1
+        for task in tasks
         if task["status"] == "completed"
     )
+
     failed = sum(
-        1 for task in tasks
+        1
+        for task in tasks
         if task["status"] == "failed"
     )
+
     pending = sum(
-        1 for task in tasks
+        1
+        for task in tasks
         if task["status"] == "pending"
     )
 
-    percent = round(
-        completed / total * 100
-    ) if total else 0
+    percent = (
+        round(completed / total * 100)
+        if total
+        else 0
+    )
 
     return {
         "total": total,
@@ -333,12 +342,6 @@ def create_tasks(
             detail="User not found"
         )
 
-    if user["state"] != "active":
-        raise HTTPException(
-            status_code=409,
-            detail="User is not active"
-        )
-
     cleaned_tasks = [
         task.strip()
         for task in data.tasks
@@ -359,7 +362,6 @@ def create_tasks(
     with get_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
 
-            # Bugungi mavjud vazifalar
             cur.execute(
                 """
                 SELECT task_text
@@ -464,7 +466,6 @@ def update_task_status(
     with get_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
 
-            # Muhim: faqat pending vazifa o'zgaradi.
             cur.execute(
                 """
                 UPDATE public.tasks
@@ -608,12 +609,14 @@ def daily_report(
             rows = cur.fetchall()
 
     today_tasks = [
-        task for task in rows
+        task
+        for task in rows
         if task["task_date"] == today
     ]
 
     yesterday_tasks = [
-        task for task in rows
+        task
+        for task in rows
         if task["task_date"] == yesterday
     ]
 
@@ -640,7 +643,6 @@ def daily_report(
 
 # =========================================================
 # WEEKLY REPORT
-# Oldingi to'liq hafta: Dushanba - Yakshanba
 # =========================================================
 
 @router.get("/users/{telegram_chat_id}/reports/weekly")
@@ -658,8 +660,6 @@ def weekly_report(
 
     today = get_today()
 
-    # Python weekday:
-    # Monday=0 ... Sunday=6
     current_monday = (
         today - timedelta(days=today.weekday())
     )
@@ -700,7 +700,8 @@ def weekly_report(
         current_date = start_date + timedelta(days=i)
 
         day_tasks = [
-            task for task in tasks
+            task
+            for task in tasks
             if task["task_date"] == current_date
         ]
 
@@ -787,8 +788,10 @@ def monthly_report(
 
         if task["status"] == "completed":
             daily[key]["completed"] += 1
+
         elif task["status"] == "failed":
             daily[key]["failed"] += 1
+
         else:
             daily[key]["pending"] += 1
 
@@ -806,7 +809,8 @@ def monthly_report(
         )
 
     perfect_days = sum(
-        1 for item in daily_list
+        1
+        for item in daily_list
         if item["percent"] == 100
     )
 
