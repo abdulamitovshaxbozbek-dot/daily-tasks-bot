@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 from typing import Optional
 import os
+import requests
 
 from fastapi import APIRouter, HTTPException, Header, Depends, Query
 from pydantic import BaseModel, Field
@@ -926,3 +927,218 @@ def yearly_report(
         "stats": stats,
         "monthly": monthly_stats
     }
+# =========================================================
+# TELEGRAM WEBHOOK — MIGRATION BRIDGE
+# =========================================================
+
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+LEGACY_BACKEND_URL = os.environ.get(
+    "LEGACY_BACKEND_URL"
+)
+
+
+def telegram_send_message(chat_id: int, text: str):
+    if not TELEGRAM_TOKEN:
+        raise HTTPException(
+            status_code=500,
+            detail="TELEGRAM_TOKEN is not configured"
+        )
+
+    response = requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        json={
+            "chat_id": chat_id,
+            "text": text
+        },
+        timeout=15
+    )
+
+    if not response.ok:
+        raise HTTPException(
+            status_code=500,
+            detail="Telegram sendMessage failed"
+        )
+
+    return response.json()
+
+
+def normalize_telegram_task(text: str):
+    return (
+        text
+        .lower()
+        .replace("\r", "")
+        .strip()
+    )
+
+
+def clean_telegram_task(text: str):
+    import re
+
+    return re.sub(
+        r"^\s*\d+[\.\)\-]\s*",
+        "",
+        text
+    ).strip()
+
+
+@router.post("/telegram")
+def telegram_webhook(
+    update: dict,
+    _: None = Depends(verify_api_key)
+):
+    """
+    Migration bridge.
+
+    Hozircha:
+    - oddiy matn -> FastAPI
+    - qolgan Telegram actionlar -> eski Node backend
+    """
+
+    message = update.get("message") or {}
+    callback_query = update.get("callback_query") or {}
+
+    chat_id = (
+        message.get("chat", {}).get("id")
+        or callback_query.get("message", {})
+        .get("chat", {})
+        .get("id")
+    )
+
+    if not chat_id:
+        return {
+            "ok": True,
+            "ignored": True,
+            "reason": "No chat ID"
+        }
+
+    message_text = (
+        message.get("text") or ""
+    ).strip()
+
+    # -----------------------------------------------------
+    # ODDIY MATN = VAZIFA QO'SHISH
+    # -----------------------------------------------------
+
+    if (
+        message_text
+        and not message_text.startswith("/")
+    ):
+        user = get_user_by_chat_id(chat_id)
+
+        if not user:
+            telegram_send_message(
+                chat_id,
+                "⚠️ Avval /start buyrug'ini bering."
+            )
+
+            return {
+                "ok": True,
+                "route": "task_text",
+                "handled_by": "fastapi"
+            }
+
+        if user["state"] != "active":
+            if user["state"] == "completed":
+                telegram_send_message(
+                    chat_id,
+                    """🏁 Siz bugungi vazifalarni yakunlab bo'lgansiz.
+
+📊 Natijani ko'rish uchun /hisobot yuboring."""
+                )
+            else:
+                telegram_send_message(
+                    chat_id,
+                    "⚠️ Avval /start buyrug'ini bering."
+                )
+
+            return {
+                "ok": True,
+                "route": "task_text",
+                "handled_by": "fastapi"
+            }
+
+        task_lines = [
+            clean_telegram_task(line)
+            for line in message_text.split("\n")
+        ]
+
+        task_lines = [
+            task
+            for task in task_lines
+            if task
+        ]
+
+        if not task_lines:
+            telegram_send_message(
+                chat_id,
+                "⚠️ Vazifa matni bosh."
+            )
+
+            return {
+                "ok": True,
+                "route": "task_text",
+                "handled_by": "fastapi"
+            }
+
+        # FastAPI'dagi mavjud create_tasks() funksiyasidan
+        # foydalanamiz.
+        result = create_tasks(
+            CreateTasksRequest(
+                telegram_chat_id=chat_id,
+                tasks=task_lines
+            )
+        )
+
+        added_count = result["added_count"]
+        duplicate_count = result["duplicate_count"]
+
+        response_text = ""
+
+        if added_count > 0:
+            response_text += (
+                f"🎉 {added_count} ta yangi vazifa qabul qilindi!\n\n"
+            )
+
+        if duplicate_count > 0:
+            response_text += (
+                f"🔄 {duplicate_count} ta vazifa oldin qo'shilgan.\n\n"
+            )
+
+        response_text += "🤲 Kuningiz barakali o'tsin!"
+
+        if added_count > 0:
+            response_text += (
+                "\n\n🏁 Kuningizni yakunlaganingizda "
+                "/yakunladim yuboring."
+            )
+
+        telegram_send_message(
+            chat_id,
+            response_text
+        )
+
+        return {
+            "ok": True,
+            "route": "task_text",
+            "handled_by": "fastapi",
+            "added_count": added_count,
+            "duplicate_count": duplicate_count
+        }
+
+    # -----------------------------------------------------
+    # QOLGAN ACTIONLAR — VAQTINCHA NODE
+    # -----------------------------------------------------
+
+    if not LEGACY_BACKEND_URL:
+        raise HTTPException(
+            status_code=500,
+            detail="LEGACY_BACKEND_URL is not configured"
+        )
+
+    response = requests.post(
+        f"{LEGACY_BACKEND_URL}/api/telegram",
+        json=update,
+        timeout=30
+    )
+
+    return response.json()
