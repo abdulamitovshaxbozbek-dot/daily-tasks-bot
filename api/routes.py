@@ -216,6 +216,30 @@ def telegram_answer_callback(
     return response.json()
 
 
+def telegram_delete_message(
+    chat_id: int,
+    message_id: int
+):
+    if not TELEGRAM_TOKEN:
+        raise HTTPException(
+            status_code=500,
+            detail="TELEGRAM_TOKEN is not configured"
+        )
+
+    response = requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteMessage",
+        json={
+            "chat_id": chat_id,
+            "message_id": message_id
+        },
+        timeout=15
+    )
+
+    # Message allaqachon o'chirilgan bo'lsa ham
+    # asosiy workflow'ni buzmaymiz.
+    return response.json()
+
+
 # =========================================================
 # TELEGRAM /START
 # =========================================================
@@ -629,6 +653,218 @@ def handle_telegram_finish_day(
 
 
 # =========================================================
+# TELEGRAM TASK STATUS CALLBACK
+# =========================================================
+
+def handle_telegram_task_status(
+    chat_id: int,
+    callback_query_id: str,
+    callback_data: str,
+    callback_message_id: Optional[int] = None
+):
+    """
+    Callback format:
+
+    task_status|completed|TASK_ID
+    task_status|failed|TASK_ID
+    """
+
+    parts = callback_data.split("|")
+
+    if len(parts) != 3:
+        telegram_answer_callback(
+            callback_query_id,
+            "❌ Noto'g'ri ma'lumot."
+        )
+
+        return {
+            "ok": True,
+            "route": "task_status",
+            "handled_by": "fastapi",
+            "error": "Invalid callback data"
+        }
+
+    _, status, task_id = parts
+
+    # -----------------------------------------------------
+    # STATUS VALIDATION
+    # -----------------------------------------------------
+
+    if status not in ("completed", "failed"):
+        telegram_answer_callback(
+            callback_query_id,
+            "❌ Noto'g'ri status."
+        )
+
+        return {
+            "ok": True,
+            "route": "task_status",
+            "handled_by": "fastapi",
+            "error": "Invalid status"
+        }
+
+    # -----------------------------------------------------
+    # USER
+    # -----------------------------------------------------
+
+    user = get_user_by_chat_id(chat_id)
+
+    if not user:
+        telegram_answer_callback(
+            callback_query_id,
+            "❌ User topilmadi."
+        )
+
+        return {
+            "ok": True,
+            "route": "task_status",
+            "handled_by": "fastapi",
+            "error": "User not found"
+        }
+
+    # -----------------------------------------------------
+    # TASK STATUS — ATOMIC UPDATE
+    # -----------------------------------------------------
+
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+
+            cur.execute(
+                """
+                UPDATE public.tasks
+                SET status = %s
+                WHERE id = %s
+                  AND user_id = %s
+                  AND status = 'pending'
+                RETURNING *
+                """,
+                (
+                    status,
+                    task_id,
+                    user["id"]
+                )
+            )
+
+            task = cur.fetchone()
+
+            # -------------------------------------------------
+            # TASK ALLAQACHON ISHLANGAN
+            # -------------------------------------------------
+
+            if not task:
+                telegram_answer_callback(
+                    callback_query_id,
+                    "⚠️ Bu vazifa allaqachon belgilangan."
+                )
+
+                return {
+                    "ok": True,
+                    "route": "task_status",
+                    "handled_by": "fastapi",
+                    "already_processed": True
+                }
+
+            # -------------------------------------------------
+            # BUGUNGI PENDING SONI
+            # -------------------------------------------------
+
+            today = get_today()
+
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM public.tasks
+                WHERE user_id = %s
+                  AND task_date = %s
+                  AND status = 'pending'
+                """,
+                (
+                    user["id"],
+                    today
+                )
+            )
+
+            pending_count = cur.fetchone()[0]
+
+            # -------------------------------------------------
+            # BARCHA TASKLAR BELGILANGAN BO'LSA
+            # -------------------------------------------------
+
+            completion_notification_claimed = False
+
+            if pending_count == 0:
+
+                cur.execute(
+                    """
+                    UPDATE public.users
+                    SET last_completion_notified_date = %s
+                    WHERE id = %s
+                      AND last_completion_notified_date IS DISTINCT FROM %s
+                    RETURNING id
+                    """,
+                    (
+                        today,
+                        user["id"],
+                        today
+                    )
+                )
+
+                claimed = cur.fetchone()
+
+                if claimed:
+                    completion_notification_claimed = True
+
+    # -----------------------------------------------------
+    # CALLBACKGA JAVOB
+    # -----------------------------------------------------
+
+    if status == "completed":
+        telegram_answer_callback(
+            callback_query_id,
+            "✅ Bajarildi!"
+        )
+    else:
+        telegram_answer_callback(
+            callback_query_id,
+            "❌ Bajarilmadi."
+        )
+
+    # -----------------------------------------------------
+    # TASK XABARINI O'CHIRISH
+    # -----------------------------------------------------
+
+    if callback_message_id:
+        telegram_delete_message(
+            chat_id,
+            callback_message_id
+        )
+
+    # -----------------------------------------------------
+    # BARCHASI BELGILANGAN BO'LSA
+    # FAQAT BIR MARTA XABAR
+    # -----------------------------------------------------
+
+    if completion_notification_claimed:
+        telegram_send_message(
+            chat_id,
+            """🎉 Barcha vazifalar belgilandi!
+
+📊 Natijangizni ko'rish uchun /hisobot yuboring."""
+        )
+
+    return {
+        "ok": True,
+        "route": "task_status",
+        "handled_by": "fastapi",
+        "task_id": str(task["id"]),
+        "status": status,
+        "pending_count": pending_count,
+        "completion_notification_sent":
+            completion_notification_claimed
+    }
+
+
+# =========================================================
 # HEALTH / API
 # =========================================================
 
@@ -956,7 +1192,7 @@ def create_tasks(
 
 
 # =========================================================
-# TASK STATUS
+# TASK STATUS — API
 # =========================================================
 
 @router.patch(
@@ -1465,10 +1701,11 @@ def telegram_webhook(
     """
     Migration bridge.
 
-    Hozircha:
+    Hozir:
     - /start -> FastAPI
     - morning_time -> FastAPI
     - /yakunladim -> FastAPI
+    - task_status -> FastAPI
     - oddiy matn -> FastAPI
     - qolgan Telegram actionlar -> eski Node backend
     """
@@ -1525,18 +1762,42 @@ def telegram_webhook(
         )
 
     # -----------------------------------------------------
-    # MORNING TIME CALLBACK = FASTAPI
+    # CALLBACK DATA
     # -----------------------------------------------------
 
     callback_data = (
         callback_query.get("data") or ""
     ).strip()
 
+    # -----------------------------------------------------
+    # MORNING TIME CALLBACK = FASTAPI
+    # -----------------------------------------------------
+
     if callback_data.startswith("morning_time|"):
         return handle_telegram_morning_time(
             chat_id=chat_id,
             callback_query_id=callback_query.get("id"),
             callback_data=callback_data
+        )
+
+    # -----------------------------------------------------
+    # TASK STATUS CALLBACK = FASTAPI
+    # -----------------------------------------------------
+
+    if callback_data.startswith("task_status|"):
+        callback_message = (
+            callback_query.get("message") or {}
+        )
+
+        callback_message_id = (
+            callback_message.get("message_id")
+        )
+
+        return handle_telegram_task_status(
+            chat_id=chat_id,
+            callback_query_id=callback_query.get("id"),
+            callback_data=callback_data,
+            callback_message_id=callback_message_id
         )
 
     # -----------------------------------------------------
