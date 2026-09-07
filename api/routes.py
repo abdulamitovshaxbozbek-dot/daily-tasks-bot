@@ -183,104 +183,17 @@ def telegram_send_message(
 
     if not response.ok:
 
+        try:
+            telegram_error = response.json()
+        except Exception:
+            telegram_error = response.text
+
         raise HTTPException(
             status_code=500,
-            detail="Telegram sendMessage failed"
+            detail=f"Telegram sendMessage failed: {telegram_error}"
         )
 
     return response.json()
-
-
-def telegram_send_message_with_keyboard(
-    chat_id: int,
-    text: str,
-    keyboard: list
-):
-
-    if not TELEGRAM_TOKEN:
-
-        raise HTTPException(
-            status_code=500,
-            detail="TELEGRAM_TOKEN is not configured"
-        )
-
-    response = requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-        json={
-            "chat_id": chat_id,
-            "text": text,
-            "reply_markup": {
-                "inline_keyboard": keyboard
-            }
-        },
-        timeout=15
-    )
-
-    if not response.ok:
-
-        raise HTTPException(
-            status_code=500,
-            detail="Telegram sendMessage failed"
-        )
-
-    return response.json()
-
-
-def telegram_answer_callback(
-    callback_query_id: str,
-    text: str = ""
-):
-
-    if not TELEGRAM_TOKEN:
-
-        raise HTTPException(
-            status_code=500,
-            detail="TELEGRAM_TOKEN is not configured"
-        )
-
-    response = requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery",
-        json={
-            "callback_query_id": callback_query_id,
-            "text": text
-        },
-        timeout=15
-    )
-
-    if not response.ok:
-
-        raise HTTPException(
-            status_code=500,
-            detail="Telegram answerCallbackQuery failed"
-        )
-
-    return response.json()
-
-
-def telegram_delete_message(
-    chat_id: int,
-    message_id: int
-):
-
-    if not TELEGRAM_TOKEN:
-
-        raise HTTPException(
-            status_code=500,
-            detail="TELEGRAM_TOKEN is not configured"
-        )
-
-    response = requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteMessage",
-        json={
-            "chat_id": chat_id,
-            "message_id": message_id
-        },
-        timeout=15
-    )
-
-    return response.json()
-
-
 # =========================================================
 # TELEGRAM /START
 # =========================================================
