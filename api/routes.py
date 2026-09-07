@@ -198,6 +198,40 @@ def telegram_send_message(
 # TELEGRAM /START
 # =========================================================
 
+def telegram_send_message_with_keyboard(
+    chat_id: int,
+    text: str,
+    reply_markup: dict
+):
+    if not TELEGRAM_TOKEN:
+        raise HTTPException(
+            status_code=500,
+            detail="TELEGRAM_TOKEN is not configured"
+        )
+
+    response = requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        json={
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": reply_markup
+        },
+        timeout=15
+    )
+
+    if not response.ok:
+        try:
+            telegram_error = response.json()
+        except Exception:
+            telegram_error = response.text
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Telegram sendMessage failed: {telegram_error}"
+        )
+        
+    return response.json()
+    
 def telegram_send_morning_keyboard(
     chat_id: int,
     first_name: str
