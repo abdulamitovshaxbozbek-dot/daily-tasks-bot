@@ -15,6 +15,21 @@ router = APIRouter(prefix="/api")
 
 
 # =========================================================
+# CONFIG
+# =========================================================
+
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+
+LEGACY_BACKEND_URL = os.environ.get(
+    "LEGACY_BACKEND_URL"
+)
+
+ADMIN_CHAT_ID = "8908985083"
+
+TIMEZONE = "Asia/Tashkent"
+
+
+# =========================================================
 # API KEY
 # =========================================================
 
@@ -69,6 +84,7 @@ def get_user_by_chat_id(chat_id: int):
                 """,
                 (chat_id,)
             )
+
             return cur.fetchone()
 
 
@@ -78,9 +94,13 @@ def get_today():
             cur.execute(
                 """
                 SELECT
-                    (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Tashkent')::date
+                    (
+                        CURRENT_TIMESTAMP
+                        AT TIME ZONE 'Asia/Tashkent'
+                    )::date
                 """
             )
+
             return cur.fetchone()[0]
 
 
@@ -120,18 +140,16 @@ def calculate_stats(tasks):
     }
 
 
+def is_admin(chat_id: int):
+    return str(chat_id) == ADMIN_CHAT_ID
+
+
 # =========================================================
 # TELEGRAM HELPERS
 # =========================================================
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-
-LEGACY_BACKEND_URL = os.environ.get(
-    "LEGACY_BACKEND_URL"
-)
-
-
 def telegram_send_message(chat_id: int, text: str):
+
     if not TELEGRAM_TOKEN:
         raise HTTPException(
             status_code=500,
@@ -161,6 +179,7 @@ def telegram_send_message_with_keyboard(
     text: str,
     keyboard: list
 ):
+
     if not TELEGRAM_TOKEN:
         raise HTTPException(
             status_code=500,
@@ -192,6 +211,7 @@ def telegram_answer_callback(
     callback_query_id: str,
     text: str = ""
 ):
+
     if not TELEGRAM_TOKEN:
         raise HTTPException(
             status_code=500,
@@ -220,6 +240,7 @@ def telegram_delete_message(
     chat_id: int,
     message_id: int
 ):
+
     if not TELEGRAM_TOKEN:
         raise HTTPException(
             status_code=500,
@@ -235,8 +256,6 @@ def telegram_delete_message(
         timeout=15
     )
 
-    # Message allaqachon o'chirilgan bo'lsa ham
-    # asosiy workflow'ni buzmaymiz.
     return response.json()
 
 
@@ -248,6 +267,7 @@ def telegram_send_morning_keyboard(
     chat_id: int,
     first_name: str
 ):
+
     keyboard = []
 
     times = [
@@ -265,6 +285,7 @@ def telegram_send_morning_keyboard(
     row = []
 
     for time in times:
+
         row.append({
             "text": time,
             "callback_data": f"morning_time|{time}"
@@ -295,6 +316,7 @@ def handle_telegram_start(
     first_name: str,
     username: Optional[str] = None
 ):
+
     user = get_user_by_chat_id(chat_id)
 
     # -----------------------------------------------------
@@ -302,6 +324,28 @@ def handle_telegram_start(
     # -----------------------------------------------------
 
     if user:
+
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE public.users
+                    SET
+                        last_active_date = %s,
+                        first_name = %s,
+                        telegram_username = %s
+                    WHERE telegram_chat_id = %s
+                    """,
+                    (
+                        get_today(),
+                        first_name,
+                        username or "",
+                        chat_id
+                    )
+                )
+
+            conn.commit()
+
         telegram_send_message(
             chat_id,
             f"""👋 Assalomu alaykum, {first_name}!
@@ -323,7 +367,9 @@ Siz allaqachon ro'yxatdan o'tgansiz. ✅
     # -----------------------------------------------------
 
     with get_connection() as conn:
+
         with conn.cursor() as cur:
+
             cur.execute(
                 """
                 INSERT INTO public.users (
@@ -332,7 +378,8 @@ Siz allaqachon ro'yxatdan o'tgansiz. ✅
                     first_name,
                     timezone,
                     state,
-                    subscription_status
+                    subscription_status,
+                    last_active_date
                 )
                 VALUES (
                     %s,
@@ -340,18 +387,22 @@ Siz allaqachon ro'yxatdan o'tgansiz. ✅
                     %s,
                     'Asia/Tashkent',
                     'waiting_morning_time',
-                    'trial'
+                    'trial',
+                    %s
                 )
                 RETURNING id
                 """,
                 (
                     chat_id,
                     username,
-                    first_name
+                    first_name,
+                    get_today()
                 )
             )
 
             user_id = cur.fetchone()[0]
+
+        conn.commit()
 
     telegram_send_morning_keyboard(
         chat_id,
@@ -376,14 +427,11 @@ def handle_telegram_morning_time(
     callback_query_id: str,
     callback_data: str
 ):
-    """
-    Callback:
-    morning_time|07:00
-    """
 
     parts = callback_data.split("|", 1)
 
     if len(parts) != 2:
+
         telegram_answer_callback(
             callback_query_id,
             "❌ Noto'g'ri vaqt."
@@ -402,6 +450,7 @@ def handle_telegram_morning_time(
         r"^(0[2-9]|10):00$",
         morning_time
     ):
+
         telegram_answer_callback(
             callback_query_id,
             "❌ Noto'g'ri vaqt."
@@ -417,6 +466,7 @@ def handle_telegram_morning_time(
     user = get_user_by_chat_id(chat_id)
 
     if not user:
+
         telegram_answer_callback(
             callback_query_id,
             "❌ Avval /start bosing."
@@ -455,23 +505,29 @@ def handle_telegram_morning_time(
     # -----------------------------------------------------
 
     with get_connection() as conn:
+
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+
             cur.execute(
                 """
                 UPDATE public.users
                 SET
                     morning_time = %s::time,
-                    state = 'active'
+                    state = 'active',
+                    last_active_date = %s
                 WHERE id = %s
                 RETURNING *
                 """,
                 (
                     morning_time,
+                    get_today(),
                     user["id"]
                 )
             )
 
             updated_user = cur.fetchone()
+
+        conn.commit()
 
     telegram_answer_callback(
         callback_query_id,
@@ -503,15 +559,20 @@ def telegram_send_task_status_keyboard(
     chat_id: int,
     task
 ):
+
     keyboard = [
         [
             {
                 "text": "✅ Bajarildi",
-                "callback_data": f"task_status|completed|{task['id']}"
+                "callback_data": (
+                    f"task_status|completed|{task['id']}"
+                )
             },
             {
                 "text": "❌ Bajarilmadi",
-                "callback_data": f"task_status|failed|{task['id']}"
+                "callback_data": (
+                    f"task_status|failed|{task['id']}"
+                )
             }
         ]
     ]
@@ -526,13 +587,11 @@ def telegram_send_task_status_keyboard(
 def handle_telegram_finish_day(
     chat_id: int
 ):
+
     user = get_user_by_chat_id(chat_id)
 
-    # -----------------------------------------------------
-    # USER YO'Q
-    # -----------------------------------------------------
-
     if not user:
+
         telegram_send_message(
             chat_id,
             "⚠️ Avval /start buyrug'ini bering."
@@ -545,11 +604,8 @@ def handle_telegram_finish_day(
             "error": "User not found"
         }
 
-    # -----------------------------------------------------
-    # ALLAQACHON YAKUNLANGAN
-    # -----------------------------------------------------
-
     if user["state"] == "completed":
+
         telegram_send_message(
             chat_id,
             """🏁 Siz bugungi vazifalarni allaqachon yakunlagansiz.
@@ -566,12 +622,11 @@ def handle_telegram_finish_day(
 
     today = get_today()
 
-    # -----------------------------------------------------
-    # BUGUNGI PENDING VAZIFALAR
-    # -----------------------------------------------------
-
     with get_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
 
             cur.execute(
                 """
@@ -590,11 +645,8 @@ def handle_telegram_finish_day(
 
             pending_tasks = cur.fetchall()
 
-            # -------------------------------------------------
-            # PENDING YO'Q
-            # -------------------------------------------------
-
             if not pending_tasks:
+
                 telegram_send_message(
                     chat_id,
                     """📋 Bugun uchun bajarilmagan vazifalar qolmagan.
@@ -610,35 +662,37 @@ def handle_telegram_finish_day(
                     "reason": "no_pending_tasks"
                 }
 
-            # -------------------------------------------------
-            # USER STATE = COMPLETED
-            # -------------------------------------------------
-
             cur.execute(
                 """
                 UPDATE public.users
-                SET state = 'completed'
+                SET
+                    state = 'completed',
+                    last_active_date = %s
                 WHERE id = %s
                 RETURNING *
                 """,
-                (user["id"],)
+                (
+                    today,
+                    user["id"]
+                )
             )
 
             updated_user = cur.fetchone()
 
-    # -----------------------------------------------------
-    # HAR BIR PENDING TASK UCHUN TUGMA
-    # -----------------------------------------------------
+        conn.commit()
 
     sent_tasks = []
 
     for task in pending_tasks:
+
         telegram_send_task_status_keyboard(
             chat_id,
             task
         )
 
-        sent_tasks.append(str(task["id"]))
+        sent_tasks.append(
+            str(task["id"])
+        )
 
     return {
         "ok": True,
@@ -662,16 +716,11 @@ def handle_telegram_task_status(
     callback_data: str,
     callback_message_id: Optional[int] = None
 ):
-    """
-    Callback format:
-
-    task_status|completed|TASK_ID
-    task_status|failed|TASK_ID
-    """
 
     parts = callback_data.split("|")
 
     if len(parts) != 3:
+
         telegram_answer_callback(
             callback_query_id,
             "❌ Noto'g'ri ma'lumot."
@@ -686,11 +735,11 @@ def handle_telegram_task_status(
 
     _, status, task_id = parts
 
-    # -----------------------------------------------------
-    # STATUS VALIDATION
-    # -----------------------------------------------------
+    if status not in (
+        "completed",
+        "failed"
+    ):
 
-    if status not in ("completed", "failed"):
         telegram_answer_callback(
             callback_query_id,
             "❌ Noto'g'ri status."
@@ -703,13 +752,10 @@ def handle_telegram_task_status(
             "error": "Invalid status"
         }
 
-    # -----------------------------------------------------
-    # USER
-    # -----------------------------------------------------
-
     user = get_user_by_chat_id(chat_id)
 
     if not user:
+
         telegram_answer_callback(
             callback_query_id,
             "❌ User topilmadi."
@@ -722,12 +768,11 @@ def handle_telegram_task_status(
             "error": "User not found"
         }
 
-    # -----------------------------------------------------
-    # TASK STATUS — ATOMIC UPDATE
-    # -----------------------------------------------------
-
     with get_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
 
             cur.execute(
                 """
@@ -747,11 +792,8 @@ def handle_telegram_task_status(
 
             task = cur.fetchone()
 
-            # -------------------------------------------------
-            # TASK ALLAQACHON ISHLANGAN
-            # -------------------------------------------------
-
             if not task:
+
                 telegram_answer_callback(
                     callback_query_id,
                     "⚠️ Bu vazifa allaqachon belgilangan."
@@ -763,10 +805,6 @@ def handle_telegram_task_status(
                     "handled_by": "fastapi",
                     "already_processed": True
                 }
-
-            # -------------------------------------------------
-            # BUGUNGI PENDING SONI
-            # -------------------------------------------------
 
             today = get_today()
 
@@ -786,10 +824,6 @@ def handle_telegram_task_status(
 
             pending_count = cur.fetchone()["count"]
 
-            # -------------------------------------------------
-            # BARCHA TASKLAR BELGILANGAN BO'LSA
-            # -------------------------------------------------
-
             completion_notification_claimed = False
 
             if pending_count == 0:
@@ -797,12 +831,16 @@ def handle_telegram_task_status(
                 cur.execute(
                     """
                     UPDATE public.users
-                    SET last_completion_notified_date = %s
+                    SET
+                        last_completion_notified_date = %s,
+                        last_active_date = %s
                     WHERE id = %s
-                      AND last_completion_notified_date IS DISTINCT FROM %s
+                      AND last_completion_notified_date
+                          IS DISTINCT FROM %s
                     RETURNING id
                     """,
                     (
+                        today,
                         today,
                         user["id"],
                         today
@@ -814,37 +852,45 @@ def handle_telegram_task_status(
                 if claimed:
                     completion_notification_claimed = True
 
-    # -----------------------------------------------------
-    # CALLBACKGA JAVOB
-    # -----------------------------------------------------
+            else:
+
+                cur.execute(
+                    """
+                    UPDATE public.users
+                    SET last_active_date = %s
+                    WHERE id = %s
+                    """,
+                    (
+                        today,
+                        user["id"]
+                    )
+                )
+
+        conn.commit()
 
     if status == "completed":
+
         telegram_answer_callback(
             callback_query_id,
             "✅ Bajarildi!"
         )
+
     else:
+
         telegram_answer_callback(
             callback_query_id,
             "❌ Bajarilmadi."
         )
 
-    # -----------------------------------------------------
-    # TASK XABARINI O'CHIRISH
-    # -----------------------------------------------------
-
     if callback_message_id:
+
         telegram_delete_message(
             chat_id,
             callback_message_id
         )
 
-    # -----------------------------------------------------
-    # BARCHASI BELGILANGAN BO'LSA
-    # FAQAT BIR MARTA XABAR
-    # -----------------------------------------------------
-
     if completion_notification_claimed:
+
         telegram_send_message(
             chat_id,
             """🎉 Barcha vazifalar belgilandi!
@@ -865,11 +911,176 @@ def handle_telegram_task_status(
 
 
 # =========================================================
+# ADMIN
+# =========================================================
+
+def handle_telegram_admin(chat_id: int):
+
+    if not is_admin(chat_id):
+
+        telegram_send_message(
+            chat_id,
+            "⛔ Sizda admin huquqi yo'q."
+        )
+
+        return {
+            "ok": True,
+            "route": "admin",
+            "handled_by": "fastapi",
+            "authorized": False
+        }
+
+    today = get_today()
+    two_days_ago = today - timedelta(days=1)
+
+    with get_connection() as conn:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
+            # -------------------------------------------------
+            # USER STATISTICS
+            # -------------------------------------------------
+
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_users,
+
+                    COUNT(*) FILTER (
+                        WHERE (
+                            created_at
+                            AT TIME ZONE 'Asia/Tashkent'
+                        )::date = %s
+                    ) AS added_today,
+
+                    COUNT(*) FILTER (
+                        WHERE (
+                            created_at
+                            AT TIME ZONE 'Asia/Tashkent'
+                        )::date = %s
+                    ) AS added_yesterday,
+
+                    COUNT(*) FILTER (
+                        WHERE last_active_date >= %s
+                    ) AS active_last_2_days,
+
+                    COUNT(*) FILTER (
+                        WHERE last_active_date = %s
+                    ) AS active_today
+
+                FROM public.users
+                """,
+                (
+                    today,
+                    today - timedelta(days=1),
+                    two_days_ago,
+                    today
+                )
+            )
+
+            user_stats = cur.fetchone()
+
+            # -------------------------------------------------
+            # TODAY TASK STATISTICS
+            # -------------------------------------------------
+
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_tasks,
+
+                    COUNT(*) FILTER (
+                        WHERE status = 'completed'
+                    ) AS completed_tasks,
+
+                    COUNT(*) FILTER (
+                        WHERE status = 'failed'
+                    ) AS failed_tasks,
+
+                    COUNT(*) FILTER (
+                        WHERE status = 'pending'
+                    ) AS pending_tasks
+
+                FROM public.tasks
+                WHERE task_date = %s
+                """,
+                (today,)
+            )
+
+            task_stats = cur.fetchone()
+
+    total_tasks = task_stats["total_tasks"]
+
+    completed_tasks = task_stats["completed_tasks"]
+
+    completion_percent = (
+        round(
+            completed_tasks /
+            total_tasks *
+            100
+        )
+        if total_tasks
+        else 0
+    )
+
+    text = f"""👑 ADMIN PANEL
+
+📅 {today.strftime("%d.%m.%Y")}
+
+👥 FOYDALANUVCHILAR
+├ Jami: {user_stats["total_users"]} ta
+├ Bugun qo'shilgan: {user_stats["added_today"]} ta
+└ Kecha qo'shilgan: {user_stats["added_yesterday"]} ta
+
+📈 FAOLLIK
+├ Bugun foydalangan: {user_stats["active_today"]} ta
+└ Oxirgi 2 kunda foydalangan: {user_stats["active_last_2_days"]} ta
+
+📋 BUGUNGI VAZIFALAR
+├ Jami: {task_stats["total_tasks"]} ta
+├ Bajarilgan: {task_stats["completed_tasks"]} ta
+├ Bajarilmagan: {task_stats["pending_tasks"]} ta
+├ Muvaffaqiyatsiz: {task_stats["failed_tasks"]} ta
+└ Bajarilish darajasi: {completion_percent}%
+
+📢 Broadcast uchun:
+/xabar <matn>
+"""
+
+    telegram_send_message(
+        chat_id,
+        text
+    )
+
+    return {
+        "ok": True,
+        "route": "admin",
+        "handled_by": "fastapi",
+        "authorized": True,
+        "stats": {
+            "total_users": user_stats["total_users"],
+            "added_today": user_stats["added_today"],
+            "added_yesterday": user_stats["added_yesterday"],
+            "active_today": user_stats["active_today"],
+            "active_last_2_days": user_stats["active_last_2_days"],
+            "today_tasks": task_stats["total_tasks"],
+            "completed_tasks": task_stats["completed_tasks"],
+            "pending_tasks": task_stats["pending_tasks"],
+            "failed_tasks": task_stats["failed_tasks"],
+            "completion_percent": completion_percent
+        }
+    }
+
+
+# =========================================================
 # HEALTH / API
 # =========================================================
 
 @router.get("/status")
 def api_status():
+
     return {
         "status": "ok",
         "service": "fastapi",
@@ -886,9 +1097,13 @@ def get_user(
     telegram_chat_id: int,
     _: None = Depends(verify_api_key)
 ):
-    user = get_user_by_chat_id(telegram_chat_id)
+
+    user = get_user_by_chat_id(
+        telegram_chat_id
+    )
 
     if not user:
+
         raise HTTPException(
             status_code=404,
             detail="User not found"
@@ -905,19 +1120,53 @@ def start_user(
     data: StartUserRequest,
     _: None = Depends(verify_api_key)
 ):
+
     existing = get_user_by_chat_id(
         data.telegram_chat_id
     )
 
     if existing:
+
+        with get_connection() as conn:
+
+            with conn.cursor(
+                cursor_factory=RealDictCursor
+            ) as cur:
+
+                cur.execute(
+                    """
+                    UPDATE public.users
+                    SET
+                        last_active_date = %s,
+                        first_name = %s,
+                        telegram_username = %s
+                    WHERE telegram_chat_id = %s
+                    RETURNING *
+                    """,
+                    (
+                        get_today(),
+                        data.first_name,
+                        data.telegram_username,
+                        data.telegram_chat_id
+                    )
+                )
+
+                user = cur.fetchone()
+
+            conn.commit()
+
         return {
             "ok": True,
             "created": False,
-            "user": existing
+            "user": user
         }
 
     with get_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
             cur.execute(
                 """
                 INSERT INTO public.users
@@ -927,7 +1176,8 @@ def start_user(
                     first_name,
                     timezone,
                     state,
-                    subscription_status
+                    subscription_status,
+                    last_active_date
                 )
                 VALUES
                 (
@@ -936,18 +1186,22 @@ def start_user(
                     %s,
                     'Asia/Tashkent',
                     'waiting_morning_time',
-                    'trial'
+                    'trial',
+                    %s
                 )
                 RETURNING *
                 """,
                 (
                     data.telegram_chat_id,
                     data.telegram_username,
-                    data.first_name
+                    data.first_name,
+                    get_today()
                 )
             )
 
             user = cur.fetchone()
+
+        conn.commit()
 
     return {
         "ok": True,
@@ -962,38 +1216,51 @@ def set_morning_time(
     data: MorningTimeRequest,
     _: None = Depends(verify_api_key)
 ):
-    user = get_user_by_chat_id(telegram_chat_id)
+
+    user = get_user_by_chat_id(
+        telegram_chat_id
+    )
 
     if not user:
+
         raise HTTPException(
             status_code=404,
             detail="User not found"
         )
 
     if user["state"] != "waiting_morning_time":
+
         raise HTTPException(
             status_code=409,
             detail="Morning time already selected"
         )
 
     with get_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
             cur.execute(
                 """
                 UPDATE public.users
                 SET
                     morning_time = %s,
-                    state = 'active'
+                    state = 'active',
+                    last_active_date = %s
                 WHERE telegram_chat_id = %s
                 RETURNING *
                 """,
                 (
                     data.morning_time,
+                    get_today(),
                     telegram_chat_id
                 )
             )
 
             updated = cur.fetchone()
+
+        conn.commit()
 
     return {
         "ok": True,
@@ -1012,9 +1279,13 @@ def get_tasks(
     end_date: Optional[date] = Query(default=None),
     _: None = Depends(verify_api_key)
 ):
-    user = get_user_by_chat_id(telegram_chat_id)
+
+    user = get_user_by_chat_id(
+        telegram_chat_id
+    )
 
     if not user:
+
         raise HTTPException(
             status_code=404,
             detail="User not found"
@@ -1027,13 +1298,18 @@ def get_tasks(
         end_date = start_date
 
     if end_date < start_date:
+
         raise HTTPException(
             status_code=400,
             detail="end_date cannot be before start_date"
         )
 
     with get_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
             cur.execute(
                 """
                 SELECT
@@ -1047,7 +1323,9 @@ def get_tasks(
                 WHERE user_id = %s
                   AND task_date >= %s
                   AND task_date <= %s
-                ORDER BY task_date ASC, created_at ASC
+                ORDER BY
+                    task_date ASC,
+                    created_at ASC
                 """,
                 (
                     user["id"],
@@ -1072,6 +1350,7 @@ def get_tasks(
 # =========================================================
 
 def normalize_telegram_task(text: str):
+
     return (
         text
         .lower()
@@ -1081,6 +1360,7 @@ def normalize_telegram_task(text: str):
 
 
 def clean_telegram_task(text: str):
+
     return re.sub(
         r"^\s*\d+[\.\)\-]\s*",
         "",
@@ -1093,11 +1373,13 @@ def create_tasks(
     data: CreateTasksRequest,
     _: None = Depends(verify_api_key)
 ):
+
     user = get_user_by_chat_id(
         data.telegram_chat_id
     )
 
     if not user:
+
         raise HTTPException(
             status_code=404,
             detail="User not found"
@@ -1110,6 +1392,7 @@ def create_tasks(
     ]
 
     if not cleaned_tasks:
+
         raise HTTPException(
             status_code=400,
             detail="Task list is empty"
@@ -1121,7 +1404,10 @@ def create_tasks(
     duplicates = []
 
     with get_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
 
             cur.execute(
                 """
@@ -1144,13 +1430,18 @@ def create_tasks(
             current_input = set()
 
             for task_text in cleaned_tasks:
+
                 normalized = task_text.lower()
 
                 if (
                     normalized in existing
                     or normalized in current_input
                 ):
-                    duplicates.append(task_text)
+
+                    duplicates.append(
+                        task_text
+                    )
+
                     continue
 
                 cur.execute(
@@ -1178,8 +1469,28 @@ def create_tasks(
                     )
                 )
 
-                added.append(cur.fetchone())
-                current_input.add(normalized)
+                added.append(
+                    cur.fetchone()
+                )
+
+                current_input.add(
+                    normalized
+                )
+
+            # User faoliyati
+            cur.execute(
+                """
+                UPDATE public.users
+                SET last_active_date = %s
+                WHERE id = %s
+                """,
+                (
+                    today,
+                    user["id"]
+                )
+            )
+
+        conn.commit()
 
     return {
         "ok": True,
@@ -1204,28 +1515,40 @@ def update_task_status(
     data: TaskStatusRequest,
     _: None = Depends(verify_api_key)
 ):
+
     if data.telegram_chat_id != telegram_chat_id:
+
         raise HTTPException(
             status_code=400,
             detail="Telegram chat ID mismatch"
         )
 
-    if data.status not in ("completed", "failed"):
+    if data.status not in (
+        "completed",
+        "failed"
+    ):
+
         raise HTTPException(
             status_code=400,
             detail="Status must be completed or failed"
         )
 
-    user = get_user_by_chat_id(telegram_chat_id)
+    user = get_user_by_chat_id(
+        telegram_chat_id
+    )
 
     if not user:
+
         raise HTTPException(
             status_code=404,
             detail="User not found"
         )
 
     with get_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
 
             cur.execute(
                 """
@@ -1245,7 +1568,24 @@ def update_task_status(
 
             task = cur.fetchone()
 
+            if task:
+
+                cur.execute(
+                    """
+                    UPDATE public.users
+                    SET last_active_date = %s
+                    WHERE id = %s
+                    """,
+                    (
+                        get_today(),
+                        user["id"]
+                    )
+                )
+
+        conn.commit()
+
     if not task:
+
         raise HTTPException(
             status_code=409,
             detail="Task not found or already processed"
@@ -1261,14 +1601,20 @@ def update_task_status(
 # FINISH DAY — API
 # =========================================================
 
-@router.post("/users/{telegram_chat_id}/finish-day")
+@router.post(
+    "/users/{telegram_chat_id}/finish-day"
+)
 def finish_day(
     telegram_chat_id: int,
     _: None = Depends(verify_api_key)
 ):
-    user = get_user_by_chat_id(telegram_chat_id)
+
+    user = get_user_by_chat_id(
+        telegram_chat_id
+    )
 
     if not user:
+
         raise HTTPException(
             status_code=404,
             detail="User not found"
@@ -1277,7 +1623,10 @@ def finish_day(
     today = get_today()
 
     with get_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
 
             cur.execute(
                 """
@@ -1297,6 +1646,7 @@ def finish_day(
             pending_tasks = cur.fetchall()
 
             if not pending_tasks:
+
                 return {
                     "ok": True,
                     "finished": False,
@@ -1307,14 +1657,21 @@ def finish_day(
             cur.execute(
                 """
                 UPDATE public.users
-                SET state = 'completed'
+                SET
+                    state = 'completed',
+                    last_active_date = %s
                 WHERE id = %s
                 RETURNING *
                 """,
-                (user["id"],)
+                (
+                    today,
+                    user["id"]
+                )
             )
 
             updated_user = cur.fetchone()
+
+        conn.commit()
 
     return {
         "ok": True,
@@ -1329,24 +1686,35 @@ def finish_day(
 # DAILY REPORT
 # =========================================================
 
-@router.get("/users/{telegram_chat_id}/reports/daily")
+@router.get(
+    "/users/{telegram_chat_id}/reports/daily"
+)
 def daily_report(
     telegram_chat_id: int,
     _: None = Depends(verify_api_key)
 ):
-    user = get_user_by_chat_id(telegram_chat_id)
+
+    user = get_user_by_chat_id(
+        telegram_chat_id
+    )
 
     if not user:
+
         raise HTTPException(
             status_code=404,
             detail="User not found"
         )
 
     today = get_today()
+
     yesterday = today - timedelta(days=1)
 
     with get_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
             cur.execute(
                 """
                 SELECT
@@ -1358,7 +1726,9 @@ def daily_report(
                 FROM public.tasks
                 WHERE user_id = %s
                   AND task_date IN (%s, %s)
-                ORDER BY task_date ASC, created_at ASC
+                ORDER BY
+                    task_date ASC,
+                    created_at ASC
                 """,
                 (
                     user["id"],
@@ -1381,8 +1751,13 @@ def daily_report(
         if task["task_date"] == yesterday
     ]
 
-    today_stats = calculate_stats(today_tasks)
-    yesterday_stats = calculate_stats(yesterday_tasks)
+    today_stats = calculate_stats(
+        today_tasks
+    )
+
+    yesterday_stats = calculate_stats(
+        yesterday_tasks
+    )
 
     return {
         "ok": True,
@@ -1397,8 +1772,8 @@ def daily_report(
             "tasks": yesterday_tasks
         },
         "difference_percent":
-            today_stats["percent"] -
-            yesterday_stats["percent"]
+            today_stats["percent"]
+            - yesterday_stats["percent"]
     }
 
 
@@ -1406,14 +1781,20 @@ def daily_report(
 # WEEKLY REPORT
 # =========================================================
 
-@router.get("/users/{telegram_chat_id}/reports/weekly")
+@router.get(
+    "/users/{telegram_chat_id}/reports/weekly"
+)
 def weekly_report(
     telegram_chat_id: int,
     _: None = Depends(verify_api_key)
 ):
-    user = get_user_by_chat_id(telegram_chat_id)
+
+    user = get_user_by_chat_id(
+        telegram_chat_id
+    )
 
     if not user:
+
         raise HTTPException(
             status_code=404,
             detail="User not found"
@@ -1422,14 +1803,25 @@ def weekly_report(
     today = get_today()
 
     current_monday = (
-        today - timedelta(days=today.weekday())
+        today - timedelta(
+            days=today.weekday()
+        )
     )
 
-    start_date = current_monday - timedelta(days=7)
-    end_date = current_monday - timedelta(days=1)
+    start_date = current_monday - timedelta(
+        days=7
+    )
+
+    end_date = current_monday - timedelta(
+        days=1
+    )
 
     with get_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
             cur.execute(
                 """
                 SELECT
@@ -1442,7 +1834,9 @@ def weekly_report(
                 WHERE user_id = %s
                   AND task_date >= %s
                   AND task_date <= %s
-                ORDER BY task_date ASC, created_at ASC
+                ORDER BY
+                    task_date ASC,
+                    created_at ASC
                 """,
                 (
                     user["id"],
@@ -1458,7 +1852,11 @@ def weekly_report(
     days = []
 
     for i in range(7):
-        current_date = start_date + timedelta(days=i)
+
+        current_date = (
+            start_date
+            + timedelta(days=i)
+        )
 
         day_tasks = [
             task
@@ -1466,7 +1864,9 @@ def weekly_report(
             if task["task_date"] == current_date
         ]
 
-        day_stats = calculate_stats(day_tasks)
+        day_stats = calculate_stats(
+            day_tasks
+        )
 
         days.append({
             "date": current_date,
@@ -1487,14 +1887,20 @@ def weekly_report(
 # MONTHLY REPORT
 # =========================================================
 
-@router.get("/users/{telegram_chat_id}/reports/monthly")
+@router.get(
+    "/users/{telegram_chat_id}/reports/monthly"
+)
 def monthly_report(
     telegram_chat_id: int,
     _: None = Depends(verify_api_key)
 ):
-    user = get_user_by_chat_id(telegram_chat_id)
+
+    user = get_user_by_chat_id(
+        telegram_chat_id
+    )
 
     if not user:
+
         raise HTTPException(
             status_code=404,
             detail="User not found"
@@ -1505,7 +1911,11 @@ def monthly_report(
     start_date = today.replace(day=1)
 
     with get_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
             cur.execute(
                 """
                 SELECT
@@ -1518,7 +1928,9 @@ def monthly_report(
                 WHERE user_id = %s
                   AND task_date >= %s
                   AND task_date <= %s
-                ORDER BY task_date ASC, created_at ASC
+                ORDER BY
+                    task_date ASC,
+                    created_at ASC
                 """,
                 (
                     user["id"],
@@ -1534,9 +1946,11 @@ def monthly_report(
     daily = {}
 
     for task in tasks:
+
         key = str(task["task_date"])
 
         if key not in daily:
+
             daily[key] = {
                 "date": task["task_date"],
                 "total": 0,
@@ -1548,22 +1962,28 @@ def monthly_report(
         daily[key]["total"] += 1
 
         if task["status"] == "completed":
+
             daily[key]["completed"] += 1
 
         elif task["status"] == "failed":
+
             daily[key]["failed"] += 1
 
         else:
+
             daily[key]["pending"] += 1
 
-    daily_list = list(daily.values())
+    daily_list = list(
+        daily.values()
+    )
 
     for item in daily_list:
+
         item["percent"] = (
             round(
-                item["completed"] /
-                item["total"] *
-                100
+                item["completed"]
+                / item["total"]
+                * 100
             )
             if item["total"]
             else 0
@@ -1611,14 +2031,20 @@ def monthly_report(
 # YEARLY REPORT
 # =========================================================
 
-@router.get("/users/{telegram_chat_id}/reports/yearly")
+@router.get(
+    "/users/{telegram_chat_id}/reports/yearly"
+)
 def yearly_report(
     telegram_chat_id: int,
     _: None = Depends(verify_api_key)
 ):
-    user = get_user_by_chat_id(telegram_chat_id)
+
+    user = get_user_by_chat_id(
+        telegram_chat_id
+    )
 
     if not user:
+
         raise HTTPException(
             status_code=404,
             detail="User not found"
@@ -1626,10 +2052,18 @@ def yearly_report(
 
     today = get_today()
 
-    start_date = date(today.year, 1, 1)
+    start_date = date(
+        today.year,
+        1,
+        1
+    )
 
     with get_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
             cur.execute(
                 """
                 SELECT
@@ -1642,7 +2076,9 @@ def yearly_report(
                 WHERE user_id = %s
                   AND task_date >= %s
                   AND task_date <= %s
-                ORDER BY task_date ASC, created_at ASC
+                ORDER BY
+                    task_date ASC,
+                    created_at ASC
                 """,
                 (
                     user["id"],
@@ -1658,25 +2094,33 @@ def yearly_report(
     monthly = {}
 
     for task in tasks:
+
         key = (
             task["task_date"].year,
             task["task_date"].month
         )
 
         if key not in monthly:
+
             monthly[key] = []
 
         monthly[key].append(task)
 
     monthly_stats = []
 
-    for (year, month), month_tasks in sorted(
+    for (
+        year,
+        month
+    ), month_tasks in sorted(
         monthly.items()
     ):
+
         monthly_stats.append({
             "year": year,
             "month": month,
-            "stats": calculate_stats(month_tasks)
+            "stats": calculate_stats(
+                month_tasks
+            )
         })
 
     return {
@@ -1698,29 +2142,23 @@ def telegram_webhook(
     update: dict,
     _: None = Depends(verify_api_key)
 ):
-    """
-    Migration bridge.
-
-    Hozir:
-    - /start -> FastAPI
-    - morning_time -> FastAPI
-    - /yakunladim -> FastAPI
-    - task_status -> FastAPI
-    - oddiy matn -> FastAPI
-    - qolgan Telegram actionlar -> eski Node backend
-    """
 
     message = update.get("message") or {}
-    callback_query = update.get("callback_query") or {}
+
+    callback_query = (
+        update.get("callback_query") or {}
+    )
 
     chat_id = (
         message.get("chat", {}).get("id")
-        or callback_query.get("message", {})
+        or
+        callback_query.get("message", {})
         .get("chat", {})
         .get("id")
     )
 
     if not chat_id:
+
         return {
             "ok": True,
             "ignored": True,
@@ -1731,11 +2169,34 @@ def telegram_webhook(
         message.get("text") or ""
     ).strip()
 
-    # -----------------------------------------------------
+    # =====================================================
+    # USER ACTIVITY
+    # =====================================================
+
+    with get_connection() as conn:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                UPDATE public.users
+                SET last_active_date = %s
+                WHERE telegram_chat_id = %s
+                """,
+                (
+                    get_today(),
+                    chat_id
+                )
+            )
+
+        conn.commit()
+
+    # =====================================================
     # /START = FASTAPI
-    # -----------------------------------------------------
+    # =====================================================
 
     if message_text == "/start":
+
         first_name = (
             message.get("from", {}).get("first_name")
             or "Do'st"
@@ -1752,39 +2213,56 @@ def telegram_webhook(
             username=username
         )
 
-    # -----------------------------------------------------
+    # =====================================================
+    # /ADMIN = FASTAPI
+    # =====================================================
+
+    if message_text == "/admin":
+
+        return handle_telegram_admin(
+            chat_id=chat_id
+        )
+
+    # =====================================================
     # /YAKUNLADIM = FASTAPI
-    # -----------------------------------------------------
+    # =====================================================
 
     if message_text == "/yakunladim":
+
         return handle_telegram_finish_day(
             chat_id=chat_id
         )
 
-    # -----------------------------------------------------
+    # =====================================================
     # CALLBACK DATA
-    # -----------------------------------------------------
+    # =====================================================
 
     callback_data = (
         callback_query.get("data") or ""
     ).strip()
 
-    # -----------------------------------------------------
+    # =====================================================
     # MORNING TIME CALLBACK = FASTAPI
-    # -----------------------------------------------------
+    # =====================================================
 
-    if callback_data.startswith("morning_time|"):
+    if callback_data.startswith(
+        "morning_time|"
+    ):
+
         return handle_telegram_morning_time(
             chat_id=chat_id,
             callback_query_id=callback_query.get("id"),
             callback_data=callback_data
         )
 
-    # -----------------------------------------------------
+    # =====================================================
     # TASK STATUS CALLBACK = FASTAPI
-    # -----------------------------------------------------
+    # =====================================================
 
-    if callback_data.startswith("task_status|"):
+    if callback_data.startswith(
+        "task_status|"
+    ):
+
         callback_message = (
             callback_query.get("message") or {}
         )
@@ -1800,17 +2278,21 @@ def telegram_webhook(
             callback_message_id=callback_message_id
         )
 
-    # -----------------------------------------------------
+    # =====================================================
     # ODDIY MATN = VAZIFA QO'SHISH
-    # -----------------------------------------------------
+    # =====================================================
 
     if (
         message_text
         and not message_text.startswith("/")
     ):
-        user = get_user_by_chat_id(chat_id)
+
+        user = get_user_by_chat_id(
+            chat_id
+        )
 
         if not user:
+
             telegram_send_message(
                 chat_id,
                 "⚠️ Avval /start buyrug'ini bering."
@@ -1823,14 +2305,18 @@ def telegram_webhook(
             }
 
         if user["state"] != "active":
+
             if user["state"] == "completed":
+
                 telegram_send_message(
                     chat_id,
                     """🏁 Siz bugungi vazifalarni yakunlab bo'lgansiz.
 
 📊 Natijani ko'rish uchun /hisobot yuboring."""
                 )
+
             else:
+
                 telegram_send_message(
                     chat_id,
                     "⚠️ Avval /start buyrug'ini bering."
@@ -1854,6 +2340,7 @@ def telegram_webhook(
         ]
 
         if not task_lines:
+
             telegram_send_message(
                 chat_id,
                 "⚠️ Vazifa matni bosh."
@@ -1872,24 +2359,36 @@ def telegram_webhook(
             )
         )
 
-        added_count = result["added_count"]
-        duplicate_count = result["duplicate_count"]
+        added_count = result[
+            "added_count"
+        ]
+
+        duplicate_count = result[
+            "duplicate_count"
+        ]
 
         response_text = ""
 
         if added_count > 0:
+
             response_text += (
-                f"🎉 {added_count} ta yangi vazifa qabul qilindi!\n\n"
+                f"🎉 {added_count} ta yangi "
+                f"vazifa qabul qilindi!\n\n"
             )
 
         if duplicate_count > 0:
+
             response_text += (
-                f"🔄 {duplicate_count} ta vazifa oldin qo'shilgan.\n\n"
+                f"🔄 {duplicate_count} ta vazifa "
+                f"oldin qo'shilgan.\n\n"
             )
 
-        response_text += "🤲 Kuningiz barakali o'tsin!"
+        response_text += (
+            "🤲 Kuningiz barakali o'tsin!"
+        )
 
         if added_count > 0:
+
             response_text += (
                 "\n\n🏁 Kuningizni yakunlaganingizda "
                 "/yakunladim yuboring."
@@ -1908,11 +2407,16 @@ def telegram_webhook(
             "duplicate_count": duplicate_count
         }
 
-    # -----------------------------------------------------
-    # QOLGAN ACTIONLAR — VAQTINCHA NODE
-    # -----------------------------------------------------
+    # =====================================================
+    # QOLGAN ACTIONLAR — NODE
+    #
+    # /xabar, /hisobot, /haftalik, /oylik,
+    # /yillik va boshqa eski actionlar
+    # shu yerda Node backendga o'tadi.
+    # =====================================================
 
     if not LEGACY_BACKEND_URL:
+
         raise HTTPException(
             status_code=500,
             detail="LEGACY_BACKEND_URL is not configured"
