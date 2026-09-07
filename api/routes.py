@@ -21,8 +21,6 @@ router = APIRouter(prefix="/api")
 def verify_api_key(x_api_key: Optional[str] = Header(default=None)):
     expected = os.environ.get("API_KEY")
 
-    # API_KEY Render'da hali qo'yilmagan bo'lsa,
-    # development/test rejimida endpoint ishlaydi.
     if expected and x_api_key != expected:
         raise HTTPException(
             status_code=401,
@@ -376,7 +374,6 @@ def handle_telegram_morning_time(
 
     morning_time = parts[1]
 
-    # Faqat 02:00 - 10:00
     if not re.match(
         r"^(0[2-9]|10):00$",
         morning_time
@@ -408,7 +405,6 @@ def handle_telegram_morning_time(
             "error": "User not found"
         }
 
-    # Agar vaqt allaqachon tanlangan bo'lsa
     if user["state"] != "waiting_morning_time":
 
         telegram_answer_callback(
@@ -453,13 +449,11 @@ def handle_telegram_morning_time(
 
             updated_user = cur.fetchone()
 
-    # Telegram callback loading holatini yopish
     telegram_answer_callback(
         callback_query_id,
         "✅ Vaqt saqlandi!"
     )
 
-    # Foydalanuvchiga tasdiq
     telegram_send_message(
         chat_id,
         f"""✅ Ajoyib, {updated_user["first_name"]}!
@@ -474,6 +468,163 @@ def handle_telegram_morning_time(
         "route": "morning_time",
         "handled_by": "fastapi",
         "morning_time": morning_time
+    }
+
+
+# =========================================================
+# TELEGRAM /YAKUNLADIM
+# =========================================================
+
+def telegram_send_task_status_keyboard(
+    chat_id: int,
+    task
+):
+    keyboard = [
+        [
+            {
+                "text": "✅ Bajarildi",
+                "callback_data": f"task_status|completed|{task['id']}"
+            },
+            {
+                "text": "❌ Bajarilmadi",
+                "callback_data": f"task_status|failed|{task['id']}"
+            }
+        ]
+    ]
+
+    return telegram_send_message_with_keyboard(
+        chat_id,
+        f"📌 {task['task_text']}",
+        keyboard
+    )
+
+
+def handle_telegram_finish_day(
+    chat_id: int
+):
+    user = get_user_by_chat_id(chat_id)
+
+    # -----------------------------------------------------
+    # USER YO'Q
+    # -----------------------------------------------------
+
+    if not user:
+        telegram_send_message(
+            chat_id,
+            "⚠️ Avval /start buyrug'ini bering."
+        )
+
+        return {
+            "ok": True,
+            "route": "finish_day",
+            "handled_by": "fastapi",
+            "error": "User not found"
+        }
+
+    # -----------------------------------------------------
+    # ALLAQACHON YAKUNLANGAN
+    # -----------------------------------------------------
+
+    if user["state"] == "completed":
+        telegram_send_message(
+            chat_id,
+            """🏁 Siz bugungi vazifalarni allaqachon yakunlagansiz.
+
+📊 Natijani ko'rish uchun /hisobot yuboring."""
+        )
+
+        return {
+            "ok": True,
+            "route": "finish_day",
+            "handled_by": "fastapi",
+            "already_completed": True
+        }
+
+    today = get_today()
+
+    # -----------------------------------------------------
+    # BUGUNGI PENDING VAZIFALAR
+    # -----------------------------------------------------
+
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+
+            cur.execute(
+                """
+                SELECT *
+                FROM public.tasks
+                WHERE user_id = %s
+                  AND task_date = %s
+                  AND status = 'pending'
+                ORDER BY created_at ASC
+                """,
+                (
+                    user["id"],
+                    today
+                )
+            )
+
+            pending_tasks = cur.fetchall()
+
+            # -------------------------------------------------
+            # PENDING YO'Q
+            # -------------------------------------------------
+
+            if not pending_tasks:
+                telegram_send_message(
+                    chat_id,
+                    """📋 Bugun uchun bajarilmagan vazifalar qolmagan.
+
+🎉 Ajoyib!"""
+                )
+
+                return {
+                    "ok": True,
+                    "route": "finish_day",
+                    "handled_by": "fastapi",
+                    "finished": False,
+                    "reason": "no_pending_tasks"
+                }
+
+            # -------------------------------------------------
+            # USER STATE = COMPLETED
+            # -------------------------------------------------
+
+            cur.execute(
+                """
+                UPDATE public.users
+                SET state = 'completed'
+                WHERE id = %s
+                RETURNING *
+                """,
+                (user["id"],)
+            )
+
+            updated_user = cur.fetchone()
+
+    # -----------------------------------------------------
+    # HAR BIR PENDING TASK UCHUN TUGMA
+    # -----------------------------------------------------
+
+    sent_tasks = []
+
+    for task in pending_tasks:
+        telegram_send_task_status_keyboard(
+            chat_id,
+            task
+        )
+
+        sent_tasks.append(str(task["id"]))
+
+    return {
+        "ok": True,
+        "route": "finish_day",
+        "handled_by": "fastapi",
+        "finished": True,
+        "date": today,
+        "pending_count": len(pending_tasks),
+        "pending_task_ids": sent_tasks,
+        "user_state": updated_user["state"]
     }
 
 
@@ -871,7 +1022,7 @@ def update_task_status(
 
 
 # =========================================================
-# FINISH DAY
+# FINISH DAY — API
 # =========================================================
 
 @router.post("/users/{telegram_chat_id}/finish-day")
@@ -1317,6 +1468,7 @@ def telegram_webhook(
     Hozircha:
     - /start -> FastAPI
     - morning_time -> FastAPI
+    - /yakunladim -> FastAPI
     - oddiy matn -> FastAPI
     - qolgan Telegram actionlar -> eski Node backend
     """
@@ -1361,6 +1513,15 @@ def telegram_webhook(
             chat_id=chat_id,
             first_name=first_name,
             username=username
+        )
+
+    # -----------------------------------------------------
+    # /YAKUNLADIM = FASTAPI
+    # -----------------------------------------------------
+
+    if message_text == "/yakunladim":
+        return handle_telegram_finish_day(
+            chat_id=chat_id
         )
 
     # -----------------------------------------------------
