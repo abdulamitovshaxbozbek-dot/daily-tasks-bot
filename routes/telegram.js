@@ -657,6 +657,12 @@ Vazifa holatini belgilang:`,
   }
 }
 
+
+/* =========================================================
+   YANGILANGAN HANDLE TASK STATUS
+   Duplicate final message muammosini hal qiladi
+   ========================================================= */
+
 async function handleTaskStatus(
   chatId,
   callbackData,
@@ -683,19 +689,32 @@ async function handleTaskStatus(
     return;
   }
 
+  /*
+   * MUHIM:
+   * Vazifa faqat pending bo'lsa o'zgaradi.
+   *
+   * Agar Telegram callback'ni ikki marta yuborsa,
+   * ikkinchi request bu UPDATE'dan hech qanday
+   * row olmaydi va qayta ishlanmaydi.
+   */
   const result = await pool.query(
     `UPDATE tasks
      SET status = $1
      WHERE id = $2
+       AND status = 'pending'
      RETURNING *`,
     [status, taskId]
   );
 
+  /*
+   * Vazifa allaqachon belgilangani yoki topilmagani
+   * uchun qayta ishlashni to'xtatamiz.
+   */
   if (result.rows.length === 0) {
     await bot.answerCallbackQuery(
       callbackQueryId,
       {
-        text: 'Vazifa topilmadi.'
+        text: 'Bu vazifa allaqachon belgilangandi.'
       }
     );
 
@@ -714,6 +733,9 @@ async function handleTaskStatus(
     }
   );
 
+  /*
+   * Telegramdagi vazifa xabarini o'chiramiz.
+   */
   try {
     await bot.deleteMessage(
       message.chat.id,
@@ -728,6 +750,9 @@ async function handleTaskStatus(
 
   const today = getTashkentDate();
 
+  /*
+   * Userni topamiz.
+   */
   const userResult = await pool.query(
     `SELECT id
      FROM users
@@ -739,6 +764,12 @@ async function handleTaskStatus(
     return;
   }
 
+  const userId =
+    userResult.rows[0].id;
+
+  /*
+   * Bugungi pending vazifalarni sanaymiz.
+   */
   const pendingResult = await pool.query(
     `SELECT COUNT(*)::int AS count
      FROM tasks
@@ -746,7 +777,7 @@ async function handleTaskStatus(
        AND task_date = $2
        AND status = 'pending'`,
     [
-      userResult.rows[0].id,
+      userId,
       today
     ]
   );
@@ -754,15 +785,56 @@ async function handleTaskStatus(
   const pendingCount =
     pendingResult.rows[0].count;
 
-  if (pendingCount === 0) {
-    await bot.sendMessage(
-      chatId,
-      `🎉 Barcha vazifalar belgilandi!
+  /*
+   * Hali pending vazifa bor bo'lsa,
+   * yakuniy xabar yuborilmaydi.
+   */
+  if (pendingCount > 0) {
+    return;
+  }
+
+  /*
+   * MUHIM QISM:
+   *
+   * Bir nechta callback bir vaqtning o'zida kelib qolsa,
+   * faqat BIRTA request ushbu UPDATE'dan row oladi.
+   *
+   * Shuning uchun:
+   * 🎉 Barcha vazifalar belgilandi!
+   *
+   * xabari faqat bir marta yuboriladi.
+   */
+  const notificationResult = await pool.query(
+    `UPDATE users
+     SET last_completion_notified_date = $1
+     WHERE id = $2
+       AND last_completion_notified_date IS DISTINCT FROM $1
+     RETURNING id`,
+    [
+      today,
+      userId
+    ]
+  );
+
+  /*
+   * Agar row qaytmasa, demak bugungi yakuniy xabar
+   * allaqachon yuborish uchun "claim" qilingan.
+   */
+  if (notificationResult.rows.length === 0) {
+    return;
+  }
+
+  /*
+   * Faqat bitta request shu yerga yetib keladi.
+   */
+  await bot.sendMessage(
+    chatId,
+    `🎉 Barcha vazifalar belgilandi!
 
 📊 Endi /hisobot yuborsangiz bugungi hisobotingizni korasiz.`
-    );
-  }
+  );
 }
+
 
 async function handleDailyReport(chatId) {
   const userResult = await pool.query(
@@ -913,6 +985,7 @@ ${motivation.text}
 
   await bot.sendMessage(chatId, text);
 }
+
 
 async function handleWeeklyReport(chatId) {
   const userResult = await pool.query(
@@ -1158,6 +1231,7 @@ ${motivation.text}`;
   await bot.sendMessage(chatId, text);
 }
 
+
 async function handleMonthlyReport(chatId) {
   const userResult = await pool.query(
     `SELECT id
@@ -1259,7 +1333,8 @@ async function handleMonthlyReport(chatId) {
   let perfectDays = 0;
 
   for (const key in dailyStats) {
-    const item = dailyStats[key];
+    const item =
+      dailyStats[key];
 
     item.percent = Math.round(
       (item.completed / item.total) * 100
@@ -1350,6 +1425,7 @@ ${motivation.text}
 
   await bot.sendMessage(chatId, text);
 }
+
 
 async function handleYearlyReport(chatId) {
   const userResult = await pool.query(
@@ -1556,6 +1632,7 @@ ${motivation.text}
   await bot.sendMessage(chatId, text);
 }
 
+
 async function handleAdmin(chatId) {
   if (!isAdmin(chatId)) {
     await bot.sendMessage(
@@ -1643,6 +1720,7 @@ async function handleAdmin(chatId) {
 
   await bot.sendMessage(chatId, text);
 }
+
 
 async function handleBroadcast(
   chatId,
