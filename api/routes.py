@@ -122,6 +122,229 @@ def calculate_stats(tasks):
 
 
 # =========================================================
+# TELEGRAM HELPERS
+# =========================================================
+
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+
+LEGACY_BACKEND_URL = os.environ.get(
+    "LEGACY_BACKEND_URL"
+)
+
+
+def telegram_send_message(chat_id: int, text: str):
+    if not TELEGRAM_TOKEN:
+        raise HTTPException(
+            status_code=500,
+            detail="TELEGRAM_TOKEN is not configured"
+        )
+
+    response = requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        json={
+            "chat_id": chat_id,
+            "text": text
+        },
+        timeout=15
+    )
+
+    if not response.ok:
+        raise HTTPException(
+            status_code=500,
+            detail="Telegram sendMessage failed"
+        )
+
+    return response.json()
+
+
+def telegram_send_message_with_keyboard(
+    chat_id: int,
+    text: str,
+    keyboard: list
+):
+    if not TELEGRAM_TOKEN:
+        raise HTTPException(
+            status_code=500,
+            detail="TELEGRAM_TOKEN is not configured"
+        )
+
+    response = requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        json={
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": {
+                "inline_keyboard": keyboard
+            }
+        },
+        timeout=15
+    )
+
+    if not response.ok:
+        raise HTTPException(
+            status_code=500,
+            detail="Telegram sendMessage failed"
+        )
+
+    return response.json()
+
+
+def telegram_answer_callback(
+    callback_query_id: str,
+    text: str = ""
+):
+    if not TELEGRAM_TOKEN:
+        raise HTTPException(
+            status_code=500,
+            detail="TELEGRAM_TOKEN is not configured"
+        )
+
+    response = requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery",
+        json={
+            "callback_query_id": callback_query_id,
+            "text": text
+        },
+        timeout=15
+    )
+
+    if not response.ok:
+        raise HTTPException(
+            status_code=500,
+            detail="Telegram answerCallbackQuery failed"
+        )
+
+    return response.json()
+
+
+# =========================================================
+# TELEGRAM /START
+# =========================================================
+
+def telegram_send_morning_keyboard(
+    chat_id: int,
+    first_name: str
+):
+    keyboard = []
+
+    times = [
+        "02:00",
+        "03:00",
+        "04:00",
+        "05:00",
+        "06:00",
+        "07:00",
+        "08:00",
+        "09:00",
+        "10:00"
+    ]
+
+    row = []
+
+    for time in times:
+        row.append({
+            "text": time,
+            "callback_data": f"morning_time|{time}"
+        })
+
+        if len(row) == 3:
+            keyboard.append(row)
+            row = []
+
+    if row:
+        keyboard.append(row)
+
+    return telegram_send_message_with_keyboard(
+        chat_id,
+        f"""🌅 Assalomu alaykum, {first_name}!
+
+📋 Kunlik vazifalar botiga xush kelibsiz.
+
+Tizim ishga tushishi uchun savolga javob bering:
+
+🕐 Kuningizni soat nechchida rejalashtirasiz?""",
+        keyboard
+    )
+
+
+def handle_telegram_start(
+    chat_id: int,
+    first_name: str,
+    username: Optional[str] = None
+):
+    user = get_user_by_chat_id(chat_id)
+
+    # -----------------------------------------------------
+    # MAVJUD USER
+    # -----------------------------------------------------
+
+    if user:
+        telegram_send_message(
+            chat_id,
+            f"""👋 Assalomu alaykum, {first_name}!
+
+Siz allaqachon ro'yxatdan o'tgansiz. ✅
+
+📋 Vazifalaringizni yuborishni davom ettirishingiz mumkin."""
+        )
+
+        return {
+            "ok": True,
+            "route": "start",
+            "handled_by": "fastapi",
+            "existing_user": True
+        }
+
+    # -----------------------------------------------------
+    # YANGI USER
+    # -----------------------------------------------------
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO public.users (
+                    telegram_chat_id,
+                    telegram_username,
+                    first_name,
+                    timezone,
+                    state,
+                    subscription_status
+                )
+                VALUES (
+                    %s,
+                    %s,
+                    %s,
+                    'Asia/Tashkent',
+                    'waiting_morning_time',
+                    'trial'
+                )
+                RETURNING id
+                """,
+                (
+                    chat_id,
+                    username,
+                    first_name
+                )
+            )
+
+            user_id = cur.fetchone()[0]
+
+    telegram_send_morning_keyboard(
+        chat_id,
+        first_name
+    )
+
+    return {
+        "ok": True,
+        "route": "start",
+        "handled_by": "fastapi",
+        "existing_user": False,
+        "user_id": str(user_id)
+    }
+
+
+# =========================================================
 # HEALTH / API
 # =========================================================
 
@@ -327,6 +550,25 @@ def get_tasks(
 # =========================================================
 # TASKS — CREATE
 # =========================================================
+
+def normalize_telegram_task(text: str):
+    return (
+        text
+        .lower()
+        .replace("\r", "")
+        .strip()
+    )
+
+
+def clean_telegram_task(text: str):
+    import re
+
+    return re.sub(
+        r"^\s*\d+[\.\)\-]\s*",
+        "",
+        text
+    ).strip()
+
 
 @router.post("/tasks")
 def create_tasks(
@@ -927,59 +1169,11 @@ def yearly_report(
         "stats": stats,
         "monthly": monthly_stats
     }
+
+
 # =========================================================
 # TELEGRAM WEBHOOK — MIGRATION BRIDGE
 # =========================================================
-
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-LEGACY_BACKEND_URL = os.environ.get(
-    "LEGACY_BACKEND_URL"
-)
-
-
-def telegram_send_message(chat_id: int, text: str):
-    if not TELEGRAM_TOKEN:
-        raise HTTPException(
-            status_code=500,
-            detail="TELEGRAM_TOKEN is not configured"
-        )
-
-    response = requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-        json={
-            "chat_id": chat_id,
-            "text": text
-        },
-        timeout=15
-    )
-
-    if not response.ok:
-        raise HTTPException(
-            status_code=500,
-            detail="Telegram sendMessage failed"
-        )
-
-    return response.json()
-
-
-def normalize_telegram_task(text: str):
-    return (
-        text
-        .lower()
-        .replace("\r", "")
-        .strip()
-    )
-
-
-def clean_telegram_task(text: str):
-    import re
-
-    return re.sub(
-        r"^\s*\d+[\.\)\-]\s*",
-        "",
-        text
-    ).strip()
-
 
 @router.post("/telegram")
 def telegram_webhook(
@@ -990,6 +1184,7 @@ def telegram_webhook(
     Migration bridge.
 
     Hozircha:
+    - /start -> FastAPI
     - oddiy matn -> FastAPI
     - qolgan Telegram actionlar -> eski Node backend
     """
@@ -1014,6 +1209,27 @@ def telegram_webhook(
     message_text = (
         message.get("text") or ""
     ).strip()
+
+    # -----------------------------------------------------
+    # /START = FASTAPI
+    # -----------------------------------------------------
+
+    if message_text == "/start":
+        first_name = (
+            message.get("from", {}).get("first_name")
+            or "Do'st"
+        )
+
+        username = (
+            message.get("from", {}).get("username")
+            or ""
+        )
+
+        return handle_telegram_start(
+            chat_id=chat_id,
+            first_name=first_name,
+            username=username
+        )
 
     # -----------------------------------------------------
     # ODDIY MATN = VAZIFA QO'SHISH
@@ -1080,8 +1296,6 @@ def telegram_webhook(
                 "handled_by": "fastapi"
             }
 
-        # FastAPI'dagi mavjud create_tasks() funksiyasidan
-        # foydalanamiz.
         result = create_tasks(
             CreateTasksRequest(
                 telegram_chat_id=chat_id,
