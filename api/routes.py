@@ -976,13 +976,38 @@ Bugungi rejalaringizni yozib, kuningizni tartibli boshlang. 💪
                 "sent": True
             })
 
-        except Exception as e:
+       except Exception as e:
 
-            results.append({
-                "chat_id": chat_id,
-                "sent": False,
-                "error": str(e)
-            })
+    error_text = str(e)
+
+    if (
+        "error_code': 403" in error_text
+        and "bot was blocked by the user" in error_text
+    ):
+        with get_connection() as update_conn:
+
+            with update_conn.cursor() as update_cur:
+
+                update_cur.execute(
+                    """
+                    UPDATE public.users
+                    SET state = 'blocked'
+                    WHERE id = %s
+                    """,
+                    (user["id"],)
+                )
+
+            update_conn.commit()
+
+    results.append({
+        "chat_id": chat_id,
+        "sent": False,
+        "blocked": (
+            "error_code': 403" in error_text
+            and "bot was blocked by the user" in error_text
+        ),
+        "error": error_text
+    })
  
     return {
         "ok": True,
