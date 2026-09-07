@@ -2,6 +2,7 @@ from datetime import date, timedelta
 from typing import Optional
 import os
 import requests
+import re
 
 from fastapi import APIRouter, HTTPException, Header, Depends, Query
 from pydantic import BaseModel, Field
@@ -345,6 +346,138 @@ Siz allaqachon ro'yxatdan o'tgansiz. ✅
 
 
 # =========================================================
+# TELEGRAM MORNING TIME CALLBACK
+# =========================================================
+
+def handle_telegram_morning_time(
+    chat_id: int,
+    callback_query_id: str,
+    callback_data: str
+):
+    """
+    Callback:
+    morning_time|07:00
+    """
+
+    parts = callback_data.split("|", 1)
+
+    if len(parts) != 2:
+        telegram_answer_callback(
+            callback_query_id,
+            "❌ Noto'g'ri vaqt."
+        )
+
+        return {
+            "ok": True,
+            "route": "morning_time",
+            "handled_by": "fastapi",
+            "error": "Invalid callback data"
+        }
+
+    morning_time = parts[1]
+
+    # Faqat 02:00 - 10:00
+    if not re.match(
+        r"^(0[2-9]|10):00$",
+        morning_time
+    ):
+        telegram_answer_callback(
+            callback_query_id,
+            "❌ Noto'g'ri vaqt."
+        )
+
+        return {
+            "ok": True,
+            "route": "morning_time",
+            "handled_by": "fastapi",
+            "error": "Invalid morning time"
+        }
+
+    user = get_user_by_chat_id(chat_id)
+
+    if not user:
+        telegram_answer_callback(
+            callback_query_id,
+            "❌ Avval /start bosing."
+        )
+
+        return {
+            "ok": True,
+            "route": "morning_time",
+            "handled_by": "fastapi",
+            "error": "User not found"
+        }
+
+    # Agar vaqt allaqachon tanlangan bo'lsa
+    if user["state"] != "waiting_morning_time":
+
+        telegram_answer_callback(
+            callback_query_id,
+            "✅ Vaqt allaqachon tanlangan."
+        )
+
+        telegram_send_message(
+            chat_id,
+            """👋 Sizning ertalabki eslatma vaqtingiz allaqachon tanlangan.
+
+📋 Vazifalaringizni yuborishingiz mumkin."""
+        )
+
+        return {
+            "ok": True,
+            "route": "morning_time",
+            "handled_by": "fastapi",
+            "already_set": True
+        }
+
+    # -----------------------------------------------------
+    # DATABASE
+    # -----------------------------------------------------
+
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE public.users
+                SET
+                    morning_time = %s::time,
+                    state = 'active'
+                WHERE id = %s
+                RETURNING *
+                """,
+                (
+                    morning_time,
+                    user["id"]
+                )
+            )
+
+            updated_user = cur.fetchone()
+
+    # Telegram callback loading holatini yopish
+    telegram_answer_callback(
+        callback_query_id,
+        "✅ Vaqt saqlandi!"
+    )
+
+    # Foydalanuvchiga tasdiq
+    telegram_send_message(
+        chat_id,
+        f"""✅ Ajoyib, {updated_user["first_name"]}!
+
+⏰ Ertalabki eslatma vaqtingiz: {morning_time}
+
+📋 Endi kunlik vazifalaringizni yuborishingiz mumkin."""
+    )
+
+    return {
+        "ok": True,
+        "route": "morning_time",
+        "handled_by": "fastapi",
+        "morning_time": morning_time
+    }
+
+
+# =========================================================
 # HEALTH / API
 # =========================================================
 
@@ -561,8 +694,6 @@ def normalize_telegram_task(text: str):
 
 
 def clean_telegram_task(text: str):
-    import re
-
     return re.sub(
         r"^\s*\d+[\.\)\-]\s*",
         "",
@@ -1185,6 +1316,7 @@ def telegram_webhook(
 
     Hozircha:
     - /start -> FastAPI
+    - morning_time -> FastAPI
     - oddiy matn -> FastAPI
     - qolgan Telegram actionlar -> eski Node backend
     """
@@ -1229,6 +1361,21 @@ def telegram_webhook(
             chat_id=chat_id,
             first_name=first_name,
             username=username
+        )
+
+    # -----------------------------------------------------
+    # MORNING TIME CALLBACK = FASTAPI
+    # -----------------------------------------------------
+
+    callback_data = (
+        callback_query.get("data") or ""
+    ).strip()
+
+    if callback_data.startswith("morning_time|"):
+        return handle_telegram_morning_time(
+            chat_id=chat_id,
+            callback_query_id=callback_query.get("id"),
+            callback_data=callback_data
         )
 
     # -----------------------------------------------------
