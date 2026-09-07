@@ -772,7 +772,7 @@ def handle_telegram_task_status(
 
             cur.execute(
                 """
-              SELECT COUNT(*) AS count
+                SELECT COUNT(*) AS count
                 FROM public.tasks
                 WHERE user_id = %s
                   AND task_date = %s
@@ -784,7 +784,7 @@ def handle_telegram_task_status(
                 )
             )
 
-           pending_count = cur.fetchone()["count"]
+            pending_count = cur.fetchone()["count"]
 
             # -------------------------------------------------
             # BARCHA TASKLAR BELGILANGAN BO'LSA
