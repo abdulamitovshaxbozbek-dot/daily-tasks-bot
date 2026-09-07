@@ -33,7 +33,9 @@ TIMEZONE = "Asia/Tashkent"
 # API KEY
 # =========================================================
 
-def verify_api_key(x_api_key: Optional[str] = Header(default=None)):
+def verify_api_key(
+    x_api_key: Optional[str] = Header(default=None)
+):
     expected = os.environ.get("API_KEY")
 
     if expected and x_api_key != expected:
@@ -74,8 +76,13 @@ class TaskStatusRequest(BaseModel):
 # =========================================================
 
 def get_user_by_chat_id(chat_id: int):
+
     with get_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
             cur.execute(
                 """
                 SELECT *
@@ -89,8 +96,11 @@ def get_user_by_chat_id(chat_id: int):
 
 
 def get_today():
+
     with get_connection() as conn:
+
         with conn.cursor() as cur:
+
             cur.execute(
                 """
                 SELECT
@@ -105,6 +115,7 @@ def get_today():
 
 
 def calculate_stats(tasks):
+
     total = len(tasks)
 
     completed = sum(
@@ -141,6 +152,7 @@ def calculate_stats(tasks):
 
 
 def is_admin(chat_id: int):
+
     return str(chat_id) == ADMIN_CHAT_ID
 
 
@@ -148,9 +160,13 @@ def is_admin(chat_id: int):
 # TELEGRAM HELPERS
 # =========================================================
 
-def telegram_send_message(chat_id: int, text: str):
+def telegram_send_message(
+    chat_id: int,
+    text: str
+):
 
     if not TELEGRAM_TOKEN:
+
         raise HTTPException(
             status_code=500,
             detail="TELEGRAM_TOKEN is not configured"
@@ -166,6 +182,7 @@ def telegram_send_message(chat_id: int, text: str):
     )
 
     if not response.ok:
+
         raise HTTPException(
             status_code=500,
             detail="Telegram sendMessage failed"
@@ -181,6 +198,7 @@ def telegram_send_message_with_keyboard(
 ):
 
     if not TELEGRAM_TOKEN:
+
         raise HTTPException(
             status_code=500,
             detail="TELEGRAM_TOKEN is not configured"
@@ -199,6 +217,7 @@ def telegram_send_message_with_keyboard(
     )
 
     if not response.ok:
+
         raise HTTPException(
             status_code=500,
             detail="Telegram sendMessage failed"
@@ -213,6 +232,7 @@ def telegram_answer_callback(
 ):
 
     if not TELEGRAM_TOKEN:
+
         raise HTTPException(
             status_code=500,
             detail="TELEGRAM_TOKEN is not configured"
@@ -228,6 +248,7 @@ def telegram_answer_callback(
     )
 
     if not response.ok:
+
         raise HTTPException(
             status_code=500,
             detail="Telegram answerCallbackQuery failed"
@@ -242,6 +263,7 @@ def telegram_delete_message(
 ):
 
     if not TELEGRAM_TOKEN:
+
         raise HTTPException(
             status_code=500,
             detail="TELEGRAM_TOKEN is not configured"
@@ -292,10 +314,12 @@ def telegram_send_morning_keyboard(
         })
 
         if len(row) == 3:
+
             keyboard.append(row)
             row = []
 
     if row:
+
         keyboard.append(row)
 
     return telegram_send_message_with_keyboard(
@@ -326,7 +350,9 @@ def handle_telegram_start(
     if user:
 
         with get_connection() as conn:
+
             with conn.cursor() as cur:
+
                 cur.execute(
                     """
                     UPDATE public.users
@@ -394,7 +420,7 @@ Siz allaqachon ro'yxatdan o'tgansiz. ✅
                 """,
                 (
                     chat_id,
-                    username,
+                    username or "",
                     first_name,
                     get_today()
                 )
@@ -419,7 +445,7 @@ Siz allaqachon ro'yxatdan o'tgansiz. ✅
 
 
 # =========================================================
-# TELEGRAM MORNING TIME CALLBACK
+# MORNING TIME CALLBACK
 # =========================================================
 
 def handle_telegram_morning_time(
@@ -500,13 +526,11 @@ def handle_telegram_morning_time(
             "already_set": True
         }
 
-    # -----------------------------------------------------
-    # DATABASE
-    # -----------------------------------------------------
-
     with get_connection() as conn:
 
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
 
             cur.execute(
                 """
@@ -552,7 +576,7 @@ def handle_telegram_morning_time(
 
 
 # =========================================================
-# TELEGRAM /YAKUNLADIM
+# /YAKUNLADIM
 # =========================================================
 
 def telegram_send_task_status_keyboard(
@@ -707,7 +731,7 @@ def handle_telegram_finish_day(
 
 
 # =========================================================
-# TELEGRAM TASK STATUS CALLBACK
+# TASK STATUS CALLBACK
 # =========================================================
 
 def handle_telegram_task_status(
@@ -850,6 +874,7 @@ def handle_telegram_task_status(
                 claimed = cur.fetchone()
 
                 if claimed:
+
                     completion_notification_claimed = True
 
             else:
@@ -914,7 +939,9 @@ def handle_telegram_task_status(
 # ADMIN
 # =========================================================
 
-def handle_telegram_admin(chat_id: int):
+def handle_telegram_admin(
+    chat_id: int
+):
 
     if not is_admin(chat_id):
 
@@ -931,7 +958,8 @@ def handle_telegram_admin(chat_id: int):
         }
 
     today = get_today()
-    two_days_ago = today - timedelta(days=1)
+
+    yesterday = today - timedelta(days=1)
 
     with get_connection() as conn:
 
@@ -974,8 +1002,8 @@ def handle_telegram_admin(chat_id: int):
                 """,
                 (
                     today,
-                    today - timedelta(days=1),
-                    two_days_ago,
+                    yesterday,
+                    yesterday,
                     today
                 )
             )
@@ -1210,7 +1238,9 @@ def start_user(
     }
 
 
-@router.patch("/users/{telegram_chat_id}/morning-time")
+@router.patch(
+    "/users/{telegram_chat_id}/morning-time"
+)
 def set_morning_time(
     telegram_chat_id: int,
     data: MorningTimeRequest,
@@ -1272,7 +1302,9 @@ def set_morning_time(
 # TASKS — READ
 # =========================================================
 
-@router.get("/users/{telegram_chat_id}/tasks")
+@router.get(
+    "/users/{telegram_chat_id}/tasks"
+)
 def get_tasks(
     telegram_chat_id: int,
     start_date: Optional[date] = Query(default=None),
@@ -1292,9 +1324,11 @@ def get_tasks(
         )
 
     if start_date is None:
+
         start_date = get_today()
 
     if end_date is None:
+
         end_date = start_date
 
     if end_date < start_date:
@@ -1349,7 +1383,9 @@ def get_tasks(
 # TASKS — CREATE
 # =========================================================
 
-def normalize_telegram_task(text: str):
+def normalize_telegram_task(
+    text: str
+):
 
     return (
         text
@@ -1359,7 +1395,9 @@ def normalize_telegram_task(text: str):
     )
 
 
-def clean_telegram_task(text: str):
+def clean_telegram_task(
+    text: str
+):
 
     return re.sub(
         r"^\s*\d+[\.\)\-]\s*",
@@ -1477,7 +1515,6 @@ def create_tasks(
                     normalized
                 )
 
-            # User faoliyati
             cur.execute(
                 """
                 UPDATE public.users
@@ -2192,7 +2229,7 @@ def telegram_webhook(
         conn.commit()
 
     # =====================================================
-    # /START = FASTAPI
+    # /START
     # =====================================================
 
     if message_text == "/start":
@@ -2214,7 +2251,7 @@ def telegram_webhook(
         )
 
     # =====================================================
-    # /ADMIN = FASTAPI
+    # /ADMIN
     # =====================================================
 
     if message_text == "/admin":
@@ -2224,7 +2261,7 @@ def telegram_webhook(
         )
 
     # =====================================================
-    # /YAKUNLADIM = FASTAPI
+    # /YAKUNLADIM
     # =====================================================
 
     if message_text == "/yakunladim":
@@ -2242,7 +2279,7 @@ def telegram_webhook(
     ).strip()
 
     # =====================================================
-    # MORNING TIME CALLBACK = FASTAPI
+    # MORNING TIME CALLBACK
     # =====================================================
 
     if callback_data.startswith(
@@ -2256,7 +2293,7 @@ def telegram_webhook(
         )
 
     # =====================================================
-    # TASK STATUS CALLBACK = FASTAPI
+    # TASK STATUS CALLBACK
     # =====================================================
 
     if callback_data.startswith(
@@ -2279,7 +2316,7 @@ def telegram_webhook(
         )
 
     # =====================================================
-    # ODDIY MATN = VAZIFA QO'SHISH
+    # ODDIY MATN = VAZIFA
     # =====================================================
 
     if (
@@ -2410,9 +2447,12 @@ def telegram_webhook(
     # =====================================================
     # QOLGAN ACTIONLAR — NODE
     #
-    # /xabar, /hisobot, /haftalik, /oylik,
-    # /yillik va boshqa eski actionlar
-    # shu yerda Node backendga o'tadi.
+    # /xabar
+    # /hisobot
+    # /haftalik
+    # /oylik
+    # /yillik
+    # va boshqa eski actionlar
     # =====================================================
 
     if not LEGACY_BACKEND_URL:
