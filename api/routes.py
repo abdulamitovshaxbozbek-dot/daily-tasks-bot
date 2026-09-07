@@ -934,7 +934,158 @@ def handle_telegram_task_status(
             completion_notification_claimed
     }
 
+# =========================================================
+# REMINDERS
+# =========================================================
 
+def handle_reminders():
+
+    today = get_today()
+    results = []
+
+    with get_connection() as conn:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
+            cur.execute(
+                """
+                SELECT
+                    u.id,
+                    u.telegram_chat_id,
+                    u.first_name,
+                    u.morning_time,
+                    u.state,
+                    u.last_reminder_sent_date,
+                    (
+                        u.created_at
+                        AT TIME ZONE 'Asia/Tashkent'
+                    )::date AS created_date,
+                    MAX(t.task_date) AS last_task_date
+                FROM public.users u
+                LEFT JOIN public.tasks t
+                    ON t.user_id = u.id
+                WHERE u.telegram_chat_id IS NOT NULL
+                GROUP BY u.id
+                HAVING
+                    (
+                        (
+                            u.morning_time IS NULL
+                            OR u.state = 'waiting_morning_time'
+                        )
+                        AND
+                        (
+                            %s - (
+                                u.created_at
+                                AT TIME ZONE 'Asia/Tashkent'
+                            )::date
+                        ) BETWEEN 1 AND 3
+                    )
+                    OR
+                    (
+                        u.morning_time IS NOT NULL
+                        AND
+                        (
+                            MAX(t.task_date) IS NULL
+                            OR MAX(t.task_date) <= %s - 2
+                        )
+                    )
+                """,
+                (
+                    today,
+                    today
+                )
+            )
+
+            candidates = cur.fetchall()
+
+    for user in candidates:
+
+        chat_id = user["telegram_chat_id"]
+
+        if user["last_reminder_sent_date"] == today:
+            continue
+
+        first_name = user["first_name"] or "Do'st"
+
+        if (
+            user["morning_time"] is None
+            or user["state"] == "waiting_morning_time"
+        ):
+
+            text = f"""👋 Assalomu alaykum, {first_name}!
+
+⏰ Kuningizni rejalashtirish uchun ertalabki vaqtingizni tanlang.
+
+📋 Vazifalaringizni tartibli boshlash uchun /start buyrug'ini bosing."""
+
+        else:
+
+            text = f"""👋 Salom, {first_name}!
+
+📋 Bir necha kundan beri yangi vazifa qo'shilmagan.
+
+Bugungi rejalaringizni yozib, kuningizni tartibli boshlang. 💪
+
+✍️ Vazifalaringizni shu yerga yuboring."""
+
+        try:
+
+            telegram_send_message(
+                chat_id,
+                text
+            )
+
+            with get_connection() as update_conn:
+
+                with update_conn.cursor() as update_cur:
+
+                    update_cur.execute(
+                        """
+                        UPDATE public.users
+                        SET last_reminder_sent_date = %s
+                        WHERE id = %s
+                          AND last_reminder_sent_date
+                              IS DISTINCT FROM %s
+                        """,
+                        (
+                            today,
+                            user["id"],
+                            today
+                        )
+                    )
+
+                update_conn.commit()
+
+            results.append({
+                "chat_id": chat_id,
+                "sent": True
+            })
+
+        except Exception as e:
+
+            results.append({
+                "chat_id": chat_id,
+                "sent": False,
+                "error": str(e)
+            })
+ 
+    return {
+        "ok": True,
+        "date": today,
+        "checked": len(candidates),
+        "results": results
+    }
+
+
+@router.post("/reminders/run")
+def run_reminders(
+    _: None = Depends(verify_api_key)
+):
+
+    return handle_reminders()
+    
 # =========================================================
 # ADMIN
 # =========================================================
