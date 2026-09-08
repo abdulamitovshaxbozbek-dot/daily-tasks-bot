@@ -901,12 +901,41 @@ def handle_create_tasks(
 
         with conn.cursor() as cur:
 
-            for task_text in tasks:
+           for task_text in tasks:
 
-                normalized =
-                    normalize_task(
-                        task_text
-                    )
+    normalized = normalize_task(task_text)
+
+    if normalized in existing:
+
+        duplicate_count += 1
+
+        continue
+
+    cur.execute(
+        """
+        INSERT INTO public.tasks (
+            user_id,
+            task_text,
+            task_date,
+            status
+        )
+        VALUES (
+            %s,
+            %s,
+            %s,
+            'pending'
+        )
+        """,
+        (
+            user["id"],
+            task_text,
+            today
+        )
+    )
+
+    existing.add(normalized)
+
+    added_count += 1
 
                 if normalized in existing:
 
