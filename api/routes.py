@@ -1,11 +1,9 @@
 import os
 import re
-import asyncio
-from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import date, timedelta
 from typing import Optional
 
-import httpx
+import requests
 
 from fastapi import (
     APIRouter,
@@ -41,48 +39,7 @@ ADMIN_CHAT_ID = "8908985083"
 
 TIMEZONE = "Asia/Tashkent"
 
-TZ = ZoneInfo(TIMEZONE)
-
 API_KEY = os.getenv("API_KEY")
-
-
-# =========================================================
-# SHARED ASYNC HTTP CLIENT
-#
-# Bitta doimiy client - TCP connection va TLS session
-# Telegram bilan qayta ishlatiladi (keep-alive).
-# Har chaqiriqda yangi client yaratish ham xarajat edi.
-# =========================================================
-
-_http_client: Optional[httpx.AsyncClient] = None
-
-
-def get_http_client() -> httpx.AsyncClient:
-
-    global _http_client
-
-    if _http_client is None:
-
-        _http_client = httpx.AsyncClient(
-            timeout=15,
-            limits=httpx.Limits(
-                max_connections=50,
-                max_keepalive_connections=20
-            )
-        )
-
-    return _http_client
-
-
-async def close_http_client():
-
-    global _http_client
-
-    if _http_client is not None:
-
-        await _http_client.aclose()
-
-        _http_client = None
 
 
 # =========================================================
@@ -138,16 +95,25 @@ class TaskStatusRequest(BaseModel):
 
 # =========================================================
 # DATE HELPERS
-#
-# Ilgari get_today() har safar DB ga borib CURRENT_TIMESTAMP
-# AT TIME ZONE so'rar edi - bu ekstra round-trip edi va bitta
-# request ichida 3-5 marta chaqirilardi. Endi Python ichida,
-# zoneinfo bilan, DB'siz hisoblanadi.
 # =========================================================
 
 def get_today() -> date:
 
-    return datetime.now(TZ).date()
+    with get_connection() as conn:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT
+                    (
+                        CURRENT_TIMESTAMP
+                        AT TIME ZONE 'Asia/Tashkent'
+                    )::date
+                """
+            )
+
+            return cur.fetchone()[0]
 
 
 def get_yesterday_date() -> date:
@@ -190,6 +156,7 @@ def format_short_uz_date(value) -> str:
 
     return value.strftime("%d.%m.%Y")
 
+
 # =========================================================
 # USER HELPERS
 # =========================================================
@@ -220,7 +187,9 @@ def is_admin(chat_id: int) -> bool:
     return str(chat_id) == str(ADMIN_CHAT_ID)
 
 
-def update_user_activity(chat_id: int, today: date):
+def update_user_activity(chat_id: int):
+
+    today = get_today()
 
     with get_connection() as conn:
 
@@ -361,16 +330,12 @@ def get_motivation(percent: int):
         )
     }
 
+
 # =========================================================
-# TELEGRAM HELPERS (ASYNC)
-#
-# Ilgari sync `requests` ishlatilgan edi - bu FastAPI'ning
-# event loop'ini har chaqiriqda bloklar edi (masalan finish_day
-# ichida 10 ta task bo'lsa, 10 ta ketma-ket bloklovchi so'rov).
-# Endi httpx.AsyncClient bilan, kerak bo'lganda parallel.
+# TELEGRAM HELPERS
 # =========================================================
 
-async def telegram_send_message(
+def telegram_send_message(
     chat_id: int,
     text: str
 ):
@@ -382,18 +347,17 @@ async def telegram_send_message(
             detail="TELEGRAM_TOKEN is not configured"
         )
 
-    client = get_http_client()
-
-    response = await client.post(
+    response = requests.post(
         f"https://api.telegram.org/"
         f"bot{TELEGRAM_TOKEN}/sendMessage",
         json={
             "chat_id": chat_id,
             "text": text
-        }
+        },
+        timeout=15
     )
 
-    if response.status_code >= 400:
+    if not response.ok:
 
         try:
 
@@ -414,7 +378,7 @@ async def telegram_send_message(
     return response.json()
 
 
-async def telegram_send_message_with_keyboard(
+def telegram_send_message_with_keyboard(
     chat_id: int,
     text: str,
     reply_markup: dict
@@ -427,19 +391,18 @@ async def telegram_send_message_with_keyboard(
             detail="TELEGRAM_TOKEN is not configured"
         )
 
-    client = get_http_client()
-
-    response = await client.post(
+    response = requests.post(
         f"https://api.telegram.org/"
         f"bot{TELEGRAM_TOKEN}/sendMessage",
         json={
             "chat_id": chat_id,
             "text": text,
             "reply_markup": reply_markup
-        }
+        },
+        timeout=15
     )
 
-    if response.status_code >= 400:
+    if not response.ok:
 
         try:
 
@@ -460,7 +423,7 @@ async def telegram_send_message_with_keyboard(
     return response.json()
 
 
-async def telegram_answer_callback(
+def telegram_answer_callback(
     callback_query_id: str,
     text: Optional[str] = None
 ):
@@ -477,16 +440,15 @@ async def telegram_answer_callback(
 
         payload["text"] = text
 
-    client = get_http_client()
-
-    await client.post(
+    requests.post(
         f"https://api.telegram.org/"
         f"bot{TELEGRAM_TOKEN}/answerCallbackQuery",
-        json=payload
+        json=payload,
+        timeout=10
     )
 
 
-async def telegram_delete_message(
+def telegram_delete_message(
     chat_id: int,
     message_id: int
 ):
@@ -495,15 +457,14 @@ async def telegram_delete_message(
 
         return
 
-    client = get_http_client()
-
-    await client.post(
+    requests.post(
         f"https://api.telegram.org/"
         f"bot{TELEGRAM_TOKEN}/deleteMessage",
         json={
             "chat_id": chat_id,
             "message_id": message_id
-        }
+        },
+        timeout=10
     )
 
 
@@ -511,7 +472,7 @@ async def telegram_delete_message(
 # MORNING KEYBOARD
 # =========================================================
 
-async def telegram_send_morning_keyboard(
+def telegram_send_morning_keyboard(
     chat_id: int,
     first_name: str
 ):
@@ -548,7 +509,7 @@ async def telegram_send_morning_keyboard(
             ]
         )
 
-    return await telegram_send_message_with_keyboard(
+    return telegram_send_message_with_keyboard(
         chat_id,
 
         f"""🌅 Assalomu alaykum, {first_name}!
@@ -564,11 +525,12 @@ Tizim ishga tushishi uchun savolga javob bering:
         }
     )
 
+
 # =========================================================
 # START
 # =========================================================
 
-async def handle_telegram_start(
+def handle_telegram_start(
     chat_id: int,
     username: Optional[str],
     first_name: Optional[str]
@@ -577,8 +539,6 @@ async def handle_telegram_start(
     first_name = first_name or "Do‘st"
 
     username = username or ""
-
-    today = get_today()
 
     user = get_user_by_chat_id(
         chat_id
@@ -613,14 +573,14 @@ async def handle_telegram_start(
                     (
                         first_name,
                         username,
-                        today,
+                        get_today(),
                         chat_id
                     )
                 )
 
             conn.commit()
 
-        await telegram_send_message(
+        telegram_send_message(
             chat_id,
 
             f"""👋 Assalomu alaykum, {first_name}!
@@ -670,13 +630,13 @@ Siz allaqachon ro‘yxatdan o‘tgansiz. ✅
                     username,
                     first_name,
                     TIMEZONE,
-                    today
+                    get_today()
                 )
             )
 
         conn.commit()
 
-    await telegram_send_morning_keyboard(
+    telegram_send_morning_keyboard(
         chat_id,
         first_name
     )
@@ -692,7 +652,7 @@ Siz allaqachon ro‘yxatdan o‘tgansiz. ✅
 # MORNING TIME
 # =========================================================
 
-async def handle_morning_time(
+def handle_morning_time(
     chat_id: int,
     time_value: str,
     callback_query_id: Optional[str] = None
@@ -705,7 +665,7 @@ async def handle_morning_time(
 
         if callback_query_id:
 
-            await telegram_answer_callback(
+            telegram_answer_callback(
                 callback_query_id,
                 "Noto‘g‘ri vaqt."
             )
@@ -722,7 +682,7 @@ async def handle_morning_time(
 
         if callback_query_id:
 
-            await telegram_answer_callback(
+            telegram_answer_callback(
                 callback_query_id,
                 "Avval /start bering."
             )
@@ -742,7 +702,7 @@ async def handle_morning_time(
 
         if callback_query_id:
 
-            await telegram_answer_callback(
+            telegram_answer_callback(
                 callback_query_id,
                 "Vaqt allaqachon tanlangan."
             )
@@ -751,8 +711,6 @@ async def handle_morning_time(
             "ok": True,
             "already_selected": True
         }
-
-    today = get_today()
 
     with get_connection() as conn:
 
@@ -773,7 +731,7 @@ async def handle_morning_time(
                 """,
                 (
                     time_value,
-                    today,
+                    get_today(),
                     chat_id
                 )
             )
@@ -782,12 +740,12 @@ async def handle_morning_time(
 
     if callback_query_id:
 
-        await telegram_answer_callback(
+        telegram_answer_callback(
             callback_query_id,
             "Vaqt belgilandi ✅"
         )
 
-    await telegram_send_message(
+    telegram_send_message(
         chat_id,
 
         f"""✅ Ertalabki vaqt belgilandi: {time_value}
@@ -807,11 +765,12 @@ async def handle_morning_time(
         "time": time_value
     }
 
+
 # =========================================================
 # CREATE TASKS
 # =========================================================
 
-async def handle_create_tasks(
+def handle_create_tasks(
     chat_id: int,
     text: str
 ):
@@ -822,7 +781,7 @@ async def handle_create_tasks(
 
     if not user:
 
-        await telegram_send_message(
+        telegram_send_message(
             chat_id,
             "⚠️ Avval /start buyrug‘ini bosing."
         )
@@ -833,7 +792,7 @@ async def handle_create_tasks(
 
     if user["state"] == "blocked":
 
-        await telegram_send_message(
+        telegram_send_message(
             chat_id,
             "⚠️ Botdan foydalanish uchun /start buyrug‘ini bosing."
         )
@@ -848,7 +807,7 @@ async def handle_create_tasks(
 
     if user["state"] == "completed":
 
-        await telegram_send_message(
+        telegram_send_message(
             chat_id,
 
             """🏁 Bugungi kuningiz allaqachon yakunlangan.
@@ -884,7 +843,7 @@ async def handle_create_tasks(
 
     if not tasks:
 
-        await telegram_send_message(
+        telegram_send_message(
             chat_id,
             "⚠️ Vazifa matni bo‘sh."
         )
@@ -896,15 +855,8 @@ async def handle_create_tasks(
     today = get_today()
 
     # -----------------------------------------------------
-    # EXISTING + INSERT - BITTA CONNECTION/TRANSACTION
-    #
-    # Ilgari: 1-connection SELECT uchun, 2-connection INSERT
-    # loop uchun. Endi ikkalasi bitta connection ichida,
-    # shu bilan bitta round-trip narxi kamayadi.
+    # EXISTING TASKS
     # -----------------------------------------------------
-
-    added_count = 0
-    duplicate_count = 0
 
     with get_connection() as conn:
 
@@ -927,12 +879,21 @@ async def handle_create_tasks(
 
             existing_rows = cur.fetchall()
 
-        existing = {
-            normalize_task(
-                row["task_text"]
-            )
-            for row in existing_rows
-        }
+    existing = {
+        normalize_task(
+            row["task_text"]
+        )
+        for row in existing_rows
+    }
+
+    added_count = 0
+    duplicate_count = 0
+
+    # -----------------------------------------------------
+    # INSERT TASKS
+    # -----------------------------------------------------
+
+    with get_connection() as conn:
 
         with conn.cursor() as cur:
 
@@ -1014,7 +975,7 @@ async def handle_create_tasks(
             "🏁 Kuningizni yakunlaganingizda /yakunladim buyrug‘ini yuboring."
         )
 
-    await telegram_send_message(
+    telegram_send_message(
         chat_id,
         "\n\n".join(response_parts)
     )
@@ -1026,11 +987,12 @@ async def handle_create_tasks(
         "duplicates": duplicate_count
     }
 
+
 # =========================================================
 # FINISH DAY
 # =========================================================
 
-async def handle_finish_day(
+def handle_finish_day(
     chat_id: int
 ):
 
@@ -1040,7 +1002,7 @@ async def handle_finish_day(
 
     if not user:
 
-        await telegram_send_message(
+        telegram_send_message(
             chat_id,
             "⚠️ Avval /start buyrug‘ini bosing."
         )
@@ -1051,7 +1013,7 @@ async def handle_finish_day(
 
     if user["state"] == "completed":
 
-        await telegram_send_message(
+        telegram_send_message(
             chat_id,
 
             """🏁 Bugungi kuningiz allaqachon yakunlangan.
@@ -1092,10 +1054,45 @@ async def handle_finish_day(
 
             pending_tasks = cur.fetchall()
 
-        # -------------------------------------------------
-        # MARK DAY COMPLETED (bir xil connection ichida,
-        # NO PENDING holati bilan birga)
-        # -------------------------------------------------
+    # -----------------------------------------------------
+    # NO PENDING
+    # -----------------------------------------------------
+
+    if not pending_tasks:
+
+        with get_connection() as conn:
+
+            with conn.cursor() as cur:
+
+                cur.execute(
+                    """
+                    UPDATE public.users
+                    SET state = 'completed'
+                    WHERE id = %s
+                    """,
+                    (user["id"],)
+                )
+
+            conn.commit()
+
+        telegram_send_message(
+            chat_id,
+
+            """🎉 Barcha vazifalar belgilandi!
+
+📊 Endi /hisobot buyrug‘ini bersangiz, bugungi hisobotingizni yuboraman."""
+        )
+
+        return {
+            "ok": True,
+            "all_completed": True
+        }
+
+    # -----------------------------------------------------
+    # MARK DAY COMPLETED
+    # -----------------------------------------------------
+
+    with get_connection() as conn:
 
         with conn.cursor() as cur:
 
@@ -1111,38 +1108,13 @@ async def handle_finish_day(
         conn.commit()
 
     # -----------------------------------------------------
-    # NO PENDING
+    # SEND EACH TASK
     # -----------------------------------------------------
 
-    if not pending_tasks:
-
-        await telegram_send_message(
-            chat_id,
-
-            """🎉 Barcha vazifalar belgilandi!
-
-📊 Endi /hisobot buyrug‘ini bersangiz, bugungi hisobotingizni yuboraman."""
-        )
-
-        return {
-            "ok": True,
-            "all_completed": True
-        }
-
-    # -----------------------------------------------------
-    # SEND EACH TASK - PARALLEL
-    #
-    # Ilgari: har bir task uchun ketma-ket `await` qilinardi,
-    # ya'ni N ta task = N ta Telegram round-trip vaqti yig'indisi
-    # (10 task * ~300ms = 3s+). Endi barchasi bir vaqtda
-    # asyncio.gather bilan yuboriladi - umumiy vaqt eng sekin
-    # bitta so'rov vaqtiga teng bo'ladi.
-    #
-    # Telegram xabar tartibini kafolatlash uchun index saqlanadi,
-    # lekin jismonan yuborish parallel ketadi.
-    # -----------------------------------------------------
-
-    async def send_task_message(index: int, task):
+    for index, task in enumerate(
+        pending_tasks,
+        start=1
+    ):
 
         keyboard = {
             "inline_keyboard": [
@@ -1161,7 +1133,7 @@ async def handle_finish_day(
             ]
         }
 
-        return await telegram_send_message_with_keyboard(
+        telegram_send_message_with_keyboard(
             chat_id,
 
             f"{index}. {task['task_text']}",
@@ -1169,28 +1141,18 @@ async def handle_finish_day(
             keyboard
         )
 
-    await asyncio.gather(
-        *(
-            send_task_message(index, task)
-            for index, task in enumerate(
-                pending_tasks,
-                start=1
-            )
-        ),
-        return_exceptions=True
-    )
-
     return {
         "ok": True,
         "route": "finish_day",
         "pending": len(pending_tasks)
     }
 
+
 # =========================================================
 # TASK STATUS
 # =========================================================
 
-async def handle_task_status(
+def handle_task_status(
     chat_id: int,
     task_id: str,
     status: str,
@@ -1205,7 +1167,7 @@ async def handle_task_status(
 
         if callback_query_id:
 
-            await telegram_answer_callback(
+            telegram_answer_callback(
                 callback_query_id,
                 "Noto‘g‘ri status."
             )
@@ -1214,15 +1176,8 @@ async def handle_task_status(
             "ok": False
         }
 
-    today = get_today()
-
     # -----------------------------------------------------
-    # ATOMIC UPDATE + USER FETCH + PENDING COUNT
-    #
-    # Ilgari bular 3 ta alohida get_connection() edi.
-    # Endi bitta connection, ketma-ket 3 ta query - lekin
-    # bitta socket ustida, pool orqali connection ochish
-    # narxi faqat bir marta to'lanadi.
+    # ATOMIC UPDATE
     # -----------------------------------------------------
 
     with get_connection() as conn:
@@ -1249,110 +1204,103 @@ async def handle_task_status(
 
         conn.commit()
 
-        # ---------------------------------------------
-        # ALREADY PROCESSED
-        # ---------------------------------------------
+    # -----------------------------------------------------
+    # ALREADY PROCESSED
+    # -----------------------------------------------------
 
-        if not task:
+    if not task:
 
-            if callback_query_id:
+        if callback_query_id:
 
-                await telegram_answer_callback(
-                    callback_query_id,
-                    "Bu vazifa allaqachon belgilangandi."
-                )
-
-            return {
-                "ok": True,
-                "already_processed": True
-            }
-
-        with conn.cursor(
-            cursor_factory=RealDictCursor
-        ) as cur:
-
-            cur.execute(
-                """
-                SELECT *
-                FROM public.users
-                WHERE telegram_chat_id = %s
-                LIMIT 1
-                """,
-                (chat_id,)
+            telegram_answer_callback(
+                callback_query_id,
+                "Bu vazifa allaqachon belgilangandi."
             )
 
-            user = cur.fetchone()
-
-        if not user:
-
-            # callback javobini va delete'ni pastda birga qilamiz
-            pending_count = None
-
-        else:
-
-            with conn.cursor() as cur:
-
-                cur.execute(
-                    """
-                    SELECT COUNT(*)::int
-                    FROM public.tasks
-                    WHERE user_id = %s
-                      AND task_date = %s
-                      AND status = 'pending'
-                    """,
-                    (
-                        user["id"],
-                        today
-                    )
-                )
-
-                pending_count = cur.fetchone()[0]
+        return {
+            "ok": True,
+            "already_processed": True
+        }
 
     # -----------------------------------------------------
-    # ANSWER CALLBACK + DELETE MESSAGE - PARALLEL
-    #
-    # Bu ikkisi bir-biriga bog'liq emas, shuning uchun
-    # ketma-ket await qilish o'rniga birga yuboriladi.
+    # ANSWER CALLBACK
     # -----------------------------------------------------
-
-    followups = []
 
     if callback_query_id:
 
-        callback_text = (
-            "Bajarildi ✅"
-            if status == "completed"
-            else "Bajarilmadi ❌"
-        )
+        if status == "completed":
 
-        followups.append(
             telegram_answer_callback(
                 callback_query_id,
-                callback_text
+                "Bajarildi ✅"
             )
-        )
+
+        else:
+
+            telegram_answer_callback(
+                callback_query_id,
+                "Bajarilmadi ❌"
+            )
+
+    # -----------------------------------------------------
+    # DELETE TASK MESSAGE
+    # -----------------------------------------------------
 
     if message_id:
 
-        followups.append(
+        try:
+
             telegram_delete_message(
                 chat_id,
                 message_id
             )
-        )
 
-    if followups:
+        except Exception as error:
 
-        await asyncio.gather(
-            *followups,
-            return_exceptions=True
-        )
+            print(
+                "Delete message error:",
+                error
+            )
+
+    # -----------------------------------------------------
+    # USER
+    # -----------------------------------------------------
+
+    user = get_user_by_chat_id(
+        chat_id
+    )
 
     if not user:
 
         return {
             "ok": True
         }
+
+    today = get_today()
+
+    # -----------------------------------------------------
+    # PENDING COUNT
+    # -----------------------------------------------------
+
+    with get_connection() as conn:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT COUNT(*)::int
+                FROM public.tasks
+                WHERE user_id = %s
+                  AND task_date = %s
+                  AND status = 'pending'
+                """,
+                (
+                    user["id"],
+                    today
+                )
+            )
+
+            pending_count = cur.fetchone()[0]
 
     # -----------------------------------------------------
     # STILL PENDING
@@ -1401,7 +1349,7 @@ async def handle_task_status(
 
     if claimant:
 
-        await telegram_send_message(
+        telegram_send_message(
             chat_id,
 
             """🎉 Barcha vazifalar belgilandi!
@@ -1415,11 +1363,12 @@ async def handle_task_status(
         "pending": 0
     }
 
+
 # =========================================================
 # DAILY REPORT
 # =========================================================
 
-async def handle_daily_report(
+def handle_daily_report(
     chat_id: int
 ):
 
@@ -1429,7 +1378,7 @@ async def handle_daily_report(
 
     if not user:
 
-        await telegram_send_message(
+        telegram_send_message(
             chat_id,
             "⚠️ User topilmadi."
         )
@@ -1443,7 +1392,7 @@ async def handle_daily_report(
     yesterday = today - timedelta(days=1)
 
     # -----------------------------------------------------
-    # GET TODAY + YESTERDAY (bitta connection)
+    # GET TODAY + YESTERDAY
     # -----------------------------------------------------
 
     with get_connection() as conn:
@@ -1650,7 +1599,7 @@ async def handle_daily_report(
         "🎯 Kechagi o‘zingizdan kuchliroq bo‘ling!"
     )
 
-    await telegram_send_message(
+    telegram_send_message(
         chat_id,
         "\n\n".join(lines)
     )
@@ -1660,11 +1609,12 @@ async def handle_daily_report(
         "route": "daily_report"
     }
 
+
 # =========================================================
 # WEEKLY REPORT
 # =========================================================
 
-async def handle_weekly_report(
+def handle_weekly_report(
     chat_id: int
 ):
 
@@ -1674,7 +1624,7 @@ async def handle_weekly_report(
 
     if not user:
 
-        await telegram_send_message(
+        telegram_send_message(
             chat_id,
             "⚠️ User topilmadi."
         )
@@ -1983,7 +1933,7 @@ async def handle_weekly_report(
             motivation["text"]
         )
 
-    await telegram_send_message(
+    telegram_send_message(
         chat_id,
         "\n\n".join(lines)
     )
@@ -1998,7 +1948,7 @@ async def handle_weekly_report(
 # MONTHLY REPORT
 # =========================================================
 
-async def handle_monthly_report(
+def handle_monthly_report(
     chat_id: int
 ):
 
@@ -2008,7 +1958,7 @@ async def handle_monthly_report(
 
     if not user:
 
-        await telegram_send_message(
+        telegram_send_message(
             chat_id,
             "⚠️ User topilmadi."
         )
@@ -2250,7 +2200,7 @@ async def handle_monthly_report(
         "🎯 Har bir kun yangi imkoniyat!"
     )
 
-    await telegram_send_message(
+    telegram_send_message(
         chat_id,
         "\n\n".join(lines)
     )
@@ -2265,7 +2215,7 @@ async def handle_monthly_report(
 # YEARLY REPORT
 # =========================================================
 
-async def handle_yearly_report(
+def handle_yearly_report(
     chat_id: int
 ):
 
@@ -2275,7 +2225,7 @@ async def handle_yearly_report(
 
     if not user:
 
-        await telegram_send_message(
+        telegram_send_message(
             chat_id,
             "⚠️ User topilmadi."
         )
@@ -2552,7 +2502,7 @@ async def handle_yearly_report(
         "🏆 Yangi yil yangi natijalar uchun imkoniyat!"
     )
 
-    await telegram_send_message(
+    telegram_send_message(
         chat_id,
         "\n\n".join(lines)
     )
@@ -2562,17 +2512,18 @@ async def handle_yearly_report(
         "route": "yearly_report"
     }
 
+
 # =========================================================
 # ADMIN
 # =========================================================
 
-async def handle_admin(
+def handle_admin(
     chat_id: int
 ):
 
     if not is_admin(chat_id):
 
-        await telegram_send_message(
+        telegram_send_message(
             chat_id,
             "⛔ Sizda admin huquqi yo‘q."
         )
@@ -2705,7 +2656,7 @@ async def handle_admin(
 
 /xabar <matn>"""
 
-    await telegram_send_message(
+    telegram_send_message(
         chat_id,
         text
     )
@@ -2718,50 +2669,16 @@ async def handle_admin(
 
 # =========================================================
 # BROADCAST
-#
-# Ilgari: har bir user uchun ketma-ket `requests.post` -
-# 1000 ta user bo'lsa, minutlab davom etardi va webhook
-# javobini ushlab turardi (Telegram kutgan javob vaqtidan
-# oshib ketishi mumkin edi).
-#
-# Endi: asyncio.gather bilan chunklarga bo'lib parallel
-# yuboriladi. CHUNK_SIZE Telegram rate limitlariga (~30
-# msg/sek) mos tanlanadi - hammasini bir vaqtda otib
-# yuborish flood-control'ga tushirib qo'yishi mumkin.
 # =========================================================
 
-BROADCAST_CHUNK_SIZE = 25
-
-
-async def _safe_send(chat_id: int, text: str):
-
-    try:
-
-        await telegram_send_message(
-            chat_id,
-            text
-        )
-
-        return True
-
-    except Exception as error:
-
-        print(
-            "Broadcast error:",
-            error
-        )
-
-        return False
-
-
-async def handle_broadcast(
+def handle_broadcast(
     chat_id: int,
     message_text: str
 ):
 
     if not is_admin(chat_id):
 
-        await telegram_send_message(
+        telegram_send_message(
             chat_id,
             "⛔ Sizda admin huquqi yo‘q."
         )
@@ -2779,7 +2696,7 @@ async def handle_broadcast(
 
     if not text:
 
-        await telegram_send_message(
+        telegram_send_message(
             chat_id,
 
             """📢 Xabar yuborish formati:
@@ -2811,29 +2728,27 @@ async def handle_broadcast(
     sent = 0
     failed = 0
 
-    for i in range(
-        0,
-        len(users),
-        BROADCAST_CHUNK_SIZE
-    ):
+    for user in users:
 
-        chunk = users[i:i + BROADCAST_CHUNK_SIZE]
+        try:
 
-        results = await asyncio.gather(
-            *(
-                _safe_send(
-                    user["telegram_chat_id"],
-                    text
-                )
-                for user in chunk
+            telegram_send_message(
+                user["telegram_chat_id"],
+                text
             )
-        )
 
-        sent += sum(1 for r in results if r)
+            sent += 1
 
-        failed += sum(1 for r in results if not r)
+        except Exception as error:
 
-    await telegram_send_message(
+            failed += 1
+
+            print(
+                "Broadcast error:",
+                error
+            )
+
+    telegram_send_message(
         chat_id,
 
         f"""📢 Broadcast yakunlandi.
@@ -2851,113 +2766,16 @@ async def handle_broadcast(
         "failed": failed
     }
 
+
 # =========================================================
 # REMINDERS
 # =========================================================
 
-async def _process_reminder(user, today):
-
-    chat_id = user["telegram_chat_id"]
-
-    first_name = (
-        user["first_name"]
-        or "Do‘st"
-    )
-
-    if (
-        user["morning_time"] is None
-        or user["state"] == "waiting_morning_time"
-    ):
-
-        text = f"""👋 Assalomu alaykum, {first_name}!
-
-⏰ Kuningizni rejalashtirish uchun ertalabki vaqtingizni tanlang.
-
-📋 Vazifalaringizni tartibli boshlash uchun /start buyrug‘ini bosing."""
-
-    else:
-
-        text = f"""👋 Salom, {first_name}!
-
-📋 Bir necha kundan beri yangi vazifa qo‘shilmagan.
-
-Bugungi rejalaringizni yozib, kuningizni tartibli boshlang. 💪
-
-✍️ Vazifalaringizni shu yerga yuboring."""
-
-    try:
-
-        await telegram_send_message(
-            chat_id,
-            text
-        )
-
-        with get_connection() as update_conn:
-
-            with update_conn.cursor() as update_cur:
-
-                update_cur.execute(
-                    """
-                    UPDATE public.users
-                    SET last_reminder_sent_date = %s
-                    WHERE id = %s
-                      AND last_reminder_sent_date
-                          IS DISTINCT FROM %s
-                    """,
-                    (
-                        today,
-                        user["id"],
-                        today
-                    )
-                )
-
-            update_conn.commit()
-
-        return {
-            "chat_id": chat_id,
-            "sent": True
-        }
-
-    except Exception as error:
-
-        error_text = str(error)
-
-        is_blocked = (
-            "error_code': 403"
-            in error_text
-            and
-            "bot was blocked by the user"
-            in error_text
-        )
-
-        if is_blocked:
-
-            with get_connection() as update_conn:
-
-                with update_conn.cursor() as update_cur:
-
-                    update_cur.execute(
-                        """
-                        UPDATE public.users
-                        SET state = 'blocked'
-                        WHERE id = %s
-                        """,
-                        (user["id"],)
-                    )
-
-                update_conn.commit()
-
-        return {
-            "chat_id": chat_id,
-            "sent": False,
-            "blocked": is_blocked,
-            "error": error_text
-        }
-
-
-async def handle_reminders():
+def handle_reminders():
 
     today = get_today()
+
+    results = []
 
     with get_connection() as conn:
 
@@ -3031,38 +2849,115 @@ async def handle_reminders():
 
             candidates = cur.fetchall()
 
-    # -----------------------------------------------------
-    # Filter allaqachon bugun eslatma olganlarni
-    # -----------------------------------------------------
+    for user in candidates:
 
-    to_process = [
-        user
-        for user in candidates
-        if user["last_reminder_sent_date"] != today
-    ]
+        chat_id = user["telegram_chat_id"]
 
-    # -----------------------------------------------------
-    # PARALLEL, CHUNKLANGAN (broadcast'dagi kabi)
-    # -----------------------------------------------------
+        if (
+            user["last_reminder_sent_date"]
+            == today
+        ):
 
-    results = []
+            continue
 
-    for i in range(
-        0,
-        len(to_process),
-        BROADCAST_CHUNK_SIZE
-    ):
-
-        chunk = to_process[i:i + BROADCAST_CHUNK_SIZE]
-
-        chunk_results = await asyncio.gather(
-            *(
-                _process_reminder(user, today)
-                for user in chunk
-            )
+        first_name = (
+            user["first_name"]
+            or "Do‘st"
         )
 
-        results.extend(chunk_results)
+        if (
+            user["morning_time"] is None
+            or user["state"] == "waiting_morning_time"
+        ):
+
+            text = f"""👋 Assalomu alaykum, {first_name}!
+
+⏰ Kuningizni rejalashtirish uchun ertalabki vaqtingizni tanlang.
+
+📋 Vazifalaringizni tartibli boshlash uchun /start buyrug‘ini bosing."""
+
+        else:
+
+            text = f"""👋 Salom, {first_name}!
+
+📋 Bir necha kundan beri yangi vazifa qo‘shilmagan.
+
+Bugungi rejalaringizni yozib, kuningizni tartibli boshlang. 💪
+
+✍️ Vazifalaringizni shu yerga yuboring."""
+
+        try:
+
+            telegram_send_message(
+                chat_id,
+                text
+            )
+
+            with get_connection() as update_conn:
+
+                with update_conn.cursor() as update_cur:
+
+                    update_cur.execute(
+                        """
+                        UPDATE public.users
+                        SET last_reminder_sent_date = %s
+                        WHERE id = %s
+                          AND last_reminder_sent_date
+                              IS DISTINCT FROM %s
+                        """,
+                        (
+                            today,
+                            user["id"],
+                            today
+                        )
+                    )
+
+                update_conn.commit()
+
+            results.append(
+                {
+                    "chat_id": chat_id,
+                    "sent": True
+                }
+            )
+
+        except Exception as error:
+
+            error_text = str(error)
+
+            is_blocked = (
+                "error_code': 403"
+                in error_text
+                and
+                "bot was blocked by the user"
+                in error_text
+            )
+
+            if is_blocked:
+
+                with get_connection() as update_conn:
+
+                    with update_conn.cursor() as update_cur:
+
+                        update_cur.execute(
+                            """
+                            UPDATE public.users
+                            SET state = 'blocked'
+                            WHERE id = %s
+                            """,
+                            (user["id"],)
+                        )
+
+                    update_conn.commit()
+
+            results.append(
+                {
+                    "chat_id": chat_id,
+                    "sent": False,
+                    "blocked": is_blocked,
+                    "error": error_text
+                }
+            )
 
     return {
         "ok": True,
@@ -3071,12 +2966,13 @@ async def handle_reminders():
         "results": results
     }
 
+
 # =========================================================
 # TELEGRAM WEBHOOK
 # =========================================================
 
 @router.post("/telegram")
-async def telegram_webhook(
+def telegram_webhook(
     update: dict
 ):
 
@@ -3136,16 +3032,10 @@ async def telegram_webhook(
 
         # -------------------------------------------------
         # ACTIVITY
-        #
-        # today bir marta hisoblanadi va pastga uzatiladi -
-        # boshqa hech bir joyda qayta DB'ga borilmaydi.
         # -------------------------------------------------
 
-        today = get_today()
-
         update_user_activity(
-            chat_id,
-            today
+            chat_id
         )
 
         # -------------------------------------------------
@@ -3154,7 +3044,7 @@ async def telegram_webhook(
 
         if message_text == "/start":
 
-            return await handle_telegram_start(
+            return handle_telegram_start(
                 chat_id,
                 username,
                 first_name
@@ -3191,7 +3081,7 @@ async def telegram_webhook(
                     )[1]
                 )
 
-                return await handle_morning_time(
+                return handle_morning_time(
                     chat_id,
                     time_value,
                     callback_query_id
@@ -3215,7 +3105,7 @@ async def telegram_webhook(
 
                     status = parts[2]
 
-                    return await handle_task_status(
+                    return handle_task_status(
                         chat_id,
                         task_id,
                         status,
@@ -3227,7 +3117,7 @@ async def telegram_webhook(
 
             if callback_query_id:
 
-                await telegram_answer_callback(
+                telegram_answer_callback(
                     callback_query_id
                 )
 
@@ -3242,7 +3132,7 @@ async def telegram_webhook(
 
         if message_text == "/yakunladim":
 
-            return await handle_finish_day(
+            return handle_finish_day(
                 chat_id
             )
 
@@ -3252,25 +3142,25 @@ async def telegram_webhook(
 
         if message_text == "/hisobot":
 
-            return await handle_daily_report(
+            return handle_daily_report(
                 chat_id
             )
 
         if message_text == "/haftalik":
 
-            return await handle_weekly_report(
+            return handle_weekly_report(
                 chat_id
             )
 
         if message_text == "/oylik":
 
-            return await handle_monthly_report(
+            return handle_monthly_report(
                 chat_id
             )
 
         if message_text == "/yillik":
 
-            return await handle_yearly_report(
+            return handle_yearly_report(
                 chat_id
             )
 
@@ -3280,7 +3170,7 @@ async def telegram_webhook(
 
         if message_text == "/admin":
 
-            return await handle_admin(
+            return handle_admin(
                 chat_id
             )
 
@@ -3292,7 +3182,7 @@ async def telegram_webhook(
             "/xabar"
         ):
 
-            return await handle_broadcast(
+            return handle_broadcast(
                 chat_id,
                 message_text
             )
@@ -3303,7 +3193,7 @@ async def telegram_webhook(
 
         if message_text.startswith("/"):
 
-            await telegram_send_message(
+            telegram_send_message(
                 chat_id,
                 "⚠️ Bu buyruq mavjud emas."
             )
@@ -3319,7 +3209,7 @@ async def telegram_webhook(
 
         if message_text:
 
-            return await handle_create_tasks(
+            return handle_create_tasks(
                 chat_id,
                 message_text
             )
@@ -3328,7 +3218,7 @@ async def telegram_webhook(
         # LEGACY
         # -------------------------------------------------
 
-        return await proxy_to_legacy(
+        return proxy_to_legacy(
             update
         )
 
@@ -3354,11 +3244,11 @@ async def telegram_webhook(
 # =========================================================
 
 @router.post("/reminders/run")
-async def run_reminders(
+def run_reminders(
     _: None = Depends(verify_api_key)
 ):
 
-    return await handle_reminders()
+    return handle_reminders()
 
 
 # =========================================================
@@ -3412,11 +3302,11 @@ def get_users(
 # =========================================================
 
 @router.post("/start")
-async def start_api(
+def start_api(
     data: StartUserRequest
 ):
 
-    return await handle_telegram_start(
+    return handle_telegram_start(
         data.chat_id,
         data.username,
         data.first_name
@@ -3428,11 +3318,11 @@ async def start_api(
 # =========================================================
 
 @router.post("/morning-time")
-async def morning_time_api(
+def morning_time_api(
     data: MorningTimeRequest
 ):
 
-    return await handle_morning_time(
+    return handle_morning_time(
         data.chat_id,
         data.time
     )
@@ -3443,11 +3333,11 @@ async def morning_time_api(
 # =========================================================
 
 @router.post("/tasks")
-async def tasks_api(
+def tasks_api(
     data: CreateTasksRequest
 ):
 
-    return await handle_create_tasks(
+    return handle_create_tasks(
         data.chat_id,
         data.text
     )
@@ -3458,11 +3348,11 @@ async def tasks_api(
 # =========================================================
 
 @router.post("/tasks/status")
-async def task_status_api(
+def task_status_api(
     data: TaskStatusRequest
 ):
 
-    return await handle_task_status(
+    return handle_task_status(
         data.chat_id,
         data.task_id,
         data.status
@@ -3474,11 +3364,11 @@ async def task_status_api(
 # =========================================================
 
 @router.post("/finish")
-async def finish_api(
+def finish_api(
     chat_id: int
 ):
 
-    return await handle_finish_day(
+    return handle_finish_day(
         chat_id
     )
 
@@ -3490,11 +3380,11 @@ async def finish_api(
 @router.get(
     "/reports/daily/{chat_id}"
 )
-async def daily_report_api(
+def daily_report_api(
     chat_id: int
 ):
 
-    return await handle_daily_report(
+    return handle_daily_report(
         chat_id
     )
 
@@ -3502,11 +3392,11 @@ async def daily_report_api(
 @router.get(
     "/reports/weekly/{chat_id}"
 )
-async def weekly_report_api(
+def weekly_report_api(
     chat_id: int
 ):
 
-    return await handle_weekly_report(
+    return handle_weekly_report(
         chat_id
     )
 
@@ -3514,11 +3404,11 @@ async def weekly_report_api(
 @router.get(
     "/reports/monthly/{chat_id}"
 )
-async def monthly_report_api(
+def monthly_report_api(
     chat_id: int
 ):
 
-    return await handle_monthly_report(
+    return handle_monthly_report(
         chat_id
     )
 
@@ -3526,11 +3416,11 @@ async def monthly_report_api(
 @router.get(
     "/reports/yearly/{chat_id}"
 )
-async def yearly_report_api(
+def yearly_report_api(
     chat_id: int
 ):
 
-    return await handle_yearly_report(
+    return handle_yearly_report(
         chat_id
     )
 
@@ -3539,7 +3429,7 @@ async def yearly_report_api(
 # LEGACY BRIDGE
 # =========================================================
 
-async def proxy_to_legacy(
+def proxy_to_legacy(
     update: dict
 ):
 
@@ -3553,15 +3443,13 @@ async def proxy_to_legacy(
             )
         )
 
-    client = get_http_client()
-
-    response = await client.post(
+    response = requests.post(
         f"{LEGACY_BACKEND_URL}/api/telegram",
         json=update,
         timeout=30
     )
 
-    if response.status_code >= 400:
+    if not response.ok:
 
         raise HTTPException(
             status_code=response.status_code,
