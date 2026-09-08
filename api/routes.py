@@ -2893,7 +2893,6 @@ Quyidagi vaqtlardan birini tanlang:"""
                         for time in times[i:i + 3]
                     ]
                 )
-
             reply_markup = {
                 "inline_keyboard": keyboard
             }
@@ -2907,18 +2906,23 @@ Quyidagi vaqtlardan birini tanlang:"""
 
             text = f"""👋 Salom, {first_name}!
 
-📋 Bir necha kundan beri yangi vazifa qo‘shilmagan.
+📋 Oxirgi paytlarda yangi vazifalaringiz qo‘shilmagan.
 
-Bugungi rejalaringizni yozib, kuningizni tartibli boshlang. 💪
+✍️ Bugungi 1–3 ta vazifangizni yozib ko‘ring.
 
-✍️ Vazifalaringizni shu yerga yuboring."""
+Masalan:
+• Ingliz tilidan 20 ta so‘z yodlash
+• 10 bet kitob o‘qish
+• 30 daqiqa sport qilish
+
+✨ Har bir reja — tartibli hayot sari bir qadam!"""
 
             reply_markup = None
 
         # =====================================================
         # SEND
         # =====================================================
-
+      
         try:
 
             if reply_markup:
