@@ -1,7 +1,5 @@
 import os
 import re
-import html
-
 from datetime import date, timedelta
 from typing import Optional
 
@@ -694,8 +692,7 @@ def handle_morning_time(
         }
 
     # -----------------------------------------------------
-    # IMPORTANT:
-    # SECOND CLICK IS IGNORED
+    # SECOND CLICK
     # -----------------------------------------------------
 
     if (
@@ -886,7 +883,6 @@ def handle_create_tasks(
         normalize_task(
             row["task_text"]
         )
-
         for row in existing_rows
     }
 
@@ -901,41 +897,11 @@ def handle_create_tasks(
 
         with conn.cursor() as cur:
 
-           for task_text in tasks:
+            for task_text in tasks:
 
-    normalized = normalize_task(task_text)
-
-    if normalized in existing:
-
-        duplicate_count += 1
-
-        continue
-
-    cur.execute(
-        """
-        INSERT INTO public.tasks (
-            user_id,
-            task_text,
-            task_date,
-            status
-        )
-        VALUES (
-            %s,
-            %s,
-            %s,
-            'pending'
-        )
-        """,
-        (
-            user["id"],
-            task_text,
-            today
-        )
-    )
-
-    existing.add(normalized)
-
-    added_count += 1
+                normalized = normalize_task(
+                    task_text
+                )
 
                 if normalized in existing:
 
@@ -1002,7 +968,7 @@ def handle_create_tasks(
         "🤲 Kuningiz barakatli o‘tsin!"
     )
 
-    # /yakunladim only when NEW task exists
+    # /yakunladim only when NEW TASK exists
     if added_count > 0:
 
         response_parts.append(
@@ -1150,8 +1116,6 @@ def handle_finish_day(
         start=1
     ):
 
-        task_text = task["task_text"]
-
         keyboard = {
             "inline_keyboard": [
                 [
@@ -1172,7 +1136,7 @@ def handle_finish_day(
         telegram_send_message_with_keyboard(
             chat_id,
 
-            f"{index}. {task_text}",
+            f"{index}. {task['task_text']}",
 
             keyboard
         )
@@ -1425,12 +1389,10 @@ def handle_daily_report(
 
     today = get_today()
 
-    yesterday = (
-        today - timedelta(days=1)
-    )
+    yesterday = today - timedelta(days=1)
 
     # -----------------------------------------------------
-    # TODAY
+    # GET TODAY + YESTERDAY
     # -----------------------------------------------------
 
     with get_connection() as conn:
@@ -1454,10 +1416,6 @@ def handle_daily_report(
             )
 
             today_tasks = cur.fetchall()
-
-            # -------------------------------------------------
-            # YESTERDAY
-            # -------------------------------------------------
 
             cur.execute(
                 """
@@ -1562,12 +1520,14 @@ def handle_daily_report(
         f"🟩 Bajarildi    {today_stats['completed']}"
     )
 
-    lines.append(
-        f"🟥 Bajarilmadi  {today_stats['failed']}"
+    # pending ham bajarilmagan hisoblanadi
+    not_completed = (
+        today_stats["failed"]
+        + today_stats["pending"]
     )
 
     lines.append(
-        f"⏳ Belgilanmagan {today_stats['pending']}"
+        f"🟥 Bajarilmadi  {not_completed}"
     )
 
     lines.append(
@@ -1611,30 +1571,9 @@ def handle_daily_report(
             f"{yesterday_stats['total']} vazifa bajarildi"
         )
 
-        difference = (
-            today_stats["percent"]
-            - yesterday_stats["percent"]
-        )
-
-        if difference > 0:
-
-            lines.append(
-                f"📈 Kechagiga nisbatan "
-                f"+{difference}% yaxshiroq!"
-            )
-
-        elif difference < 0:
-
-            lines.append(
-                f"📉 Kechagiga nisbatan "
-                f"{abs(difference)}% pastroq."
-            )
-
-        else:
-
-            lines.append(
-                "➖ Kechagi natija bilan bir xil."
-            )
+    # -----------------------------------------------------
+    # MOTIVATION
+    # -----------------------------------------------------
 
     motivation = get_motivation(
         today_stats["percent"]
@@ -1696,7 +1635,6 @@ def handle_weekly_report(
 
     today = get_today()
 
-    # Monday
     monday = (
         today
         - timedelta(
@@ -1704,15 +1642,12 @@ def handle_weekly_report(
         )
     )
 
-    # Previous week
-    start_date = (
-        monday
-        - timedelta(days=7)
+    start_date = monday - timedelta(
+        days=7
     )
 
-    end_date = (
-        monday
-        - timedelta(days=1)
+    end_date = monday - timedelta(
+        days=1
     )
 
     with get_connection() as conn:
@@ -1761,9 +1696,7 @@ def handle_weekly_report(
             + timedelta(days=i)
         )
 
-        daily[
-            current_date
-        ] = {
+        daily[current_date] = {
             "name": day_names[i],
             "total": 0,
             "completed": 0,
@@ -1784,21 +1717,15 @@ def handle_weekly_report(
 
             continue
 
-        daily[
-            task_date
-        ]["total"] += 1
+        daily[task_date]["total"] += 1
 
         if task["status"] == "completed":
 
-            daily[
-                task_date
-            ]["completed"] += 1
+            daily[task_date]["completed"] += 1
 
         elif task["status"] == "failed":
 
-            daily[
-                task_date
-            ]["failed"] += 1
+            daily[task_date]["failed"] += 1
 
     best_day = None
     worst_day = None
@@ -1905,12 +1832,13 @@ def handle_weekly_report(
         f"🟩 Bajarildi: {stats['completed']}"
     )
 
-    lines.append(
-        f"🟥 Bajarilmadi: {stats['failed']}"
+    not_completed = (
+        stats["failed"]
+        + stats["pending"]
     )
 
     lines.append(
-        f"⏳ Belgilanmagan: {stats['pending']}"
+        f"🟥 Bajarilmadi: {not_completed}"
     )
 
     lines.append(
@@ -2092,21 +2020,15 @@ def handle_monthly_report(
                 "failed": 0
             }
 
-        daily[
-            task_date
-        ]["total"] += 1
+        daily[task_date]["total"] += 1
 
         if task["status"] == "completed":
 
-            daily[
-                task_date
-            ]["completed"] += 1
+            daily[task_date]["completed"] += 1
 
         elif task["status"] == "failed":
 
-            daily[
-                task_date
-            ]["failed"] += 1
+            daily[task_date]["failed"] += 1
 
     best_day = None
     worst_day = None
@@ -2189,12 +2111,13 @@ def handle_monthly_report(
         f"🟩 Bajarildi: {stats['completed']}"
     )
 
-    lines.append(
-        f"🟥 Bajarilmadi: {stats['failed']}"
+    not_completed = (
+        stats["failed"]
+        + stats["pending"]
     )
 
     lines.append(
-        f"⏳ Belgilanmagan: {stats['pending']}"
+        f"🟥 Bajarilmadi: {not_completed}"
     )
 
     lines.append(
@@ -2385,21 +2308,15 @@ def handle_yearly_report(
                 "failed": 0
             }
 
-        monthly[
-            month
-        ]["total"] += 1
+        monthly[month]["total"] += 1
 
         if task["status"] == "completed":
 
-            monthly[
-                month
-            ]["completed"] += 1
+            monthly[month]["completed"] += 1
 
         elif task["status"] == "failed":
 
-            monthly[
-                month
-            ]["failed"] += 1
+            monthly[month]["failed"] += 1
 
     best_month = None
     worst_month = None
@@ -2502,12 +2419,13 @@ def handle_yearly_report(
         f"🟩 Bajarildi: {stats['completed']}"
     )
 
-    lines.append(
-        f"🟥 Bajarilmadi: {stats['failed']}"
+    not_completed = (
+        stats["failed"]
+        + stats["pending"]
     )
 
     lines.append(
-        f"⏳ Belgilanmagan: {stats['pending']}"
+        f"🟥 Bajarilmadi: {not_completed}"
     )
 
     lines.append(
@@ -2616,8 +2534,8 @@ def handle_admin(
 
     today = get_today()
 
-    yesterday = (
-        today - timedelta(days=1)
+    yesterday = today - timedelta(
+        days=1
     )
 
     with get_connection() as conn:
@@ -2933,14 +2851,10 @@ def handle_reminders():
 
     for user in candidates:
 
-        chat_id = user[
-            "telegram_chat_id"
-        ]
+        chat_id = user["telegram_chat_id"]
 
         if (
-            user[
-                "last_reminder_sent_date"
-            ]
+            user["last_reminder_sent_date"]
             == today
         ):
 
@@ -2953,8 +2867,7 @@ def handle_reminders():
 
         if (
             user["morning_time"] is None
-            or user["state"]
-            == "waiting_morning_time"
+            or user["state"] == "waiting_morning_time"
         ):
 
             text = f"""👋 Assalomu alaykum, {first_name}!
@@ -3200,7 +3113,7 @@ def telegram_webhook(
                         callback_message_id
                     )
 
-            # Unknown callback
+            # UNKNOWN CALLBACK
 
             if callback_query_id:
 
