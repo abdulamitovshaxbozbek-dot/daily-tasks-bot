@@ -1,15 +1,21 @@
 import os
+from contextlib import contextmanager
+from psycopg2.pool import ThreadedConnectionPool
 
-import psycopg2
+DATABASE_URL = os.environ["DATABASE_URL"]
+
+pool = ThreadedConnectionPool(
+    minconn=1,
+    maxconn=10,
+    dsn=DATABASE_URL
+)
 
 
-
-
-
+@contextmanager
 def get_connection():
+    conn = pool.getconn()
 
-    return psycopg2.connect(
-
-        os.environ["DATABASE_URL"]
-
-    )
+    try:
+        yield conn
+    finally:
+        pool.putconn(conn)
