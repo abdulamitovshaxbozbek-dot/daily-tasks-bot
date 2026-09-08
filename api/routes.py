@@ -1,10 +1,19 @@
 import os
 import re
-from datetime import date, datetime, timedelta
+import html
+
+from datetime import date, timedelta
 from typing import Optional
 
 import requests
-from fastapi import APIRouter, Depends, HTTPException, Header
+
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException
+)
+
 from pydantic import BaseModel, Field
 from psycopg2.extras import RealDictCursor
 
@@ -23,7 +32,10 @@ router = APIRouter(prefix="/api")
 # =========================================================
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-LEGACY_BACKEND_URL = os.getenv("LEGACY_BACKEND_URL")
+
+LEGACY_BACKEND_URL = os.getenv(
+    "LEGACY_BACKEND_URL"
+)
 
 ADMIN_CHAT_ID = "8908985083"
 
@@ -39,7 +51,9 @@ API_KEY = os.getenv("API_KEY")
 def verify_api_key(
     x_api_key: Optional[str] = Header(default=None)
 ):
+
     if API_KEY and x_api_key != API_KEY:
+
         raise HTTPException(
             status_code=401,
             detail="Invalid API key"
@@ -49,40 +63,48 @@ def verify_api_key(
 
 
 # =========================================================
-# PYDANTIC MODELS
+# MODELS
 # =========================================================
 
 class StartUserRequest(BaseModel):
+
     chat_id: int
     username: Optional[str] = None
     first_name: Optional[str] = None
 
 
 class MorningTimeRequest(BaseModel):
+
     chat_id: int
+
     time: str = Field(
         pattern=r"^(0[2-9]|10):00$"
     )
 
 
 class CreateTasksRequest(BaseModel):
+
     chat_id: int
     text: str
 
 
 class TaskStatusRequest(BaseModel):
+
     chat_id: int
     task_id: str
     status: str
 
 
 # =========================================================
-# DATE / TIME HELPERS
+# DATE HELPERS
 # =========================================================
 
 def get_today() -> date:
+
     with get_connection() as conn:
+
         with conn.cursor() as cur:
+
             cur.execute(
                 """
                 SELECT
@@ -96,25 +118,44 @@ def get_today() -> date:
             return cur.fetchone()[0]
 
 
-def get_tashkent_datetime() -> datetime:
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    CURRENT_TIMESTAMP
-                    AT TIME ZONE 'Asia/Tashkent'
-                """
-            )
+def get_yesterday_date() -> date:
 
-            return cur.fetchone()[0]
-
-
-def get_yesterday() -> date:
     return get_today() - timedelta(days=1)
 
 
-def format_uz_date(value: date) -> str:
+def format_uz_date(value) -> str:
+
+    if isinstance(value, str):
+
+        value = date.fromisoformat(value)
+
+    months = [
+        "yanvar",
+        "fevral",
+        "mart",
+        "aprel",
+        "may",
+        "iyun",
+        "iyul",
+        "avgust",
+        "sentabr",
+        "oktabr",
+        "noyabr",
+        "dekabr"
+    ]
+
+    return (
+        f"{value.day}-{months[value.month - 1]}, "
+        f"{value.year}"
+    )
+
+
+def format_short_uz_date(value) -> str:
+
+    if isinstance(value, str):
+
+        value = date.fromisoformat(value)
+
     return value.strftime("%d.%m.%Y")
 
 
@@ -144,6 +185,7 @@ def get_user_by_chat_id(chat_id: int):
 
 
 def is_admin(chat_id: int) -> bool:
+
     return str(chat_id) == str(ADMIN_CHAT_ID)
 
 
@@ -176,71 +218,119 @@ def update_user_activity(chat_id: int):
 
 def clean_task_text(text: str) -> str:
 
-    text = text.strip()
-
-    # Remove numbering:
-    # 1. task
-    # 1) task
-    # 1 - task
-    # - task
-    # • task
-
-    text = re.sub(
-        r"^\s*(?:\d+[\.\)]|\-|\•)\s*",
+    return re.sub(
+        r"^\s*\d+[\.\)\-]\s*",
         "",
-        text
-    )
-
-    return text.strip()
+        text.strip()
+    ).strip()
 
 
 def normalize_task(text: str) -> str:
 
-    text = clean_task_text(text)
-
-    text = re.sub(
-        r"\s+",
-        " ",
-        text
+    return (
+        clean_task_text(text)
+        .lower()
+        .replace("\n", " ")
     )
 
-    return text.strip().lower()
+
+def calculate_stats(tasks):
+
+    stats = {
+        "total": len(tasks),
+        "completed": 0,
+        "failed": 0,
+        "pending": 0,
+        "percent": 0
+    }
+
+    for task in tasks:
+
+        if task["status"] == "completed":
+
+            stats["completed"] += 1
+
+        elif task["status"] == "failed":
+
+            stats["failed"] += 1
+
+        else:
+
+            stats["pending"] += 1
+
+    if stats["total"] > 0:
+
+        stats["percent"] = round(
+            (
+                stats["completed"]
+                / stats["total"]
+            ) * 100
+        )
+
+    return stats
 
 
-def progress_bar(
-    completed: int,
-    total: int,
-    length: int = 10
-) -> str:
+def progress_bar(percent: int) -> str:
 
-    if total <= 0:
-        return "░" * length
+    filled = round(percent / 10)
 
-    percent = completed / total
-
-    filled = round(percent * length)
+    empty = 10 - filled
 
     return (
-        "█" * filled
-        + "░" * (length - filled)
+        "🟩" * filled
+        + "⬜" * empty
     )
 
 
-def get_motivation(percent: int) -> str:
+def get_motivation(percent: int):
 
-    if percent >= 100:
-        return "🔥 Ajoyib! Bugungi rejangiz to‘liq bajarildi!"
+    if percent == 100:
 
-    if percent >= 80:
-        return "💪 Juda yaxshi! Oxirigacha yetkazib qo‘ying!"
+        return {
+            "title": "🔥 Ajoyib natija!",
+            "text": (
+                "Barcha vazifalaringiz bajarildi. "
+                "Shu tempni davom ettiring! 🚀"
+            )
+        }
 
-    if percent >= 50:
-        return "🚀 Zo‘r ketayapsiz! Yana ozgina qoldi."
+    if percent >= 70:
+
+        return {
+            "title": "👍 Yaxshi natija!",
+            "text": (
+                "Natija yomon emas. "
+                "Ertaga yana bir qadam oldinga! 💪"
+            )
+        }
+
+    if percent >= 40:
+
+        return {
+            "title": "💪 Harakat davom etsin!",
+            "text": (
+                "Bugun ham foydali ishlar qilindi. "
+                "Ertaga bundan ham yaxshiroq natija qilish mumkin!"
+            )
+        }
 
     if percent > 0:
-        return "🌱 Boshladingiz — davom eting!"
 
-    return "💡 Bugun kichik qadamdan boshlang."
+        return {
+            "title": "🌱 Boshlanish bor!",
+            "text": (
+                "Muhimi to‘xtamaslik. "
+                "Ertaga yangi imkoniyat!"
+            )
+        }
+
+    return {
+        "title": "📭 Bugun natija yo‘q",
+        "text": (
+            "Ertaga yangidan boshlaymiz. "
+            "Kichik qadamlar katta natijaga olib boradi! 💪"
+        )
+    }
 
 
 # =========================================================
@@ -260,7 +350,8 @@ def telegram_send_message(
         )
 
     response = requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        f"https://api.telegram.org/"
+        f"bot{TELEGRAM_TOKEN}/sendMessage",
         json={
             "chat_id": chat_id,
             "text": text
@@ -271,8 +362,11 @@ def telegram_send_message(
     if not response.ok:
 
         try:
+
             telegram_error = response.json()
+
         except Exception:
+
             telegram_error = response.text
 
         raise HTTPException(
@@ -300,7 +394,8 @@ def telegram_send_message_with_keyboard(
         )
 
     response = requests.post(
-        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+        f"https://api.telegram.org/"
+        f"bot{TELEGRAM_TOKEN}/sendMessage",
         json={
             "chat_id": chat_id,
             "text": text,
@@ -312,8 +407,11 @@ def telegram_send_message_with_keyboard(
     if not response.ok:
 
         try:
+
             telegram_error = response.json()
+
         except Exception:
+
             telegram_error = response.text
 
         raise HTTPException(
@@ -333,6 +431,7 @@ def telegram_answer_callback(
 ):
 
     if not TELEGRAM_TOKEN:
+
         return
 
     payload = {
@@ -340,13 +439,12 @@ def telegram_answer_callback(
     }
 
     if text:
+
         payload["text"] = text
 
     requests.post(
-        (
-            f"https://api.telegram.org/"
-            f"bot{TELEGRAM_TOKEN}/answerCallbackQuery"
-        ),
+        f"https://api.telegram.org/"
+        f"bot{TELEGRAM_TOKEN}/answerCallbackQuery",
         json=payload,
         timeout=10
     )
@@ -358,13 +456,12 @@ def telegram_delete_message(
 ):
 
     if not TELEGRAM_TOKEN:
+
         return
 
     requests.post(
-        (
-            f"https://api.telegram.org/"
-            f"bot{TELEGRAM_TOKEN}/deleteMessage"
-        ),
+        f"https://api.telegram.org/"
+        f"bot{TELEGRAM_TOKEN}/deleteMessage",
         json={
             "chat_id": chat_id,
             "message_id": message_id
@@ -374,15 +471,13 @@ def telegram_delete_message(
 
 
 # =========================================================
-# MORNING TIME KEYBOARD
+# MORNING KEYBOARD
 # =========================================================
 
 def telegram_send_morning_keyboard(
     chat_id: int,
     first_name: str
 ):
-
-    keyboard = []
 
     times = [
         "02:00",
@@ -396,25 +491,29 @@ def telegram_send_morning_keyboard(
         "10:00"
     ]
 
-    row = []
+    keyboard = []
 
-    for time in times:
+    for i in range(
+        0,
+        len(times),
+        3
+    ):
 
-        row.append({
-            "text": time,
-            "callback_data": f"morning_time|{time}"
-        })
+        keyboard.append(
+            [
+                {
+                    "text": time,
+                    "callback_data":
+                        f"morning_time|{time}"
+                }
 
-        if len(row) == 3:
-
-            keyboard.append(row)
-            row = []
-
-    if row:
-        keyboard.append(row)
+                for time in times[i:i + 3]
+            ]
+        )
 
     return telegram_send_message_with_keyboard(
         chat_id,
+
         f"""🌅 Assalomu alaykum, {first_name}!
 
 📋 Kunlik vazifalar botiga xush kelibsiz.
@@ -422,42 +521,7 @@ def telegram_send_morning_keyboard(
 Tizim ishga tushishi uchun savolga javob bering:
 
 🕐 Kuningizni soat nechchida rejalashtirasiz?""",
-        {
-            "inline_keyboard": keyboard
-        }
-    )
 
-
-# =========================================================
-# TASK STATUS KEYBOARD
-# =========================================================
-
-def telegram_send_task_status_keyboard(
-    chat_id: int,
-    task: dict,
-    number: int
-):
-
-    keyboard = [
-        [
-            {
-                "text": "✅ Bajarildi",
-                "callback_data": (
-                    f"task_status|{task['id']}|completed"
-                )
-            },
-            {
-                "text": "❌ Bajarilmadi",
-                "callback_data": (
-                    f"task_status|{task['id']}|failed"
-                )
-            }
-        ]
-    ]
-
-    return telegram_send_message_with_keyboard(
-        chat_id,
-        f"{number}. {task['task_text']}",
         {
             "inline_keyboard": keyboard
         }
@@ -474,20 +538,19 @@ def handle_telegram_start(
     first_name: Optional[str]
 ):
 
-    first_name = (
-        first_name
-        or "Do'st"
-    )
+    first_name = first_name or "Do‘st"
 
     username = username or ""
 
-    user = get_user_by_chat_id(chat_id)
+    user = get_user_by_chat_id(
+        chat_id
+    )
 
     # -----------------------------------------------------
-    # NEW USER
+    # EXISTING USER
     # -----------------------------------------------------
 
-    if not user:
+    if user:
 
         with get_connection() as conn:
 
@@ -495,49 +558,48 @@ def handle_telegram_start(
 
                 cur.execute(
                     """
-                    INSERT INTO public.users (
-                        telegram_chat_id,
-                        telegram_username,
-                        first_name,
-                        timezone,
-                        state,
-                        subscription_status,
-                        last_active_date
-                    )
-                    VALUES (
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        'waiting_morning_time',
-                        'trial',
-                        %s
-                    )
+                    UPDATE public.users
+                    SET
+                        first_name = %s,
+                        telegram_username = %s,
+                        last_active_date = %s,
+
+                        state = CASE
+                            WHEN state = 'blocked'
+                            THEN 'active'
+                            ELSE state
+                        END
+
+                    WHERE telegram_chat_id = %s
                     """,
                     (
-                        chat_id,
-                        username,
                         first_name,
-                        TIMEZONE,
-                        get_today()
+                        username,
+                        get_today(),
+                        chat_id
                     )
                 )
 
             conn.commit()
 
-        telegram_send_morning_keyboard(
+        telegram_send_message(
             chat_id,
-            first_name
+
+            f"""👋 Assalomu alaykum, {first_name}!
+
+Siz allaqachon ro‘yxatdan o‘tgansiz. ✅
+
+📋 Vazifalaringizni yuborishingiz mumkin."""
         )
 
         return {
             "ok": True,
             "route": "start",
-            "new_user": True
+            "existing_user": True
         }
 
     # -----------------------------------------------------
-    # EXISTING USER
+    # NEW USER
     # -----------------------------------------------------
 
     with get_connection() as conn:
@@ -546,41 +608,45 @@ def handle_telegram_start(
 
             cur.execute(
                 """
-                UPDATE public.users
-                SET
-                    first_name = %s,
-                    telegram_username = %s,
-                    last_active_date = %s,
-                    state = CASE
-                        WHEN state = 'blocked'
-                        THEN 'active'
-                        ELSE state
-                    END
-                WHERE telegram_chat_id = %s
+                INSERT INTO public.users (
+                    telegram_chat_id,
+                    telegram_username,
+                    first_name,
+                    timezone,
+                    state,
+                    subscription_status,
+                    last_active_date
+                )
+                VALUES (
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    'waiting_morning_time',
+                    'trial',
+                    %s
+                )
                 """,
                 (
-                    first_name,
+                    chat_id,
                     username,
-                    get_today(),
-                    chat_id
+                    first_name,
+                    TIMEZONE,
+                    get_today()
                 )
             )
 
         conn.commit()
 
-    telegram_send_message(
+    telegram_send_morning_keyboard(
         chat_id,
-        f"""👋 Assalomu alaykum, {first_name}!
-
-Siz allaqachon ro'yxatdan o'tgansiz. ✅
-
-📋 Vazifalaringizni yuborishingiz mumkin."""
+        first_name
     )
 
     return {
         "ok": True,
         "route": "start",
-        "existing_user": True
+        "new_user": True
     }
 
 
@@ -600,23 +666,53 @@ def handle_morning_time(
     ):
 
         if callback_query_id:
+
             telegram_answer_callback(
                 callback_query_id,
-                "Noto'g'ri vaqt."
+                "Noto‘g‘ri vaqt."
             )
 
         return {
-            "ok": False,
-            "error": "Invalid morning time"
+            "ok": False
         }
 
-    user = get_user_by_chat_id(chat_id)
+    user = get_user_by_chat_id(
+        chat_id
+    )
 
     if not user:
 
+        if callback_query_id:
+
+            telegram_answer_callback(
+                callback_query_id,
+                "Avval /start bering."
+            )
+
         return {
-            "ok": False,
-            "error": "User not found"
+            "ok": False
+        }
+
+    # -----------------------------------------------------
+    # IMPORTANT:
+    # SECOND CLICK IS IGNORED
+    # -----------------------------------------------------
+
+    if (
+        user["morning_time"] is not None
+        and user["state"] != "waiting_morning_time"
+    ):
+
+        if callback_query_id:
+
+            telegram_answer_callback(
+                callback_query_id,
+                "Vaqt allaqachon tanlangan."
+            )
+
+        return {
+            "ok": True,
+            "already_selected": True
         }
 
     with get_connection() as conn:
@@ -631,6 +727,10 @@ def handle_morning_time(
                     state = 'active',
                     last_active_date = %s
                 WHERE telegram_chat_id = %s
+                  AND (
+                      morning_time IS NULL
+                      OR state = 'waiting_morning_time'
+                  )
                 """,
                 (
                     time_value,
@@ -645,19 +745,21 @@ def handle_morning_time(
 
         telegram_answer_callback(
             callback_query_id,
-            "Vaqt saqlandi ✅"
+            "Vaqt belgilandi ✅"
         )
 
     telegram_send_message(
         chat_id,
-        f"""✅ Ajoyib!
 
-🕐 Ertalabki rejalashtirish vaqtingiz:
-{time_value}
+        f"""✅ Ertalabki vaqt belgilandi: {time_value}
 
-Endi har kuni shu vaqtda sizga eslatma keladi.
+🚀 Hammasi tayyor. Endi kunlik vazifalaringizni yuborishingiz mumkin.
 
-✍️ Bugungi vazifalaringizni yuborishingiz mumkin."""
+⏰ Belgilangan vaqtda sizga eslatma yuboramiz.
+
+📢 Yangiliklar va yangilanishlar: @kunlikvazifalar_news
+
+🤲 Kuningiz barakali o‘tsin!"""
     )
 
     return {
@@ -676,50 +778,49 @@ def handle_create_tasks(
     text: str
 ):
 
-    user = get_user_by_chat_id(chat_id)
+    user = get_user_by_chat_id(
+        chat_id
+    )
 
     if not user:
 
         telegram_send_message(
             chat_id,
-            "⚠️ Avval /start buyrug'ini bosing."
+            "⚠️ Avval /start buyrug‘ini bosing."
         )
 
         return {
-            "ok": False,
-            "error": "User not found"
+            "ok": False
         }
 
     if user["state"] == "blocked":
 
         telegram_send_message(
             chat_id,
-            "⚠️ Botdan foydalanish uchun /start buyrug'ini bosing."
+            "⚠️ Botdan foydalanish uchun /start buyrug‘ini bosing."
         )
 
         return {
-            "ok": False,
-            "error": "User blocked"
+            "ok": False
         }
 
-    today = get_today()
-
     # -----------------------------------------------------
-    # IF DAY ALREADY FINISHED
+    # COMPLETED DAY
     # -----------------------------------------------------
 
     if user["state"] == "completed":
 
         telegram_send_message(
             chat_id,
-            """✅ Bugungi kun allaqachon yakunlangan.
 
-Yangi kunni boshlash uchun ertaga vazifalaringizni yuboring."""
+            """🏁 Bugungi kuningiz allaqachon yakunlangan.
+
+📊 Natijani ko‘rish uchun /hisobot buyrug‘ini yuboring."""
         )
 
         return {
             "ok": False,
-            "error": "Day already completed"
+            "day_completed": True
         }
 
     # -----------------------------------------------------
@@ -735,24 +836,26 @@ Yangi kunni boshlash uchun ertaga vazifalaringizni yuboring."""
 
     for raw_task in raw_tasks:
 
-        cleaned = clean_task_text(raw_task)
+        cleaned = clean_task_text(
+            raw_task
+        )
 
-        if not cleaned:
-            continue
+        if cleaned:
 
-        tasks.append(cleaned)
+            tasks.append(cleaned)
 
     if not tasks:
 
         telegram_send_message(
             chat_id,
-            "⚠️ Vazifa matni bo'sh."
+            "⚠️ Vazifa matni bo‘sh."
         )
 
         return {
-            "ok": False,
-            "error": "Empty task"
+            "ok": False
         }
+
+    today = get_today()
 
     # -----------------------------------------------------
     # EXISTING TASKS
@@ -777,19 +880,22 @@ Yangi kunni boshlash uchun ertaga vazifalaringizni yuboring."""
                 )
             )
 
-            existing = cur.fetchall()
+            existing_rows = cur.fetchall()
 
-    existing_normalized = {
-        normalize_task(row["task_text"])
-        for row in existing
+    existing = {
+        normalize_task(
+            row["task_text"]
+        )
+
+        for row in existing_rows
     }
 
-    # -----------------------------------------------------
-    # INSERT
-    # -----------------------------------------------------
+    added_count = 0
+    duplicate_count = 0
 
-    added = []
-    duplicates = []
+    # -----------------------------------------------------
+    # INSERT TASKS
+    # -----------------------------------------------------
 
     with get_connection() as conn:
 
@@ -797,11 +903,15 @@ Yangi kunni boshlash uchun ertaga vazifalaringizni yuboring."""
 
             for task_text in tasks:
 
-                normalized = normalize_task(task_text)
+                normalized =
+                    normalize_task(
+                        task_text
+                    )
 
-                if normalized in existing_normalized:
+                if normalized in existing:
 
-                    duplicates.append(task_text)
+                    duplicate_count += 1
+
                     continue
 
                 cur.execute(
@@ -818,7 +928,6 @@ Yangi kunni boshlash uchun ertaga vazifalaringizni yuboring."""
                         %s,
                         'pending'
                     )
-                    RETURNING id
                     """,
                     (
                         user["id"],
@@ -827,14 +936,11 @@ Yangi kunni boshlash uchun ertaga vazifalaringizni yuboring."""
                     )
                 )
 
-                task_id = cur.fetchone()[0]
+                existing.add(
+                    normalized
+                )
 
-                added.append({
-                    "id": task_id,
-                    "task_text": task_text
-                })
-
-                existing_normalized.add(normalized)
+                added_count += 1
 
         conn.commit()
 
@@ -842,50 +948,48 @@ Yangi kunni boshlash uchun ertaga vazifalaringizni yuboring."""
     # RESPONSE
     # -----------------------------------------------------
 
-    if added:
+    response_parts = []
 
-        lines = [
-            "✅ Vazifalar qo'shildi!",
-            ""
-        ]
+    # NEW TASKS
+    if added_count > 0:
 
-        for index, task in enumerate(
-            added,
-            start=1
-        ):
-
-            lines.append(
-                f"{index}. {task['task_text']}"
-            )
-
-        lines.extend([
-            "",
-            f"📋 Jami: {len(added)} ta vazifa"
-        ])
-
-        if duplicates:
-
-            lines.extend([
-                f"⚠️ {len(duplicates)} ta vazifa takroriy bo'lgani uchun qo'shilmadi."
-            ])
-
-        telegram_send_message(
-            chat_id,
-            "\n".join(lines)
+        response_parts.append(
+            f"🎉 {added_count} ta yangi vazifa qabul qilindi va saqlandi!"
         )
 
-    else:
+    # DUPLICATES
+    if duplicate_count > 0:
 
-        telegram_send_message(
-            chat_id,
-            "⚠️ Yangi vazifalar qo'shilmadi."
+        response_parts.append(
+            f"🔄 {duplicate_count} ta vazifa bugun allaqachon qo‘shilgan."
         )
+
+        response_parts.append(
+            "♻️ Qayta saqlanmadi."
+        )
+
+    # FINAL
+    response_parts.append(
+        "🤲 Kuningiz barakatli o‘tsin!"
+    )
+
+    # /yakunladim only when NEW task exists
+    if added_count > 0:
+
+        response_parts.append(
+            "🏁 Kuningizni yakunlaganingizda /yakunladim buyrug‘ini yuboring."
+        )
+
+    telegram_send_message(
+        chat_id,
+        "\n\n".join(response_parts)
+    )
 
     return {
         "ok": True,
         "route": "create_tasks",
-        "added": len(added),
-        "duplicates": len(duplicates)
+        "added": added_count,
+        "duplicates": duplicate_count
     }
 
 
@@ -897,33 +1001,29 @@ def handle_finish_day(
     chat_id: int
 ):
 
-    user = get_user_by_chat_id(chat_id)
+    user = get_user_by_chat_id(
+        chat_id
+    )
 
     if not user:
 
         telegram_send_message(
             chat_id,
-            "⚠️ Avval /start buyrug'ini bosing."
+            "⚠️ Avval /start buyrug‘ini bosing."
         )
 
         return {
-            "ok": False,
-            "error": "User not found"
+            "ok": False
         }
-
-    today = get_today()
-
-    # -----------------------------------------------------
-    # ALREADY COMPLETED
-    # -----------------------------------------------------
 
     if user["state"] == "completed":
 
         telegram_send_message(
             chat_id,
-            """✅ Bugungi kun allaqachon yakunlangan.
 
-Ertaga yangi kunni boshlaymiz! 🌅"""
+            """🏁 Bugungi kuningiz allaqachon yakunlangan.
+
+📊 Hisobot uchun /hisobot buyrug‘ini yuboring."""
         )
 
         return {
@@ -931,9 +1031,7 @@ Ertaga yangi kunni boshlaymiz! 🌅"""
             "already_completed": True
         }
 
-    # -----------------------------------------------------
-    # GET PENDING TASKS
-    # -----------------------------------------------------
+    today = get_today()
 
     with get_connection() as conn:
 
@@ -961,16 +1059,11 @@ Ertaga yangi kunni boshlaymiz! 🌅"""
 
             pending_tasks = cur.fetchall()
 
+    # -----------------------------------------------------
+    # NO PENDING
+    # -----------------------------------------------------
+
     if not pending_tasks:
-
-        telegram_send_message(
-            chat_id,
-            """🌙 Bugungi kun uchun bajarilmagan vazifalar yo'q.
-
-🎉 Demak, barcha vazifalar bajarilgan!
-
-Ajoyib ish!"""
-        )
 
         with get_connection() as conn:
 
@@ -987,13 +1080,21 @@ Ajoyib ish!"""
 
             conn.commit()
 
+        telegram_send_message(
+            chat_id,
+
+            """🎉 Barcha vazifalar belgilandi!
+
+📊 Endi /hisobot buyrug‘ini bersangiz, bugungi hisobotingizni yuboraman."""
+        )
+
         return {
             "ok": True,
             "all_completed": True
         }
 
     # -----------------------------------------------------
-    # MARK DAY AS COMPLETED
+    # MARK DAY COMPLETED
     # -----------------------------------------------------
 
     with get_connection() as conn:
@@ -1012,22 +1113,7 @@ Ajoyib ish!"""
         conn.commit()
 
     # -----------------------------------------------------
-    # SEND HEADER
-    # -----------------------------------------------------
-
-    telegram_send_message(
-        chat_id,
-        f"""🌙 Kun yakunlandi!
-
-📅 {format_uz_date(today)}
-
-Quyidagi vazifalar hali belgilanmagan:
-
-👇 Har bir vazifani alohida belgilang."""
-    )
-
-    # -----------------------------------------------------
-    # SEND TASKS
+    # SEND EACH TASK
     # -----------------------------------------------------
 
     for index, task in enumerate(
@@ -1035,10 +1121,31 @@ Quyidagi vazifalar hali belgilanmagan:
         start=1
     ):
 
-        telegram_send_task_status_keyboard(
+        task_text = task["task_text"]
+
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "✅ Bajarildi",
+                        "callback_data":
+                            f"task_status|{task['id']}|completed"
+                    },
+                    {
+                        "text": "❌ Bajarilmadi",
+                        "callback_data":
+                            f"task_status|{task['id']}|failed"
+                    }
+                ]
+            ]
+        }
+
+        telegram_send_message_with_keyboard(
             chat_id,
-            task,
-            index
+
+            f"{index}. {task_text}",
+
+            keyboard
         )
 
     return {
@@ -1069,12 +1176,11 @@ def handle_task_status(
 
             telegram_answer_callback(
                 callback_query_id,
-                "Noto'g'ri status."
+                "Noto‘g‘ri status."
             )
 
         return {
-            "ok": False,
-            "error": "Invalid status"
+            "ok": False
         }
 
     # -----------------------------------------------------
@@ -1105,13 +1211,17 @@ def handle_task_status(
 
         conn.commit()
 
+    # -----------------------------------------------------
+    # ALREADY PROCESSED
+    # -----------------------------------------------------
+
     if not task:
 
         if callback_query_id:
 
             telegram_answer_callback(
                 callback_query_id,
-                "Bu vazifa allaqachon belgilangan."
+                "Bu vazifa allaqachon belgilangandi."
             )
 
         return {
@@ -1120,7 +1230,7 @@ def handle_task_status(
         }
 
     # -----------------------------------------------------
-    # CALLBACK ANSWER
+    # ANSWER CALLBACK
     # -----------------------------------------------------
 
     if callback_query_id:
@@ -1140,33 +1250,43 @@ def handle_task_status(
             )
 
     # -----------------------------------------------------
-    # DELETE OLD MESSAGE
+    # DELETE TASK MESSAGE
     # -----------------------------------------------------
 
     if message_id:
 
-        telegram_delete_message(
-            chat_id,
-            message_id
-        )
+        try:
+
+            telegram_delete_message(
+                chat_id,
+                message_id
+            )
+
+        except Exception as error:
+
+            print(
+                "Delete message error:",
+                error
+            )
 
     # -----------------------------------------------------
-    # GET USER
+    # USER
     # -----------------------------------------------------
 
-    user = get_user_by_chat_id(chat_id)
+    user = get_user_by_chat_id(
+        chat_id
+    )
 
     if not user:
 
         return {
-            "ok": True,
-            "status": status
+            "ok": True
         }
 
     today = get_today()
 
     # -----------------------------------------------------
-    # COUNT PENDING
+    # PENDING COUNT
     # -----------------------------------------------------
 
     with get_connection() as conn:
@@ -1175,7 +1295,7 @@ def handle_task_status(
 
             cur.execute(
                 """
-                SELECT COUNT(*)
+                SELECT COUNT(*)::int
                 FROM public.tasks
                 WHERE user_id = %s
                   AND task_date = %s
@@ -1190,62 +1310,19 @@ def handle_task_status(
             pending_count = cur.fetchone()[0]
 
     # -----------------------------------------------------
-    # ALL COMPLETED CLAIM
+    # STILL PENDING
     # -----------------------------------------------------
 
-    if pending_count == 0:
+    if pending_count > 0:
 
-        with get_connection() as conn:
+        return {
+            "ok": True,
+            "pending": pending_count
+        }
 
-            with conn.cursor() as cur:
-
-                cur.execute(
-                    """
-                    UPDATE public.users
-                    SET last_completion_notified_date = %s
-                    WHERE id = %s
-                      AND last_completion_notified_date
-                          IS DISTINCT FROM %s
-                    RETURNING id
-                    """,
-                    (
-                        today,
-                        user["id"],
-                        today
-                    )
-                )
-
-                claimant = cur.fetchone()
-
-            conn.commit()
-
-        # Only one request sends final message
-        if claimant:
-
-            telegram_send_message(
-                chat_id,
-                """🎉 Barcha vazifalar belgilandi!
-
-Bugungi kuningizni ajoyib yakunladingiz. 💪
-
-🌙 Yaxshi dam oling! Ertaga yana davom etamiz."""
-            )
-
-    return {
-        "ok": True,
-        "status": status,
-        "pending": pending_count
-    }
-
-
-# =========================================================
-# DAILY REPORT
-# =========================================================
-
-def get_daily_report_data(
-    user_id,
-    report_date: date
-):
+    # -----------------------------------------------------
+    # CLAIM FINAL NOTIFICATION
+    # -----------------------------------------------------
 
     with get_connection() as conn:
 
@@ -1255,41 +1332,62 @@ def get_daily_report_data(
 
             cur.execute(
                 """
-                SELECT
-                    COUNT(*) AS total,
-                    COUNT(*) FILTER (
-                        WHERE status = 'completed'
-                    ) AS completed,
-                    COUNT(*) FILTER (
-                        WHERE status = 'pending'
-                    ) AS pending,
-                    COUNT(*) FILTER (
-                        WHERE status = 'failed'
-                    ) AS failed
-                FROM public.tasks
-                WHERE user_id = %s
-                  AND task_date = %s
+                UPDATE public.users
+                SET last_completion_notified_date = %s
+                WHERE id = %s
+                  AND last_completion_notified_date
+                      IS DISTINCT FROM %s
+                RETURNING id
                 """,
                 (
-                    user_id,
-                    report_date
+                    today,
+                    user["id"],
+                    today
                 )
             )
 
-            return cur.fetchone()
+            claimant = cur.fetchone()
 
+        conn.commit()
+
+    # -----------------------------------------------------
+    # SEND ONLY ONCE
+    # -----------------------------------------------------
+
+    if claimant:
+
+        telegram_send_message(
+            chat_id,
+
+            """🎉 Barcha vazifalar belgilandi!
+
+📊 Endi /hisobot buyrug‘ini bersangiz, bugungi hisobotingizni yuboraman."""
+        )
+
+    return {
+        "ok": True,
+        "status": status,
+        "pending": 0
+    }
+
+
+# =========================================================
+# DAILY REPORT
+# =========================================================
 
 def handle_daily_report(
     chat_id: int
 ):
 
-    user = get_user_by_chat_id(chat_id)
+    user = get_user_by_chat_id(
+        chat_id
+    )
 
     if not user:
 
         telegram_send_message(
             chat_id,
-            "⚠️ Avval /start buyrug'ini bosing."
+            "⚠️ User topilmadi."
         )
 
         return {
@@ -1298,53 +1396,249 @@ def handle_daily_report(
 
     today = get_today()
 
-    stats = get_daily_report_data(
-        user["id"],
-        today
+    yesterday = (
+        today - timedelta(days=1)
     )
 
-    total = int(stats["total"] or 0)
-    completed = int(stats["completed"] or 0)
-    pending = int(stats["pending"] or 0)
-    failed = int(stats["failed"] or 0)
+    # -----------------------------------------------------
+    # TODAY
+    # -----------------------------------------------------
 
-    percent = (
-        round(completed / total * 100)
-        if total
-        else 0
+    with get_connection() as conn:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
+            cur.execute(
+                """
+                SELECT *
+                FROM public.tasks
+                WHERE user_id = %s
+                  AND task_date = %s
+                ORDER BY created_at ASC
+                """,
+                (
+                    user["id"],
+                    today
+                )
+            )
+
+            today_tasks = cur.fetchall()
+
+            # -------------------------------------------------
+            # YESTERDAY
+            # -------------------------------------------------
+
+            cur.execute(
+                """
+                SELECT *
+                FROM public.tasks
+                WHERE user_id = %s
+                  AND task_date = %s
+                ORDER BY created_at ASC
+                """,
+                (
+                    user["id"],
+                    yesterday
+                )
+            )
+
+            yesterday_tasks = cur.fetchall()
+
+    today_stats = calculate_stats(
+        today_tasks
     )
 
-    bar = progress_bar(
-        completed,
-        total
+    yesterday_stats = calculate_stats(
+        yesterday_tasks
     )
 
-    text = f"""📊 BUGUNGI HISOBOT
+    # -----------------------------------------------------
+    # BUILD REPORT
+    # -----------------------------------------------------
 
-📅 {format_uz_date(today)}
+    lines = []
 
-━━━━━━━━━━━━━━
+    lines.append(
+        "📊 KUNLIK XULOSA"
+    )
 
-📋 Jami: {total} ta
+    lines.append(
+        f"📅 {format_uz_date(today)}"
+    )
 
-✅ Bajarilgan: {completed} ta
-⏳ Bajarilmagan: {pending} ta
-❌ Muvaffaqiyatsiz: {failed} ta
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
 
-📈 Natija: {percent}%
+    lines.append(
+        f"👍 {today_stats['percent']}%"
+    )
 
-{bar}
+    lines.append(
+        progress_bar(
+            today_stats["percent"]
+        )
+    )
 
-{get_motivation(percent)}"""
+    lines.append(
+        f"{today_stats['completed']} / "
+        f"{today_stats['total']} vazifa bajarildi"
+    )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        "📋 VAZIFALAR"
+    )
+
+    if not today_tasks:
+
+        lines.append(
+            "ℹ️ Bugun uchun vazifalar topilmadi"
+        )
+
+    else:
+
+        for task in today_tasks:
+
+            if task["status"] == "completed":
+
+                icon = "☑️"
+
+            elif task["status"] == "failed":
+
+                icon = "❌"
+
+            else:
+
+                icon = "⏳"
+
+            lines.append(
+                f"{icon} {task['task_text']}"
+            )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        "📈 NATIJA"
+    )
+
+    lines.append(
+        f"🟩 Bajarildi    {today_stats['completed']}"
+    )
+
+    lines.append(
+        f"🟥 Bajarilmadi  {today_stats['failed']}"
+    )
+
+    lines.append(
+        f"⏳ Belgilanmagan {today_stats['pending']}"
+    )
+
+    lines.append(
+        f"🎯 {today_stats['percent']}% natija"
+    )
+
+    lines.append(
+        progress_bar(
+            today_stats["percent"]
+        )
+    )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        "📅 KECHA"
+    )
+
+    if yesterday_stats["total"] == 0:
+
+        lines.append(
+            "ℹ️ Ma'lumot yo‘q"
+        )
+
+    else:
+
+        lines.append(
+            f"👍 {yesterday_stats['percent']}%"
+        )
+
+        lines.append(
+            progress_bar(
+                yesterday_stats["percent"]
+            )
+        )
+
+        lines.append(
+            f"{yesterday_stats['completed']} / "
+            f"{yesterday_stats['total']} vazifa bajarildi"
+        )
+
+        difference = (
+            today_stats["percent"]
+            - yesterday_stats["percent"]
+        )
+
+        if difference > 0:
+
+            lines.append(
+                f"📈 Kechagiga nisbatan "
+                f"+{difference}% yaxshiroq!"
+            )
+
+        elif difference < 0:
+
+            lines.append(
+                f"📉 Kechagiga nisbatan "
+                f"{abs(difference)}% pastroq."
+            )
+
+        else:
+
+            lines.append(
+                "➖ Kechagi natija bilan bir xil."
+            )
+
+    motivation = get_motivation(
+        today_stats["percent"]
+    )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        "💡 XULOSA"
+    )
+
+    lines.append(
+        motivation["title"]
+    )
+
+    lines.append(
+        motivation["text"]
+    )
+
+    lines.append(
+        "🎯 Kechagi o‘zingizdan kuchliroq bo‘ling!"
+    )
 
     telegram_send_message(
         chat_id,
-        text
+        "\n\n".join(lines)
     )
 
     return {
         "ok": True,
-        "report": "daily"
+        "route": "daily_report"
     }
 
 
@@ -1356,13 +1650,15 @@ def handle_weekly_report(
     chat_id: int
 ):
 
-    user = get_user_by_chat_id(chat_id)
+    user = get_user_by_chat_id(
+        chat_id
+    )
 
     if not user:
 
         telegram_send_message(
             chat_id,
-            "⚠️ Avval /start buyrug'ini bosing."
+            "⚠️ User topilmadi."
         )
 
         return {
@@ -1370,7 +1666,25 @@ def handle_weekly_report(
         }
 
     today = get_today()
-    start_date = today - timedelta(days=6)
+
+    # Monday
+    monday = (
+        today
+        - timedelta(
+            days=today.weekday()
+        )
+    )
+
+    # Previous week
+    start_date = (
+        monday
+        - timedelta(days=7)
+    )
+
+    end_date = (
+        monday
+        - timedelta(days=1)
+    )
 
     with get_connection() as conn:
 
@@ -1380,64 +1694,296 @@ def handle_weekly_report(
 
             cur.execute(
                 """
-                SELECT
-                    COUNT(*) AS total,
-                    COUNT(*) FILTER (
-                        WHERE status = 'completed'
-                    ) AS completed,
-                    COUNT(*) FILTER (
-                        WHERE status = 'pending'
-                    ) AS pending,
-                    COUNT(*) FILTER (
-                        WHERE status = 'failed'
-                    ) AS failed
+                SELECT *
                 FROM public.tasks
                 WHERE user_id = %s
                   AND task_date BETWEEN %s AND %s
+                ORDER BY task_date ASC, created_at ASC
                 """,
                 (
                     user["id"],
                     start_date,
-                    today
+                    end_date
                 )
             )
 
-            stats = cur.fetchone()
+            tasks = cur.fetchall()
 
-    total = int(stats["total"] or 0)
-    completed = int(stats["completed"] or 0)
-    pending = int(stats["pending"] or 0)
-    failed = int(stats["failed"] or 0)
-
-    percent = (
-        round(completed / total * 100)
-        if total
-        else 0
+    stats = calculate_stats(
+        tasks
     )
+
+    day_names = [
+        "Dushanba",
+        "Seshanba",
+        "Chorshanba",
+        "Payshanba",
+        "Juma",
+        "Shanba",
+        "Yakshanba"
+    ]
+
+    daily = {}
+
+    for i in range(7):
+
+        current_date = (
+            start_date
+            + timedelta(days=i)
+        )
+
+        daily[
+            current_date
+        ] = {
+            "name": day_names[i],
+            "total": 0,
+            "completed": 0,
+            "failed": 0
+        }
+
+    for task in tasks:
+
+        task_date = task["task_date"]
+
+        if isinstance(task_date, str):
+
+            task_date = date.fromisoformat(
+                task_date
+            )
+
+        if task_date not in daily:
+
+            continue
+
+        daily[
+            task_date
+        ]["total"] += 1
+
+        if task["status"] == "completed":
+
+            daily[
+                task_date
+            ]["completed"] += 1
+
+        elif task["status"] == "failed":
+
+            daily[
+                task_date
+            ]["failed"] += 1
+
+    best_day = None
+    worst_day = None
+
+    active_days = 0
+    perfect_days = 0
+
+    lines = []
+
+    lines.append(
+        "📊 HAFTALIK XULOSA"
+    )
+
+    lines.append(
+        f"📅 {format_uz_date(start_date)} - "
+        f"{format_uz_date(end_date)}"
+    )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        f"👍 {stats['percent']}%"
+    )
+
+    lines.append(
+        progress_bar(
+            stats["percent"]
+        )
+    )
+
+    lines.append(
+        f"{stats['completed']} / "
+        f"{stats['total']} vazifa bajarildi"
+    )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        "📆 HAFTA KUNLARI"
+    )
+
+    for current_date, item in daily.items():
+
+        if item["total"] == 0:
+
+            lines.append(
+                f"⬜ {item['name']} - Ma'lumot yo‘q"
+            )
+
+            continue
+
+        active_days += 1
+
+        percent = round(
+            (
+                item["completed"]
+                / item["total"]
+            ) * 100
+        )
+
+        item["percent"] = percent
+
+        if percent == 100:
+
+            perfect_days += 1
+
+        if (
+            best_day is None
+            or percent > best_day["percent"]
+        ):
+
+            best_day = {
+                **item
+            }
+
+        if (
+            worst_day is None
+            or percent < worst_day["percent"]
+        ):
+
+            worst_day = {
+                **item
+            }
+
+        lines.append(
+            f"🟩 {item['name']} - "
+            f"{percent}% "
+            f"({item['completed']}/{item['total']})"
+        )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        "📈 NATIJA"
+    )
+
+    lines.append(
+        f"🟩 Bajarildi: {stats['completed']}"
+    )
+
+    lines.append(
+        f"🟥 Bajarilmadi: {stats['failed']}"
+    )
+
+    lines.append(
+        f"⏳ Belgilanmagan: {stats['pending']}"
+    )
+
+    lines.append(
+        f"🎯 {stats['percent']}%"
+    )
+
+    lines.append(
+        progress_bar(
+            stats["percent"]
+        )
+    )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        "🏆 ENG YAXSHI KUN"
+    )
+
+    if best_day:
+
+        lines.append(
+            f"🔥 {best_day['name']} - "
+            f"{best_day['percent']}%"
+        )
+
+    else:
+
+        lines.append(
+            "ℹ️ Ma'lumot yo‘q"
+        )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        "📉 ENG SUST KUN"
+    )
+
+    if worst_day:
+
+        lines.append(
+            f"📉 {worst_day['name']} - "
+            f"{worst_day['percent']}%"
+        )
+
+    else:
+
+        lines.append(
+            "ℹ️ Ma'lumot yo‘q"
+        )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        f"🔥 100% kunlar: {perfect_days} ta"
+    )
+
+    lines.append(
+        f"📆 Faol kunlar: {active_days} ta"
+    )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        "💡 HAFTA XULOSASI"
+    )
+
+    if stats["total"] == 0:
+
+        lines.append(
+            "📭 Bu hafta uchun vazifalar topilmadi."
+        )
+
+    else:
+
+        motivation = get_motivation(
+            stats["percent"]
+        )
+
+        lines.append(
+            motivation["title"]
+        )
+
+        lines.append(
+            motivation["text"]
+        )
 
     telegram_send_message(
         chat_id,
-        f"""📊 HAFTALIK HISOBOT
-
-📅 {format_uz_date(start_date)} — {format_uz_date(today)}
-
-━━━━━━━━━━━━━━
-
-📋 Jami: {total} ta
-✅ Bajarilgan: {completed} ta
-⏳ Bajarilmagan: {pending} ta
-❌ Muvaffaqiyatsiz: {failed} ta
-
-📈 Bajarilish darajasi: {percent}%
-
-{progress_bar(completed, total)}
-
-{get_motivation(percent)}"""
+        "\n\n".join(lines)
     )
 
     return {
         "ok": True,
-        "report": "weekly"
+        "route": "weekly_report"
     }
 
 
@@ -1449,13 +1995,15 @@ def handle_monthly_report(
     chat_id: int
 ):
 
-    user = get_user_by_chat_id(chat_id)
+    user = get_user_by_chat_id(
+        chat_id
+    )
 
     if not user:
 
         telegram_send_message(
             chat_id,
-            "⚠️ Avval /start buyrug'ini bosing."
+            "⚠️ User topilmadi."
         )
 
         return {
@@ -1476,20 +2024,11 @@ def handle_monthly_report(
 
             cur.execute(
                 """
-                SELECT
-                    COUNT(*) AS total,
-                    COUNT(*) FILTER (
-                        WHERE status = 'completed'
-                    ) AS completed,
-                    COUNT(*) FILTER (
-                        WHERE status = 'pending'
-                    ) AS pending,
-                    COUNT(*) FILTER (
-                        WHERE status = 'failed'
-                    ) AS failed
+                SELECT *
                 FROM public.tasks
                 WHERE user_id = %s
                   AND task_date BETWEEN %s AND %s
+                ORDER BY task_date ASC, created_at ASC
                 """,
                 (
                     user["id"],
@@ -1498,42 +2037,225 @@ def handle_monthly_report(
                 )
             )
 
-            stats = cur.fetchone()
+            tasks = cur.fetchall()
 
-    total = int(stats["total"] or 0)
-    completed = int(stats["completed"] or 0)
-    pending = int(stats["pending"] or 0)
-    failed = int(stats["failed"] or 0)
+    stats = calculate_stats(
+        tasks
+    )
 
-    percent = (
-        round(completed / total * 100)
-        if total
-        else 0
+    daily = {}
+
+    for task in tasks:
+
+        task_date = task["task_date"]
+
+        if isinstance(task_date, str):
+
+            task_date = date.fromisoformat(
+                task_date
+            )
+
+        if task_date not in daily:
+
+            daily[task_date] = {
+                "total": 0,
+                "completed": 0,
+                "failed": 0
+            }
+
+        daily[
+            task_date
+        ]["total"] += 1
+
+        if task["status"] == "completed":
+
+            daily[
+                task_date
+            ]["completed"] += 1
+
+        elif task["status"] == "failed":
+
+            daily[
+                task_date
+            ]["failed"] += 1
+
+    best_day = None
+    worst_day = None
+    perfect_days = 0
+
+    for task_date, item in daily.items():
+
+        percent = round(
+            (
+                item["completed"]
+                / item["total"]
+            ) * 100
+        )
+
+        item["percent"] = percent
+
+        if percent == 100:
+
+            perfect_days += 1
+
+        if (
+            best_day is None
+            or percent > best_day["percent"]
+        ):
+
+            best_day = {
+                "date": task_date,
+                **item
+            }
+
+        if (
+            worst_day is None
+            or percent < worst_day["percent"]
+        ):
+
+            worst_day = {
+                "date": task_date,
+                **item
+            }
+
+    lines = []
+
+    lines.append(
+        "📊 OYLIK XULOSA"
+    )
+
+    lines.append(
+        f"📅 {today.strftime('%m')}-oy, "
+        f"{today.year}"
+    )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        f"👍 {stats['percent']}%"
+    )
+
+    lines.append(
+        progress_bar(
+            stats["percent"]
+        )
+    )
+
+    lines.append(
+        f"{stats['completed']} / "
+        f"{stats['total']} vazifa bajarildi"
+    )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        "📈 NATIJA"
+    )
+
+    lines.append(
+        f"🟩 Bajarildi: {stats['completed']}"
+    )
+
+    lines.append(
+        f"🟥 Bajarilmadi: {stats['failed']}"
+    )
+
+    lines.append(
+        f"⏳ Belgilanmagan: {stats['pending']}"
+    )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        "🏆 ENG YAXSHI KUN"
+    )
+
+    if best_day:
+
+        lines.append(
+            f"🔥 {format_uz_date(best_day['date'])} - "
+            f"{best_day['percent']}%"
+        )
+
+    else:
+
+        lines.append(
+            "ℹ️ Ma'lumot yo‘q"
+        )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        "📉 ENG SUST KUN"
+    )
+
+    if worst_day:
+
+        lines.append(
+            f"📉 {format_uz_date(worst_day['date'])} - "
+            f"{worst_day['percent']}%"
+        )
+
+    else:
+
+        lines.append(
+            "ℹ️ Ma'lumot yo‘q"
+        )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        f"🔥 100% bajarilgan kunlar: "
+        f"{perfect_days} ta"
+    )
+
+    lines.append(
+        f"📆 Vazifa qo‘shilgan kunlar: "
+        f"{len(daily)} ta"
+    )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        "💡 OY XULOSASI"
+    )
+
+    motivation = get_motivation(
+        stats["percent"]
+    )
+
+    lines.append(
+        motivation["title"]
+    )
+
+    lines.append(
+        motivation["text"]
+    )
+
+    lines.append(
+        "🎯 Har bir kun yangi imkoniyat!"
     )
 
     telegram_send_message(
         chat_id,
-        f"""📊 OYLIK HISOBOT
-
-📅 {format_uz_date(start_date)} — {format_uz_date(today)}
-
-━━━━━━━━━━━━━━
-
-📋 Jami: {total} ta
-✅ Bajarilgan: {completed} ta
-⏳ Bajarilmagan: {pending} ta
-❌ Muvaffaqiyatsiz: {failed} ta
-
-📈 Bajarilish darajasi: {percent}%
-
-{progress_bar(completed, total)}
-
-{get_motivation(percent)}"""
+        "\n\n".join(lines)
     )
 
     return {
         "ok": True,
-        "report": "monthly"
+        "route": "monthly_report"
     }
 
 
@@ -1545,13 +2267,15 @@ def handle_yearly_report(
     chat_id: int
 ):
 
-    user = get_user_by_chat_id(chat_id)
+    user = get_user_by_chat_id(
+        chat_id
+    )
 
     if not user:
 
         telegram_send_message(
             chat_id,
-            "⚠️ Avval /start buyrug'ini bosing."
+            "⚠️ User topilmadi."
         )
 
         return {
@@ -1560,8 +2284,10 @@ def handle_yearly_report(
 
     today = get_today()
 
+    year = today.year
+
     start_date = date(
-        today.year,
+        year,
         1,
         1
     )
@@ -1574,20 +2300,11 @@ def handle_yearly_report(
 
             cur.execute(
                 """
-                SELECT
-                    COUNT(*) AS total,
-                    COUNT(*) FILTER (
-                        WHERE status = 'completed'
-                    ) AS completed,
-                    COUNT(*) FILTER (
-                        WHERE status = 'pending'
-                    ) AS pending,
-                    COUNT(*) FILTER (
-                        WHERE status = 'failed'
-                    ) AS failed
+                SELECT *
                 FROM public.tasks
                 WHERE user_id = %s
                   AND task_date BETWEEN %s AND %s
+                ORDER BY task_date ASC, created_at ASC
                 """,
                 (
                     user["id"],
@@ -1596,42 +2313,256 @@ def handle_yearly_report(
                 )
             )
 
-            stats = cur.fetchone()
+            tasks = cur.fetchall()
 
-    total = int(stats["total"] or 0)
-    completed = int(stats["completed"] or 0)
-    pending = int(stats["pending"] or 0)
-    failed = int(stats["failed"] or 0)
+    stats = calculate_stats(
+        tasks
+    )
 
-    percent = (
-        round(completed / total * 100)
-        if total
-        else 0
+    month_names = {
+        1: "Yanvar",
+        2: "Fevral",
+        3: "Mart",
+        4: "Aprel",
+        5: "May",
+        6: "Iyun",
+        7: "Iyul",
+        8: "Avgust",
+        9: "Sentabr",
+        10: "Oktabr",
+        11: "Noyabr",
+        12: "Dekabr"
+    }
+
+    monthly = {}
+
+    for task in tasks:
+
+        task_date = task["task_date"]
+
+        if isinstance(task_date, str):
+
+            task_date = date.fromisoformat(
+                task_date
+            )
+
+        month = task_date.month
+
+        if month not in monthly:
+
+            monthly[month] = {
+                "total": 0,
+                "completed": 0,
+                "failed": 0
+            }
+
+        monthly[
+            month
+        ]["total"] += 1
+
+        if task["status"] == "completed":
+
+            monthly[
+                month
+            ]["completed"] += 1
+
+        elif task["status"] == "failed":
+
+            monthly[
+                month
+            ]["failed"] += 1
+
+    best_month = None
+    worst_month = None
+
+    for month, item in monthly.items():
+
+        percent = round(
+            (
+                item["completed"]
+                / item["total"]
+            ) * 100
+        )
+
+        item["percent"] = percent
+
+        if (
+            best_month is None
+            or percent > best_month["percent"]
+        ):
+
+            best_month = {
+                "month": month,
+                **item
+            }
+
+        if (
+            worst_month is None
+            or percent < worst_month["percent"]
+        ):
+
+            worst_month = {
+                "month": month,
+                **item
+            }
+
+    lines = []
+
+    lines.append(
+        "📊 YILLIK XULOSA"
+    )
+
+    lines.append(
+        f"📅 {year}-yil"
+    )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        f"👍 {stats['percent']}%"
+    )
+
+    lines.append(
+        progress_bar(
+            stats["percent"]
+        )
+    )
+
+    lines.append(
+        f"{stats['completed']} / "
+        f"{stats['total']} vazifa bajarildi"
+    )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        "📆 OYLAR BO‘YICHA"
+    )
+
+    if not monthly:
+
+        lines.append(
+            "ℹ️ Hozircha ma'lumot yo‘q"
+        )
+
+    else:
+
+        for month in sorted(monthly):
+
+            item = monthly[month]
+
+            lines.append(
+                f"🟩 {month_names[month]} - "
+                f"{item['percent']}% "
+                f"({item['completed']}/{item['total']})"
+            )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        "📈 NATIJA"
+    )
+
+    lines.append(
+        f"🟩 Bajarildi: {stats['completed']}"
+    )
+
+    lines.append(
+        f"🟥 Bajarilmadi: {stats['failed']}"
+    )
+
+    lines.append(
+        f"⏳ Belgilanmagan: {stats['pending']}"
+    )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        "🏆 ENG YAXSHI OY"
+    )
+
+    if best_month:
+
+        lines.append(
+            f"🔥 {month_names[best_month['month']]} - "
+            f"{best_month['percent']}%"
+        )
+
+    else:
+
+        lines.append(
+            "ℹ️ Ma'lumot yo‘q"
+        )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        "📉 ENG SUST OY"
+    )
+
+    if worst_month:
+
+        lines.append(
+            f"📉 {month_names[worst_month['month']]} - "
+            f"{worst_month['percent']}%"
+        )
+
+    else:
+
+        lines.append(
+            "ℹ️ Ma'lumot yo‘q"
+        )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        f"📆 Faol oylar: {len(monthly)} ta"
+    )
+
+    lines.append(
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    lines.append(
+        "💡 YIL XULOSASI"
+    )
+
+    motivation = get_motivation(
+        stats["percent"]
+    )
+
+    lines.append(
+        motivation["title"]
+    )
+
+    lines.append(
+        motivation["text"]
+    )
+
+    lines.append(
+        "🏆 Yangi yil yangi natijalar uchun imkoniyat!"
     )
 
     telegram_send_message(
         chat_id,
-        f"""📊 YILLIK HISOBOT
-
-📅 {today.year}-yil
-
-━━━━━━━━━━━━━━
-
-📋 Jami: {total} ta
-✅ Bajarilgan: {completed} ta
-⏳ Bajarilmagan: {pending} ta
-❌ Muvaffaqiyatsiz: {failed} ta
-
-📈 Bajarilish darajasi: {percent}%
-
-{progress_bar(completed, total)}
-
-{get_motivation(percent)}"""
+        "\n\n".join(lines)
     )
 
     return {
         "ok": True,
-        "report": "yearly"
+        "route": "yearly_report"
     }
 
 
@@ -1647,16 +2578,18 @@ def handle_admin(
 
         telegram_send_message(
             chat_id,
-            "⛔ Sizda admin huquqi yo'q."
+            "⛔ Sizda admin huquqi yo‘q."
         )
 
         return {
-            "ok": False,
-            "error": "Not admin"
+            "ok": False
         }
 
     today = get_today()
-    yesterday = today - timedelta(days=1)
+
+    yesterday = (
+        today - timedelta(days=1)
+    )
 
     with get_connection() as conn:
 
@@ -1664,56 +2597,64 @@ def handle_admin(
             cursor_factory=RealDictCursor
         ) as cur:
 
-            # USERS
             cur.execute(
                 """
                 SELECT
                     COUNT(*) AS total,
+
                     COUNT(*) FILTER (
                         WHERE (
                             created_at
                             AT TIME ZONE 'Asia/Tashkent'
                         )::date = %s
                     ) AS today_new,
+
                     COUNT(*) FILTER (
                         WHERE (
                             created_at
                             AT TIME ZONE 'Asia/Tashkent'
                         )::date = %s
                     ) AS yesterday_new,
+
                     COUNT(*) FILTER (
                         WHERE last_active_date = %s
                     ) AS today_active,
+
                     COUNT(*) FILTER (
                         WHERE last_active_date >= %s
                     ) AS last_two_days
+
                 FROM public.users
                 """,
                 (
                     today,
                     yesterday,
                     today,
-                    today - timedelta(days=1)
+                    yesterday
                 )
             )
 
             users = cur.fetchone()
 
-            # TASKS
             cur.execute(
                 """
                 SELECT
                     COUNT(*) AS total,
+
                     COUNT(*) FILTER (
                         WHERE status = 'completed'
                     ) AS completed,
+
                     COUNT(*) FILTER (
                         WHERE status = 'pending'
                     ) AS pending,
+
                     COUNT(*) FILTER (
                         WHERE status = 'failed'
                     ) AS failed
+
                 FROM public.tasks
+
                 WHERE task_date = %s
                 """,
                 (today,)
@@ -1721,46 +2662,47 @@ def handle_admin(
 
             tasks = cur.fetchone()
 
-    total_users = int(users["total"] or 0)
-    today_new = int(users["today_new"] or 0)
-    yesterday_new = int(users["yesterday_new"] or 0)
-    today_active = int(users["today_active"] or 0)
-    last_two_days = int(users["last_two_days"] or 0)
+    total_tasks = int(
+        tasks["total"] or 0
+    )
 
-    total_tasks = int(tasks["total"] or 0)
-    completed = int(tasks["completed"] or 0)
-    pending = int(tasks["pending"] or 0)
-    failed = int(tasks["failed"] or 0)
+    completed = int(
+        tasks["completed"] or 0
+    )
 
     percent = (
-        round(completed / total_tasks * 100)
+        round(
+            completed
+            / total_tasks
+            * 100
+        )
         if total_tasks
         else 0
     )
 
     text = f"""👑 ADMIN PANEL
 
-📅 {format_uz_date(today)}
+📅 {format_short_uz_date(today)}
 
-━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━
 
 👥 FOYDALANUVCHILAR
 
-├ Jami: {total_users} ta
-├ Bugun qo'shilgan: {today_new} ta
-└ Kecha qo'shilgan: {yesterday_new} ta
+├ Jami: {users["total"]} ta
+├ Bugun qo‘shilgan: {users["today_new"]} ta
+└ Kecha qo‘shilgan: {users["yesterday_new"]} ta
 
 📈 FAOLLIK
 
-├ Bugun foydalangan: {today_active} ta
-└ Oxirgi 2 kunda foydalangan: {last_two_days} ta
+├ Bugun foydalangan: {users["today_active"]} ta
+└ Oxirgi 2 kunda foydalangan: {users["last_two_days"]} ta
 
 📋 BUGUNGI VAZIFALAR
 
-├ Jami: {total_tasks} ta
-├ Bajarilgan: {completed} ta
-├ Bajarilmagan: {pending} ta
-├ Muvaffaqiyatsiz: {failed} ta
+├ Jami: {tasks["total"]} ta
+├ Bajarilgan: {tasks["completed"]} ta
+├ Bajarilmagan: {tasks["pending"]} ta
+├ Muvaffaqiyatsiz: {tasks["failed"]} ta
 └ Bajarilish darajasi: {percent}%
 
 📢 Broadcast uchun:
@@ -1784,32 +2726,35 @@ def handle_admin(
 
 def handle_broadcast(
     chat_id: int,
-    text: str
+    message_text: str
 ):
 
     if not is_admin(chat_id):
 
         telegram_send_message(
             chat_id,
-            "⛔ Sizda admin huquqi yo'q."
+            "⛔ Sizda admin huquqi yo‘q."
         )
 
         return {
             "ok": False
         }
 
-    message = re.sub(
+    text = re.sub(
         r"^/xabar\s*",
         "",
-        text,
+        message_text,
         flags=re.IGNORECASE
     ).strip()
 
-    if not message:
+    if not text:
 
         telegram_send_message(
             chat_id,
-            "⚠️ Foydalanish:\n\n/xabar <matn>"
+
+            """📢 Xabar yuborish formati:
+
+/xabar Sizning xabaringiz"""
         )
 
         return {
@@ -1838,27 +2783,34 @@ def handle_broadcast(
 
     for user in users:
 
-        target_chat_id = user["telegram_chat_id"]
-
         try:
 
             telegram_send_message(
-                target_chat_id,
-                message
+                user["telegram_chat_id"],
+                text
             )
 
             sent += 1
 
-        except Exception:
+        except Exception as error:
 
             failed += 1
 
+            print(
+                "Broadcast error:",
+                error
+            )
+
     telegram_send_message(
         chat_id,
+
         f"""📢 Broadcast yakunlandi.
 
 ✅ Yuborildi: {sent} ta
-❌ Xatolik: {failed} ta"""
+
+❌ Xatolik: {failed} ta
+
+👥 Jami: {len(users)} ta"""
     )
 
     return {
@@ -1952,32 +2904,41 @@ def handle_reminders():
 
     for user in candidates:
 
-        chat_id = user["telegram_chat_id"]
+        chat_id = user[
+            "telegram_chat_id"
+        ]
 
-        if user["last_reminder_sent_date"] == today:
+        if (
+            user[
+                "last_reminder_sent_date"
+            ]
+            == today
+        ):
+
             continue
 
         first_name = (
             user["first_name"]
-            or "Do'st"
+            or "Do‘st"
         )
 
         if (
             user["morning_time"] is None
-            or user["state"] == "waiting_morning_time"
+            or user["state"]
+            == "waiting_morning_time"
         ):
 
             text = f"""👋 Assalomu alaykum, {first_name}!
 
 ⏰ Kuningizni rejalashtirish uchun ertalabki vaqtingizni tanlang.
 
-📋 Vazifalaringizni tartibli boshlash uchun /start buyrug'ini bosing."""
+📋 Vazifalaringizni tartibli boshlash uchun /start buyrug‘ini bosing."""
 
         else:
 
             text = f"""👋 Salom, {first_name}!
 
-📋 Bir necha kundan beri yangi vazifa qo'shilmagan.
+📋 Bir necha kundan beri yangi vazifa qo‘shilmagan.
 
 Bugungi rejalaringizni yozib, kuningizni tartibli boshlang. 💪
 
@@ -2011,17 +2972,20 @@ Bugungi rejalaringizni yozib, kuningizni tartibli boshlang. 💪
 
                 update_conn.commit()
 
-            results.append({
-                "chat_id": chat_id,
-                "sent": True
-            })
+            results.append(
+                {
+                    "chat_id": chat_id,
+                    "sent": True
+                }
+            )
 
-        except Exception as e:
+        except Exception as error:
 
-            error_text = str(e)
+            error_text = str(error)
 
             is_blocked = (
-                "error_code': 403" in error_text
+                "error_code': 403"
+                in error_text
                 and
                 "bot was blocked by the user"
                 in error_text
@@ -2044,12 +3008,14 @@ Bugungi rejalaringizni yozib, kuningizni tartibli boshlang. 💪
 
                     update_conn.commit()
 
-            results.append({
-                "chat_id": chat_id,
-                "sent": False,
-                "blocked": is_blocked,
-                "error": error_text
-            })
+            results.append(
+                {
+                    "chat_id": chat_id,
+                    "sent": False,
+                    "blocked": is_blocked,
+                    "error": error_text
+                }
+            )
 
     return {
         "ok": True,
@@ -2068,23 +3034,22 @@ def telegram_webhook(
     update: dict
 ):
 
-    started_at = datetime.utcnow()
-
     try:
 
-        message = update.get("message") or {}
-        callback_query = update.get(
-            "callback_query"
-        ) or {}
+        message = (
+            update.get("message")
+            or {}
+        )
+
+        callback_query = (
+            update.get("callback_query")
+            or {}
+        )
 
         callback_message = (
             callback_query.get("message")
             or {}
         )
-
-        # -------------------------------------------------
-        # MESSAGE
-        # -------------------------------------------------
 
         chat = (
             message.get("chat")
@@ -2098,45 +3063,44 @@ def telegram_webhook(
 
             return {
                 "ok": True,
-                "route": "ignored"
+                "ignored": True
             }
 
-        text = (
+        message_text = (
             message.get("text")
             or ""
         ).strip()
 
-        # -------------------------------------------------
-        # USER INFO
-        # -------------------------------------------------
-
-        from_user = (
-            message.get("from")
-            or callback_query.get("from")
-            or {}
+        callback_data = (
+            callback_query.get("data")
+            or ""
         )
 
-        username = from_user.get(
-            "username"
+        username = (
+            message.get("from", {}).get("username")
+            or callback_query.get("from", {}).get("username")
+            or ""
         )
 
-        first_name = from_user.get(
-            "first_name"
+        first_name = (
+            message.get("from", {}).get("first_name")
+            or callback_query.get("from", {}).get("first_name")
+            or "Do‘st"
         )
 
         # -------------------------------------------------
-        # UPDATE ACTIVITY
+        # ACTIVITY
         # -------------------------------------------------
 
         update_user_activity(
             chat_id
         )
 
-        # =================================================
-        # /START
-        # =================================================
+        # -------------------------------------------------
+        # START
+        # -------------------------------------------------
 
-        if text == "/start":
+        if message_text == "/start":
 
             return handle_telegram_start(
                 chat_id,
@@ -2144,68 +3108,9 @@ def telegram_webhook(
                 first_name
             )
 
-        # =================================================
-        # /ADMIN
-        # =================================================
-
-        if text == "/admin":
-
-            return handle_admin(
-                chat_id
-            )
-
-        # =================================================
-        # /YAKUNLADIM
-        # =================================================
-
-        if text == "/yakunladim":
-
-            return handle_finish_day(
-                chat_id
-            )
-
-        # =================================================
-        # REPORTS
-        # =================================================
-
-        if text == "/hisobot":
-
-            return handle_daily_report(
-                chat_id
-            )
-
-        if text == "/haftalik":
-
-            return handle_weekly_report(
-                chat_id
-            )
-
-        if text == "/oylik":
-
-            return handle_monthly_report(
-                chat_id
-            )
-
-        if text == "/yillik":
-
-            return handle_yearly_report(
-                chat_id
-            )
-
-        # =================================================
-        # BROADCAST
-        # =================================================
-
-        if text.startswith("/xabar"):
-
-            return handle_broadcast(
-                chat_id,
-                text
-            )
-
-        # =================================================
+        # -------------------------------------------------
         # CALLBACK
-        # =================================================
+        # -------------------------------------------------
 
         if callback_query:
 
@@ -2213,13 +3118,10 @@ def telegram_webhook(
                 callback_query.get("id")
             )
 
-            callback_data = (
-                callback_query.get("data")
-                or ""
-            )
-
             callback_message_id = (
-                callback_message.get("message_id")
+                callback_message.get(
+                    "message_id"
+                )
             )
 
             # ---------------------------------------------
@@ -2230,18 +3132,18 @@ def telegram_webhook(
                 "morning_time|"
             ):
 
-                parts = callback_data.split(
-                    "|",
-                    1
+                time_value = (
+                    callback_data.split(
+                        "|",
+                        1
+                    )[1]
                 )
 
-                if len(parts) == 2:
-
-                    return handle_morning_time(
-                        chat_id,
-                        parts[1],
-                        callback_query_id
-                    )
+                return handle_morning_time(
+                    chat_id,
+                    time_value,
+                    callback_query_id
+                )
 
             # ---------------------------------------------
             # TASK STATUS
@@ -2251,16 +3153,20 @@ def telegram_webhook(
                 "task_status|"
             ):
 
-                parts = callback_data.split(
-                    "|"
+                parts = (
+                    callback_data.split("|")
                 )
 
                 if len(parts) == 3:
 
+                    task_id = parts[1]
+
+                    status = parts[2]
+
                     return handle_task_status(
                         chat_id,
-                        parts[1],
-                        parts[2],
+                        task_id,
+                        status,
                         callback_query_id,
                         callback_message_id
                     )
@@ -2278,24 +3184,76 @@ def telegram_webhook(
                 "route": "callback_ignored"
             }
 
-        # =================================================
-        # COMMANDS
-        # =================================================
+        # -------------------------------------------------
+        # YAKUNLADIM
+        # -------------------------------------------------
 
-        if text.startswith("/"):
+        if message_text == "/yakunladim":
+
+            return handle_finish_day(
+                chat_id
+            )
+
+        # -------------------------------------------------
+        # REPORTS
+        # -------------------------------------------------
+
+        if message_text == "/hisobot":
+
+            return handle_daily_report(
+                chat_id
+            )
+
+        if message_text == "/haftalik":
+
+            return handle_weekly_report(
+                chat_id
+            )
+
+        if message_text == "/oylik":
+
+            return handle_monthly_report(
+                chat_id
+            )
+
+        if message_text == "/yillik":
+
+            return handle_yearly_report(
+                chat_id
+            )
+
+        # -------------------------------------------------
+        # ADMIN
+        # -------------------------------------------------
+
+        if message_text == "/admin":
+
+            return handle_admin(
+                chat_id
+            )
+
+        # -------------------------------------------------
+        # BROADCAST
+        # -------------------------------------------------
+
+        if message_text.startswith(
+            "/xabar"
+        ):
+
+            return handle_broadcast(
+                chat_id,
+                message_text
+            )
+
+        # -------------------------------------------------
+        # UNKNOWN COMMAND
+        # -------------------------------------------------
+
+        if message_text.startswith("/"):
 
             telegram_send_message(
                 chat_id,
-                """⚠️ Bu buyruq mavjud emas.
-
-Mavjud buyruqlar:
-
-/start
-/yakunladim
-/hisobot
-/haftalik
-/oylik
-/yillik"""
+                "⚠️ Bu buyruq mavjud emas."
             )
 
             return {
@@ -2303,20 +3261,20 @@ Mavjud buyruqlar:
                 "route": "unknown_command"
             }
 
-        # =================================================
-        # ORDINARY TEXT → CREATE TASKS
-        # =================================================
+        # -------------------------------------------------
+        # TASK TEXT
+        # -------------------------------------------------
 
-        if text:
+        if message_text:
 
             return handle_create_tasks(
                 chat_id,
-                text
+                message_text
             )
 
-        # =================================================
+        # -------------------------------------------------
         # LEGACY
-        # =================================================
+        # -------------------------------------------------
 
         return proxy_to_legacy(
             update
@@ -2326,33 +3284,21 @@ Mavjud buyruqlar:
 
         raise
 
-    except Exception as e:
+    except Exception as error:
 
         print(
             "TELEGRAM WEBHOOK ERROR:",
-            repr(e)
+            repr(error)
         )
 
         raise HTTPException(
             status_code=500,
-            detail=str(e)
-        )
-
-    finally:
-
-        duration = (
-            datetime.utcnow()
-            - started_at
-        ).total_seconds()
-
-        print(
-            f"Telegram webhook: "
-            f"{duration:.3f}s"
+            detail=str(error)
         )
 
 
 # =========================================================
-# REMINDER ENDPOINT
+# REMINDER API
 # =========================================================
 
 @router.post("/reminders/run")
@@ -2364,11 +3310,11 @@ def run_reminders(
 
 
 # =========================================================
-# SIMPLE STATUS
+# STATUS
 # =========================================================
 
 @router.get("/status")
-def status():
+def get_status():
 
     return {
         "ok": True,
@@ -2472,7 +3418,7 @@ def task_status_api(
 
 
 # =========================================================
-# FINISH DAY API
+# FINISH API
 # =========================================================
 
 @router.post("/finish")
@@ -2486,10 +3432,12 @@ def finish_api(
 
 
 # =========================================================
-# REPORT API
+# REPORT APIs
 # =========================================================
 
-@router.get("/reports/daily/{chat_id}")
+@router.get(
+    "/reports/daily/{chat_id}"
+)
 def daily_report_api(
     chat_id: int
 ):
@@ -2499,7 +3447,9 @@ def daily_report_api(
     )
 
 
-@router.get("/reports/weekly/{chat_id}")
+@router.get(
+    "/reports/weekly/{chat_id}"
+)
 def weekly_report_api(
     chat_id: int
 ):
@@ -2509,7 +3459,9 @@ def weekly_report_api(
     )
 
 
-@router.get("/reports/monthly/{chat_id}")
+@router.get(
+    "/reports/monthly/{chat_id}"
+)
 def monthly_report_api(
     chat_id: int
 ):
@@ -2519,7 +3471,9 @@ def monthly_report_api(
     )
 
 
-@router.get("/reports/yearly/{chat_id}")
+@router.get(
+    "/reports/yearly/{chat_id}"
+)
 def yearly_report_api(
     chat_id: int
 ):
@@ -2530,7 +3484,7 @@ def yearly_report_api(
 
 
 # =========================================================
-# LEGACY BACKEND BRIDGE
+# LEGACY BRIDGE
 # =========================================================
 
 def proxy_to_legacy(
