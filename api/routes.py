@@ -187,9 +187,11 @@ def is_admin(chat_id: int) -> bool:
     return str(chat_id) == str(ADMIN_CHAT_ID)
 
 
-def update_user_activity(chat_id: int):
+# =========================================================
+# OPTIMIZED ACTIVITY UPDATE
+# =========================================================
 
-    today = get_today()
+def update_user_activity(chat_id: int):
 
     with get_connection() as conn:
 
@@ -198,13 +200,14 @@ def update_user_activity(chat_id: int):
             cur.execute(
                 """
                 UPDATE public.users
-                SET last_active_date = %s
+                SET last_active_date =
+                    (
+                        CURRENT_TIMESTAMP
+                        AT TIME ZONE 'Asia/Tashkent'
+                    )::date
                 WHERE telegram_chat_id = %s
                 """,
-                (
-                    today,
-                    chat_id
-                )
+                (chat_id,)
             )
 
         conn.commit()
@@ -560,7 +563,11 @@ def handle_telegram_start(
                     SET
                         first_name = %s,
                         telegram_username = %s,
-                        last_active_date = %s,
+                        last_active_date =
+                            (
+                                CURRENT_TIMESTAMP
+                                AT TIME ZONE 'Asia/Tashkent'
+                            )::date,
 
                         state = CASE
                             WHEN state = 'blocked'
@@ -573,7 +580,6 @@ def handle_telegram_start(
                     (
                         first_name,
                         username,
-                        get_today(),
                         chat_id
                     )
                 )
@@ -622,15 +628,17 @@ Siz allaqachon ro‘yxatdan o‘tgansiz. ✅
                     %s,
                     'waiting_morning_time',
                     'trial',
-                    %s
+                    (
+                        CURRENT_TIMESTAMP
+                        AT TIME ZONE 'Asia/Tashkent'
+                    )::date
                 )
                 """,
                 (
                     chat_id,
                     username,
                     first_name,
-                    TIMEZONE,
-                    get_today()
+                    TIMEZONE
                 )
             )
 
@@ -722,7 +730,11 @@ def handle_morning_time(
                 SET
                     morning_time = %s,
                     state = 'active',
-                    last_active_date = %s
+                    last_active_date =
+                        (
+                            CURRENT_TIMESTAMP
+                            AT TIME ZONE 'Asia/Tashkent'
+                        )::date
                 WHERE telegram_chat_id = %s
                   AND (
                       morning_time IS NULL
@@ -731,7 +743,6 @@ def handle_morning_time(
                 """,
                 (
                     time_value,
-                    get_today(),
                     chat_id
                 )
             )
@@ -945,14 +956,12 @@ def handle_create_tasks(
 
     response_parts = []
 
-    # NEW TASKS
     if added_count > 0:
 
         response_parts.append(
             f"🎉 {added_count} ta yangi vazifa qabul qilindi va saqlandi!"
         )
 
-    # DUPLICATES
     if duplicate_count > 0:
 
         response_parts.append(
@@ -963,12 +972,10 @@ def handle_create_tasks(
             "♻️ Qayta saqlanmadi."
         )
 
-    # FINAL
     response_parts.append(
         "🤲 Kuningiz barakatli o‘tsin!"
     )
 
-    # /yakunladim only when NEW TASK exists
     if added_count > 0:
 
         response_parts.append(
@@ -1054,10 +1061,6 @@ def handle_finish_day(
 
             pending_tasks = cur.fetchall()
 
-    # -----------------------------------------------------
-    # NO PENDING
-    # -----------------------------------------------------
-
     if not pending_tasks:
 
         with get_connection() as conn:
@@ -1088,10 +1091,6 @@ def handle_finish_day(
             "all_completed": True
         }
 
-    # -----------------------------------------------------
-    # MARK DAY COMPLETED
-    # -----------------------------------------------------
-
     with get_connection() as conn:
 
         with conn.cursor() as cur:
@@ -1106,10 +1105,6 @@ def handle_finish_day(
             )
 
         conn.commit()
-
-    # -----------------------------------------------------
-    # SEND EACH TASK
-    # -----------------------------------------------------
 
     for index, task in enumerate(
         pending_tasks,
@@ -1177,7 +1172,28 @@ def handle_task_status(
         }
 
     # -----------------------------------------------------
-    # ATOMIC UPDATE
+    # USER
+    # -----------------------------------------------------
+
+    user = get_user_by_chat_id(
+        chat_id
+    )
+
+    if not user:
+
+        if callback_query_id:
+
+            telegram_answer_callback(
+                callback_query_id,
+                "Foydalanuvchi topilmadi."
+            )
+
+        return {
+            "ok": False
+        }
+
+    # -----------------------------------------------------
+    # ATOMIC + SECURE UPDATE
     # -----------------------------------------------------
 
     with get_connection() as conn:
@@ -1191,12 +1207,14 @@ def handle_task_status(
                 UPDATE public.tasks
                 SET status = %s
                 WHERE id = %s
+                  AND user_id = %s
                   AND status = 'pending'
                 RETURNING *
                 """,
                 (
                     status,
-                    task_id
+                    task_id,
+                    user["id"]
                 )
             )
 
@@ -1205,7 +1223,7 @@ def handle_task_status(
         conn.commit()
 
     # -----------------------------------------------------
-    # ALREADY PROCESSED
+    # ALREADY PROCESSED / NOT OWNER
     # -----------------------------------------------------
 
     if not task:
@@ -1263,18 +1281,8 @@ def handle_task_status(
             )
 
     # -----------------------------------------------------
-    # USER
+    # TODAY
     # -----------------------------------------------------
-
-    user = get_user_by_chat_id(
-        chat_id
-    )
-
-    if not user:
-
-        return {
-            "ok": True
-        }
 
     today = get_today()
 
@@ -1391,10 +1399,6 @@ def handle_daily_report(
 
     yesterday = today - timedelta(days=1)
 
-    # -----------------------------------------------------
-    # GET TODAY + YESTERDAY
-    # -----------------------------------------------------
-
     with get_connection() as conn:
 
         with conn.cursor(
@@ -1440,10 +1444,6 @@ def handle_daily_report(
     yesterday_stats = calculate_stats(
         yesterday_tasks
     )
-
-    # -----------------------------------------------------
-    # BUILD REPORT
-    # -----------------------------------------------------
 
     lines = []
 
@@ -1520,7 +1520,6 @@ def handle_daily_report(
         f"🟩 Bajarildi    {today_stats['completed']}"
     )
 
-    # pending ham bajarilmagan hisoblanadi
     not_completed = (
         today_stats["failed"]
         + today_stats["pending"]
@@ -1570,10 +1569,6 @@ def handle_daily_report(
             f"{yesterday_stats['completed']} / "
             f"{yesterday_stats['total']} vazifa bajarildi"
         )
-
-    # -----------------------------------------------------
-    # MOTIVATION
-    # -----------------------------------------------------
 
     motivation = get_motivation(
         today_stats["percent"]
@@ -3112,8 +3107,6 @@ def telegram_webhook(
                         callback_query_id,
                         callback_message_id
                     )
-
-            # UNKNOWN CALLBACK
 
             if callback_query_id:
 
