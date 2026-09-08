@@ -2787,12 +2787,6 @@ def handle_reminders():
                     u.morning_time,
                     u.state,
                     u.last_reminder_sent_date,
-
-                    (
-                        u.created_at
-                        AT TIME ZONE 'Asia/Tashkent'
-                    )::date AS created_date,
-
                     MAX(t.task_date) AS last_task_date
 
                 FROM public.users u
@@ -2800,27 +2794,18 @@ def handle_reminders():
                 LEFT JOIN public.tasks t
                     ON t.user_id = u.id
 
-                WHERE u.telegram_chat_id IS NOT NULL
+                WHERE
+                    u.telegram_chat_id IS NOT NULL
+                    AND u.state != 'blocked'
 
-                GROUP BY u.id
+                GROUP BY
+                    u.id
 
                 HAVING
 
                     (
-                        (
-                            u.morning_time IS NULL
-                            OR u.state = 'waiting_morning_time'
-                        )
-
-                        AND
-
-                        (
-                            %s -
-                            (
-                                u.created_at
-                                AT TIME ZONE 'Asia/Tashkent'
-                            )::date
-                        ) BETWEEN 1 AND 3
+                        u.morning_time IS NULL
+                        OR u.state = 'waiting_morning_time'
                     )
 
                     OR
@@ -2836,10 +2821,7 @@ def handle_reminders():
                         )
                     )
                 """,
-                (
-                    today,
-                    today
-                )
+                (today,)
             )
 
             candidates = cur.fetchall()
@@ -2848,6 +2830,8 @@ def handle_reminders():
 
         chat_id = user["telegram_chat_id"]
 
+        # Bugun allaqachon reminder yuborilgan bo‘lsa
+        # qayta yubormaymiz
         if (
             user["last_reminder_sent_date"]
             == today
@@ -2860,6 +2844,11 @@ def handle_reminders():
             or "Do‘st"
         )
 
+        # =====================================================
+        # CANDIDATE A
+        # Vaqt tanlamagan user
+        # =====================================================
+
         if (
             user["morning_time"] is None
             or user["state"] == "waiting_morning_time"
@@ -2867,9 +2856,52 @@ def handle_reminders():
 
             text = f"""👋 Assalomu alaykum, {first_name}!
 
-⏰ Kuningizni rejalashtirish uchun ertalabki vaqtingizni tanlang.
+⏰ Siz ertalabki vaqtingizni hali tanlamagansiz.
 
-📋 Vazifalaringizni tartibli boshlash uchun /start buyrug‘ini bosing."""
+🕐 Iltimos, vaqt tanlashni yakunlang. Shundan so‘ng botdan bemalol foydalanishingiz mumkin. 😊
+
+Quyidagi vaqtlardan birini tanlang:"""
+
+            times = [
+                "02:00",
+                "03:00",
+                "04:00",
+                "05:00",
+                "06:00",
+                "07:00",
+                "08:00",
+                "09:00",
+                "10:00"
+            ]
+
+            keyboard = []
+
+            for i in range(
+                0,
+                len(times),
+                3
+            ):
+
+                keyboard.append(
+                    [
+                        {
+                            "text": time,
+                            "callback_data":
+                                f"morning_time|{time}"
+                        }
+
+                        for time in times[i:i + 3]
+                    ]
+                )
+
+            reply_markup = {
+                "inline_keyboard": keyboard
+            }
+
+        # =====================================================
+        # CANDIDATE B
+        # 2+ kun vazifa yozmagan user
+        # =====================================================
 
         else:
 
@@ -2881,13 +2913,30 @@ Bugungi rejalaringizni yozib, kuningizni tartibli boshlang. 💪
 
 ✍️ Vazifalaringizni shu yerga yuboring."""
 
+            reply_markup = None
+
+        # =====================================================
+        # SEND
+        # =====================================================
+
         try:
 
-            telegram_send_message(
-                chat_id,
-                text
-            )
+            if reply_markup:
 
+                telegram_send_message_with_keyboard(
+                    chat_id,
+                    text,
+                    reply_markup
+                )
+
+            else:
+
+                telegram_send_message(
+                    chat_id,
+                    text
+                )
+
+            # Reminder muvaffaqiyatli yuborildi
             with get_connection() as update_conn:
 
                 with update_conn.cursor() as update_cur:
@@ -2928,6 +2977,7 @@ Bugungi rejalaringizni yozib, kuningizni tartibli boshlang. 💪
                 in error_text
             )
 
+            # User botni bloklagan bo‘lsa
             if is_blocked:
 
                 with get_connection() as update_conn:
@@ -2960,8 +3010,6 @@ Bugungi rejalaringizni yozib, kuningizni tartibli boshlang. 💪
         "checked": len(candidates),
         "results": results
     }
-
-
 # =========================================================
 # TELEGRAM WEBHOOK
 # =========================================================
