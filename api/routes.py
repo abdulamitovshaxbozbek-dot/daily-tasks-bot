@@ -3262,16 +3262,23 @@ def handle_voice_message(
             "\n".join(tasks)
         )
 
-    except Exception:
+  except Exception as error:
 
-        telegram_send_message(
-            chat_id,
-            "⚠️ Ovozli xabarni qayta ishlashda xatolik yuz berdi. Qayta urinib ko‘ring."
-        )
+    print(
+        "VOICE ERROR:",
+        repr(error)
+    )
 
-        return {
-            "ok": False
-        }
+    telegram_send_message(
+        chat_id,
+        "⚠️ Ovozli xabarni qayta ishlashda xatolik yuz berdi. Qayta urinib ko‘ring."
+    )
+
+    return {
+        "ok": False,
+        "error": str(error)
+    }
+
 # =========================================================
 # TELEGRAM WEBHOOK
 # =========================================================
