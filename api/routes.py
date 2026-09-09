@@ -3016,6 +3016,262 @@ Masalan:
         "checked": len(candidates),
         "results": results
     }
+    
+# =========================================================
+# GROQ VOICE TRANSCRIPTION
+# =========================================================
+
+def groq_transcribe_telegram_voice(
+    file_id: str
+) -> str:
+
+    if not TELEGRAM_TOKEN:
+        raise RuntimeError(
+            "TELEGRAM_TOKEN sozlanmagan"
+        )
+
+    if not GROQ_API_KEY:
+        raise RuntimeError(
+            "GROQ_API_KEY sozlanmagan"
+        )
+
+    # 1. Telegram'dan file_path olish
+    telegram_file_response = requests.get(
+        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile",
+        params={
+            "file_id": file_id
+        },
+        timeout=15
+    )
+
+    if telegram_file_response.status_code != 200:
+        raise RuntimeError(
+            "Telegram fayl ma'lumotini olishda xatolik"
+        )
+
+    telegram_file_data = (
+        telegram_file_response.json()
+    )
+
+    file_path = (
+        telegram_file_data
+        .get("result", {})
+        .get("file_path")
+    )
+
+    if not file_path:
+        raise RuntimeError(
+            "Telegram file_path qaytarmadi"
+        )
+
+    # 2. Ovoz faylini Telegram'dan yuklab olish
+    audio_response = requests.get(
+        f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}",
+        timeout=30
+    )
+
+    if audio_response.status_code != 200:
+        raise RuntimeError(
+            "Ovoz faylini yuklab olishda xatolik"
+        )
+
+    # 3. Groq Whisper'ga yuborish
+    groq_response = requests.post(
+        "https://api.groq.com/openai/v1/audio/transcriptions",
+        headers={
+            "Authorization": f"Bearer {GROQ_API_KEY}"
+        },
+        files={
+            "file": (
+                "voice.ogg",
+                audio_response.content,
+                "audio/ogg"
+            )
+        },
+        data={
+            "model": "whisper-large-v3-turbo",
+            "language": "uz",
+            "response_format": "json",
+            "temperature": "0"
+        },
+        timeout=60
+    )
+
+    if groq_response.status_code != 200:
+        raise RuntimeError(
+            "Groq Whisper xatolik qaytardi"
+        )
+
+    result = groq_response.json()
+
+    transcript = (
+        result.get("text")
+        or ""
+    ).strip()
+
+    return transcript
+
+# =========================================================
+# GROQ TASK PARSER
+# =========================================================
+
+def groq_parse_tasks(
+    transcript: str
+) -> list[str]:
+
+    if not transcript.strip():
+        return []
+
+    groq_response = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": "openai/gpt-oss-20b",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": """
+Siz o‘zbek tilidagi ovozli xabardan kundalik bajariladigan vazifalarni ajratuvchi yordamchisiz.
+
+Faqat aniq bajarilishi kerak bo‘lgan ishlarni tasks ichiga yozing.
+
+Qoidalar:
+- "xo‘sh", "keyin", "yana", "shuningdek", "demak", "mayli" kabi fillerlarni e'tiborsiz qoldiring.
+- Bir gapda bir nechta vazifa bo‘lsa, ularni alohida tasklarga ajrating.
+- Vazifa nomini qisqa va mazmunini saqlagan holda yozing.
+- Salomlashish, savol, fikr, izoh yoki minnatdorchilikni vazifa deb qabul qilmang.
+- Agar aniq bajariladigan vazifa bo‘lmasa, tasks=[] qaytaring.
+"""
+                },
+                {
+                    "role": "user",
+                    "content": transcript
+                }
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "task_list",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "tasks": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "required": ["tasks"],
+                        "additionalProperties": False
+                    }
+                }
+            }
+        },
+        timeout=60
+    )
+
+    if groq_response.status_code != 200:
+        raise RuntimeError(
+            "Groq task parser xatolik qaytardi"
+        )
+
+    content = (
+        groq_response.json()
+        .get("choices", [{}])[0]
+        .get("message", {})
+        .get("content")
+        or ""
+    )
+
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return []
+
+    tasks = data.get("tasks", [])
+
+    return [
+        task.strip()
+        for task in tasks
+        if isinstance(task, str) and task.strip()
+    ]
+
+# =========================================================
+# HANDLE VOICE MESSAGE
+# =========================================================
+
+def handle_voice_message(
+    chat_id: int,
+    voice: dict
+):
+
+    file_id = voice.get("file_id")
+
+    if not file_id:
+
+        telegram_send_message(
+            chat_id,
+            "⚠️ Ovoz faylini topa olmadim. Qayta yuboring."
+        )
+
+        return {
+            "ok": False
+        }
+
+    try:
+
+        transcript = groq_transcribe_telegram_voice(
+            file_id
+        )
+
+        if not transcript:
+
+            telegram_send_message(
+                chat_id,
+                "⚠️ Ovozdan matnni tushunmadim. Qayta ayting."
+            )
+
+            return {
+                "ok": False
+            }
+
+        tasks = groq_parse_tasks(
+            transcript
+        )
+
+        if not tasks:
+
+            telegram_send_message(
+                chat_id,
+                "Tushunmadim, qayta ayting."
+            )
+
+            return {
+                "ok": True,
+                "route": "voice",
+                "tasks": []
+            }
+
+        return handle_create_tasks(
+            chat_id,
+            "\n".join(tasks)
+        )
+
+    except Exception:
+
+        telegram_send_message(
+            chat_id,
+            "⚠️ Ovozli xabarni qayta ishlashda xatolik yuz berdi. Qayta urinib ko‘ring."
+        )
+
+        return {
+            "ok": False
+        }
 # =========================================================
 # TELEGRAM WEBHOOK
 # =========================================================
@@ -3250,6 +3506,17 @@ def telegram_webhook(
                 "route": "unknown_command"
             }
 
+        # -------------------------------------------------
+        # VOICE MESSAGE
+        # -------------------------------------------------
+
+        if message.get("voice"):
+
+            return handle_voice_message(
+                chat_id,
+                message["voice"]
+            )
+            
         # -------------------------------------------------
         # TASK TEXT
         # -------------------------------------------------
