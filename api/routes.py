@@ -229,12 +229,11 @@ def clean_task_text(text: str) -> str:
 
 
 def normalize_task(text: str) -> str:
-
-    return (
-        clean_task_text(text)
-        .lower()
-        .replace("\n", " ")
-    )
+    """Takrorlarni yaxshiroq ushlash uchun kuchaytirilgan normalizatsiya"""
+    text = clean_task_text(text).lower()
+    text = re.sub(r"[^\w\s]", " ", text)   # tinish belgilarni olib tashlash
+    text = re.sub(r"\s+", " ", text)       # ortiqcha bo‘shliqlarni tozalash
+    return text.strip()
 
 
 def calculate_stats(tasks):
@@ -901,6 +900,7 @@ def handle_create_tasks(
 
     added_count = 0
     duplicate_count = 0
+    added_tasks = []
 
     # -----------------------------------------------------
     # INSERT TASKS
@@ -919,7 +919,6 @@ def handle_create_tasks(
                 if normalized in existing:
 
                     duplicate_count += 1
-
                     continue
 
                 cur.execute(
@@ -944,10 +943,8 @@ def handle_create_tasks(
                     )
                 )
 
-                existing.add(
-                    normalized
-                )
-
+                existing.add(normalized)
+                added_tasks.append(task_text)
                 added_count += 1
 
         conn.commit()
@@ -961,21 +958,23 @@ def handle_create_tasks(
     if added_count > 0:
 
         response_parts.append(
-            f"🎉 {added_count} ta yangi vazifa qabul qilindi va saqlandi!"
+            f"🎉 {added_count} ta yangi vazifa qabul qilindi va saqlandi:\n"
         )
+
+        for i, task in enumerate(added_tasks, 1):
+            response_parts.append(f"{i}. {task}")
 
     if duplicate_count > 0:
 
         response_parts.append(
-            f"🔄 {duplicate_count} ta vazifa bugun allaqachon qo‘shilgan."
+            f"\n🔄 {duplicate_count} ta vazifa bugun allaqachon qo‘shilgan."
         )
-
         response_parts.append(
             "♻️ Qayta saqlanmadi."
         )
 
     response_parts.append(
-        "🤲 Kuningiz barakatli o‘tsin!"
+        "\n🤲 Kuningiz barakatli o‘tsin!"
     )
 
     if added_count > 0:
@@ -986,7 +985,7 @@ def handle_create_tasks(
 
     telegram_send_message(
         chat_id,
-        "\n\n".join(response_parts)
+        "\n".join(response_parts)
     )
 
     return {
@@ -3127,6 +3126,7 @@ def groq_transcribe_telegram_voice(
         },
         data={
             "model": "whisper-large-v3-turbo",
+            "language": "uz",
             "response_format": "json",
             "temperature": "0"
         },
