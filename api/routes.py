@@ -3213,7 +3213,7 @@ def groq_parse_tasks(
             "messages": [
                 {
                     "role": "system",
-                    "content": """
+                   "content": """
 Siz o‘zbek tilidagi ovozli xabardan kundalik bajariladigan vazifalarni ajratuvchi yordamchisiz.
 
 Faqat aniq bajarilishi kerak bo‘lgan ishlarni tasks ichiga yozing.
@@ -3224,6 +3224,15 @@ Qoidalar:
 - Vazifa nomini qisqa va mazmunini saqlagan holda yozing.
 - Salomlashish, savol, fikr, izoh yoki minnatdorchilikni vazifa deb qabul qilmang.
 - Agar aniq bajariladigan vazifa bo‘lmasa, tasks=[] qaytaring.
+
+Muhim:
+- Ovozdan kelgan matnda xatolik bo‘lsa, ularni to‘g‘ri o‘zbekcha yozuvga tuzatib yozing.
+- Misollar:
+  "kitap okuş" → "kitob o‘qish"
+  "sözış" yoki "söz yotlaş" → "so‘z yodlash"
+  "sport bulanş uygulayış" → "sport bilan shug‘ullanish"
+  "ingliz tili" bilan bog‘liq narsalarni to‘g‘ri yozing.
+- Har doim to‘g‘ri o‘zbekcha imlo ishlating (o‘, g‘, sh, ch va h.k.).
 """
                 },
                 {
