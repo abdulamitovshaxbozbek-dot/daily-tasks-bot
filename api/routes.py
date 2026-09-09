@@ -3127,7 +3127,6 @@ def groq_transcribe_telegram_voice(
         },
         data={
             "model": "whisper-large-v3-turbo",
-            "language": "uz",
             "response_format": "json",
             "temperature": "0"
         },
