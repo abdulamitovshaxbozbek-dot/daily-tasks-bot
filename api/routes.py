@@ -1,4 +1,3 @@
-```python
 import os
 import re
 import json
@@ -4331,4 +4330,3 @@ def proxy_to_legacy(
         )
 
     return response.json()
-```
