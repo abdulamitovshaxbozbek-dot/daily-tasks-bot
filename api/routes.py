@@ -784,9 +784,9 @@ def handle_morning_time(
 
 def handle_create_tasks(
     chat_id: int,
-    text: str
+    text: str,
+    from_voice: bool = False
 ):
-
     user = get_user_by_chat_id(
         chat_id
     )
@@ -949,52 +949,57 @@ def handle_create_tasks(
 
         conn.commit()
 
-    # -----------------------------------------------------
-    # RESPONSE
-    # -----------------------------------------------------
+# -----------------------------------------------------
+# RESPONSE
+# -----------------------------------------------------
 
-    response_parts = []
+response_parts = []
 
-    if added_count > 0:
+if added_count > 0:
 
+    if from_voice:
+        # Faqat ovozdan kelganda ro‘yxatni ko‘rsatamiz
         response_parts.append(
             f"🎉 {added_count} ta yangi vazifa qabul qilindi va saqlandi:\n"
         )
-
         for i, task in enumerate(added_tasks, 1):
             response_parts.append(f"{i}. {task}")
-
-    if duplicate_count > 0:
-
+    else:
+        # Matn yozganda oddiy xabar
         response_parts.append(
-            f"\n🔄 {duplicate_count} ta vazifa bugun allaqachon qo‘shilgan."
+            f"🎉 {added_count} ta yangi vazifa qabul qilindi va saqlandi!"
         )
-        response_parts.append(
-            "♻️ Qayta saqlanmadi."
-        )
+
+if duplicate_count > 0:
 
     response_parts.append(
-        "\n🤲 Kuningiz barakatli o‘tsin!"
+        f"\n🔄 {duplicate_count} ta vazifa bugun allaqachon qo‘shilgan."
+    )
+    response_parts.append(
+        "♻️ Qayta saqlanmadi."
     )
 
-    if added_count > 0:
+response_parts.append(
+    "\n🤲 Kuningiz barakatli o‘tsin!"
+)
 
-        response_parts.append(
-            "🏁 Kuningizni yakunlaganingizda /yakunladim buyrug‘ini yuboring."
-        )
+if added_count > 0:
 
-    telegram_send_message(
-        chat_id,
-        "\n".join(response_parts)
+    response_parts.append(
+        "🏁 Kuningizni yakunlaganingizda /yakunladim buyrug‘ini yuboring."
     )
 
-    return {
-        "ok": True,
-        "route": "create_tasks",
-        "added": added_count,
-        "duplicates": duplicate_count
-    }
+telegram_send_message(
+    chat_id,
+    "\n".join(response_parts)
+)
 
+return {
+    "ok": True,
+    "route": "create_tasks",
+    "added": added_count,
+    "duplicates": duplicate_count
+}
 
 # =========================================================
 # FINISH DAY
@@ -3472,6 +3477,7 @@ def handle_voice_message(
         result = handle_create_tasks(
             chat_id,
             task_text
+            from_voice=True
         )
 
         print(
