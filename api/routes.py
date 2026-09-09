@@ -1,5 +1,6 @@
 import os
 import re
+import json
 from datetime import date, timedelta
 from typing import Optional
 
@@ -30,6 +31,7 @@ router = APIRouter(prefix="/api")
 # =========================================================
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 LEGACY_BACKEND_URL = os.getenv(
     "LEGACY_BACKEND_URL"
