@@ -1173,10 +1173,6 @@ def handle_task_status(
             "ok": False
         }
 
-    # -----------------------------------------------------
-    # USER
-    # -----------------------------------------------------
-
     user = get_user_by_chat_id(
         chat_id
     )
@@ -1193,10 +1189,6 @@ def handle_task_status(
         return {
             "ok": False
         }
-
-    # -----------------------------------------------------
-    # ATOMIC + SECURE UPDATE
-    # -----------------------------------------------------
 
     with get_connection() as conn:
 
@@ -1224,10 +1216,6 @@ def handle_task_status(
 
         conn.commit()
 
-    # -----------------------------------------------------
-    # ALREADY PROCESSED / NOT OWNER
-    # -----------------------------------------------------
-
     if not task:
 
         if callback_query_id:
@@ -1241,10 +1229,6 @@ def handle_task_status(
             "ok": True,
             "already_processed": True
         }
-
-    # -----------------------------------------------------
-    # ANSWER CALLBACK
-    # -----------------------------------------------------
 
     if callback_query_id:
 
@@ -1262,10 +1246,6 @@ def handle_task_status(
                 "Bajarilmadi ❌"
             )
 
-    # -----------------------------------------------------
-    # DELETE TASK MESSAGE
-    # -----------------------------------------------------
-
     if message_id:
 
         try:
@@ -1282,15 +1262,7 @@ def handle_task_status(
                 error
             )
 
-    # -----------------------------------------------------
-    # TODAY
-    # -----------------------------------------------------
-
     today = get_today()
-
-    # -----------------------------------------------------
-    # PENDING COUNT
-    # -----------------------------------------------------
 
     with get_connection() as conn:
 
@@ -1312,20 +1284,12 @@ def handle_task_status(
 
             pending_count = cur.fetchone()[0]
 
-    # -----------------------------------------------------
-    # STILL PENDING
-    # -----------------------------------------------------
-
     if pending_count > 0:
 
         return {
             "ok": True,
             "pending": pending_count
         }
-
-    # -----------------------------------------------------
-    # CLAIM FINAL NOTIFICATION
-    # -----------------------------------------------------
 
     with get_connection() as conn:
 
@@ -1352,10 +1316,6 @@ def handle_task_status(
             claimant = cur.fetchone()
 
         conn.commit()
-
-    # -----------------------------------------------------
-    # SEND ONLY ONCE
-    # -----------------------------------------------------
 
     if claimant:
 
@@ -2832,8 +2792,6 @@ def handle_reminders():
 
         chat_id = user["telegram_chat_id"]
 
-        # Bugun allaqachon reminder yuborilgan bo‘lsa
-        # qayta yubormaymiz
         if (
             user["last_reminder_sent_date"]
             == today
@@ -2845,11 +2803,6 @@ def handle_reminders():
             user["first_name"]
             or "Do‘st"
         )
-
-        # =====================================================
-        # CANDIDATE A
-        # Vaqt tanlamagan user
-        # =====================================================
 
         if (
             user["morning_time"] is None
@@ -2895,14 +2848,10 @@ Quyidagi vaqtlardan birini tanlang:"""
                         for time in times[i:i + 3]
                     ]
                 )
+
             reply_markup = {
                 "inline_keyboard": keyboard
             }
-
-        # =====================================================
-        # CANDIDATE B
-        # 2+ kun vazifa yozmagan user
-        # =====================================================
 
         else:
 
@@ -2921,10 +2870,6 @@ Masalan:
 
             reply_markup = None
 
-        # =====================================================
-        # SEND
-        # =====================================================
-      
         try:
 
             if reply_markup:
@@ -2942,7 +2887,6 @@ Masalan:
                     text
                 )
 
-            # Reminder muvaffaqiyatli yuborildi
             with get_connection() as update_conn:
 
                 with update_conn.cursor() as update_cur:
@@ -2983,7 +2927,6 @@ Masalan:
                 in error_text
             )
 
-            # User botni bloklagan bo‘lsa
             if is_blocked:
 
                 with get_connection() as update_conn:
@@ -3016,7 +2959,8 @@ Masalan:
         "checked": len(candidates),
         "results": results
     }
-    
+
+
 # =========================================================
 # GROQ VOICE TRANSCRIPTION
 # =========================================================
@@ -3025,17 +2969,39 @@ def groq_transcribe_telegram_voice(
     file_id: str
 ) -> str:
 
+    print("========================================")
+    print("VOICE TRANSCRIBE START")
+    print("VOICE FILE ID:", file_id)
+    print("========================================")
+
     if not TELEGRAM_TOKEN:
+
+        print(
+            "VOICE ERROR: TELEGRAM_TOKEN sozlanmagan"
+        )
+
         raise RuntimeError(
             "TELEGRAM_TOKEN sozlanmagan"
         )
 
     if not GROQ_API_KEY:
+
+        print(
+            "VOICE ERROR: GROQ_API_KEY sozlanmagan"
+        )
+
         raise RuntimeError(
             "GROQ_API_KEY sozlanmagan"
         )
 
-    # 1. Telegram'dan file_path olish
+    # =====================================================
+    # 1. TELEGRAM GET FILE
+    # =====================================================
+
+    print(
+        "VOICE: Telegram getFile chaqirilmoqda..."
+    )
+
     telegram_file_response = requests.get(
         f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile",
         params={
@@ -3044,13 +3010,28 @@ def groq_transcribe_telegram_voice(
         timeout=15
     )
 
+    print(
+        "VOICE: Telegram getFile status:",
+        telegram_file_response.status_code
+    )
+
     if telegram_file_response.status_code != 200:
+
+        print(
+            "VOICE TELEGRAM GETFILE ERROR:",
+            telegram_file_response.text
+        )
+
         raise RuntimeError(
             "Telegram fayl ma'lumotini olishda xatolik"
         )
 
     telegram_file_data = (
         telegram_file_response.json()
+    )
+
+    print(
+        "VOICE: Telegram file response olindi"
     )
 
     file_path = (
@@ -3060,22 +3041,78 @@ def groq_transcribe_telegram_voice(
     )
 
     if not file_path:
+
+        print(
+            "VOICE ERROR: Telegram file_path yo‘q"
+        )
+
+        print(
+            "VOICE TELEGRAM RESPONSE:",
+            telegram_file_data
+        )
+
         raise RuntimeError(
             "Telegram file_path qaytarmadi"
         )
 
-    # 2. Ovoz faylini Telegram'dan yuklab olish
+    print(
+        "VOICE FILE PATH:",
+        file_path
+    )
+
+    # =====================================================
+    # 2. TELEGRAM'DAN OGG YUKLASH
+    # =====================================================
+
+    print(
+        "VOICE: Ovoz fayli Telegram'dan yuklanmoqda..."
+    )
+
     audio_response = requests.get(
         f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}",
         timeout=30
     )
 
+    print(
+        "VOICE: Audio download status:",
+        audio_response.status_code
+    )
+
     if audio_response.status_code != 200:
+
+        print(
+            "VOICE AUDIO DOWNLOAD ERROR:",
+            audio_response.text
+        )
+
         raise RuntimeError(
             "Ovoz faylini yuklab olishda xatolik"
         )
 
-    # 3. Groq Whisper'ga yuborish
+    print(
+        "VOICE AUDIO SIZE:",
+        len(audio_response.content),
+        "bytes"
+    )
+
+    if not audio_response.content:
+
+        print(
+            "VOICE ERROR: Audio fayl bo‘sh"
+        )
+
+        raise RuntimeError(
+            "Ovoz fayli bo‘sh"
+        )
+
+    # =====================================================
+    # 3. GROQ WHISPER
+    # =====================================================
+
+    print(
+        "VOICE: Groq Whisper'ga yuborilmoqda..."
+    )
+
     groq_response = requests.post(
         "https://api.groq.com/openai/v1/audio/transcriptions",
         headers={
@@ -3097,7 +3134,18 @@ def groq_transcribe_telegram_voice(
         timeout=60
     )
 
+    print(
+        "VOICE: Groq Whisper status:",
+        groq_response.status_code
+    )
+
     if groq_response.status_code != 200:
+
+        print(
+            "VOICE GROQ WHISPER ERROR:",
+            groq_response.text
+        )
+
         raise RuntimeError(
             "Groq Whisper xatolik qaytardi"
         )
@@ -3109,7 +3157,17 @@ def groq_transcribe_telegram_voice(
         or ""
     ).strip()
 
+    print(
+        "VOICE TRANSCRIPT:",
+        transcript
+    )
+
+    print(
+        "VOICE TRANSCRIBE DONE"
+    )
+
     return transcript
+
 
 # =========================================================
 # GROQ TASK PARSER
@@ -3119,8 +3177,32 @@ def groq_parse_tasks(
     transcript: str
 ) -> list[str]:
 
+    print("========================================")
+    print("VOICE TASK PARSER START")
+    print("PARSER TRANSCRIPT:", transcript)
+    print("========================================")
+
     if not transcript.strip():
+
+        print(
+            "VOICE TASK PARSER: transcript bo‘sh"
+        )
+
         return []
+
+    if not GROQ_API_KEY:
+
+        print(
+            "VOICE TASK PARSER ERROR: GROQ_API_KEY yo‘q"
+        )
+
+        raise RuntimeError(
+            "GROQ_API_KEY sozlanmagan"
+        )
+
+    print(
+        "VOICE TASK PARSER: Groq API'ga yuborilmoqda..."
+    )
 
     groq_response = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
@@ -3175,31 +3257,78 @@ Qoidalar:
         timeout=60
     )
 
+    print(
+        "VOICE TASK PARSER STATUS:",
+        groq_response.status_code
+    )
+
     if groq_response.status_code != 200:
+
+        print(
+            "VOICE GROQ TASK PARSER ERROR:",
+            groq_response.text
+        )
+
         raise RuntimeError(
             "Groq task parser xatolik qaytardi"
         )
 
+    parser_response = groq_response.json()
+
+    print(
+        "VOICE TASK PARSER RESPONSE:",
+        parser_response
+    )
+
     content = (
-        groq_response.json()
+        parser_response
         .get("choices", [{}])[0]
         .get("message", {})
         .get("content")
         or ""
     )
 
+    print(
+        "VOICE TASK PARSER CONTENT:",
+        content
+    )
+
     try:
+
         data = json.loads(content)
-    except json.JSONDecodeError:
+
+    except json.JSONDecodeError as error:
+
+        print(
+            "VOICE TASK PARSER JSON ERROR:",
+            repr(error)
+        )
+
         return []
 
-    tasks = data.get("tasks", [])
+    tasks = data.get(
+        "tasks",
+        []
+    )
 
-    return [
+    cleaned_tasks = [
         task.strip()
         for task in tasks
-        if isinstance(task, str) and task.strip()
+        if isinstance(task, str)
+        and task.strip()
     ]
+
+    print(
+        "VOICE PARSED TASKS:",
+        cleaned_tasks
+    )
+
+    print(
+        "VOICE TASK PARSER DONE"
+    )
+
+    return cleaned_tasks
+
 
 # =========================================================
 # HANDLE VOICE MESSAGE
@@ -3210,9 +3339,21 @@ def handle_voice_message(
     voice: dict
 ):
 
-    file_id = voice.get("file_id")
+    print("========================================")
+    print("HANDLE VOICE START")
+    print("VOICE CHAT ID:", chat_id)
+    print("VOICE DATA:", voice)
+    print("========================================")
+
+    file_id = voice.get(
+        "file_id"
+    )
 
     if not file_id:
+
+        print(
+            "VOICE ERROR: file_id topilmadi"
+        )
 
         telegram_send_message(
             chat_id,
@@ -3223,13 +3364,39 @@ def handle_voice_message(
             "ok": False
         }
 
+    print(
+        "VOICE FILE ID FOUND:",
+        file_id
+    )
+
     try:
+
+        # =================================================
+        # STEP 1 — TRANSCRIPTION
+        # =================================================
+
+        print(
+            "VOICE STEP 1: transcription boshlanmoqda"
+        )
 
         transcript = groq_transcribe_telegram_voice(
             file_id
         )
 
+        print(
+            "VOICE STEP 1 DONE"
+        )
+
+        print(
+            "VOICE TRANSCRIPT:",
+            transcript
+        )
+
         if not transcript:
+
+            print(
+                "VOICE: transcript bo‘sh"
+            )
 
             telegram_send_message(
                 chat_id,
@@ -3240,11 +3407,32 @@ def handle_voice_message(
                 "ok": False
             }
 
+        # =================================================
+        # STEP 2 — TASK PARSER
+        # =================================================
+
+        print(
+            "VOICE STEP 2: task parser boshlanmoqda"
+        )
+
         tasks = groq_parse_tasks(
             transcript
         )
 
+        print(
+            "VOICE STEP 2 DONE"
+        )
+
+        print(
+            "VOICE TASKS:",
+            tasks
+        )
+
         if not tasks:
+
+            print(
+                "VOICE: task topilmadi"
+            )
 
             telegram_send_message(
                 chat_id,
@@ -3257,27 +3445,75 @@ def handle_voice_message(
                 "tasks": []
             }
 
-        return handle_create_tasks(
-            chat_id,
-            "\n".join(tasks)
+        # =================================================
+        # STEP 3 — CREATE TASKS
+        # =================================================
+
+        print(
+            "VOICE STEP 3: handle_create_tasks"
         )
 
-  except Exception as error:
+        task_text = "\n".join(
+            tasks
+        )
 
-    print(
-        "VOICE ERROR:",
-        repr(error)
-    )
+        print(
+            "VOICE TASK TEXT:",
+            task_text
+        )
 
-    telegram_send_message(
-        chat_id,
-        "⚠️ Ovozli xabarni qayta ishlashda xatolik yuz berdi. Qayta urinib ko‘ring."
-    )
+        result = handle_create_tasks(
+            chat_id,
+            task_text
+        )
 
-    return {
-        "ok": False,
-        "error": str(error)
-    }
+        print(
+            "VOICE STEP 3 DONE"
+        )
+
+        print(
+            "VOICE FINAL RESULT:",
+            result
+        )
+
+        print("========================================")
+        print("HANDLE VOICE DONE")
+        print("========================================")
+
+        return result
+
+    except Exception as error:
+
+        print("========================================")
+        print(
+            "VOICE ERROR:",
+            repr(error)
+        )
+        print(
+            "VOICE ERROR TYPE:",
+            type(error).__name__
+        )
+        print("========================================")
+
+        try:
+
+            telegram_send_message(
+                chat_id,
+                "⚠️ Ovozli xabarni qayta ishlashda xatolik yuz berdi. Qayta urinib ko‘ring."
+            )
+
+        except Exception as telegram_error:
+
+            print(
+                "VOICE ERROR MESSAGE SEND ERROR:",
+                repr(telegram_error)
+            )
+
+        return {
+            "ok": False,
+            "error": str(error)
+        }
+
 
 # =========================================================
 # TELEGRAM WEBHOOK
@@ -3287,6 +3523,10 @@ def handle_voice_message(
 def telegram_webhook(
     update: dict
 ):
+
+    print("========================================")
+    print("TELEGRAM WEBHOOK RECEIVED")
+    print("========================================")
 
     try:
 
@@ -3315,6 +3555,10 @@ def telegram_webhook(
 
         if not chat_id:
 
+            print(
+                "WEBHOOK: chat_id topilmadi"
+            )
+
             return {
                 "ok": True,
                 "ignored": True
@@ -3342,17 +3586,25 @@ def telegram_webhook(
             or "Do‘st"
         )
 
-        # -------------------------------------------------
+        # =================================================
         # ACTIVITY
-        # -------------------------------------------------
+        # =================================================
+
+        print(
+            "WEBHOOK: ACTIVITY UPDATE START"
+        )
 
         update_user_activity(
             chat_id
         )
 
-        # -------------------------------------------------
+        print(
+            "WEBHOOK: ACTIVITY UPDATE DONE"
+        )
+
+        # =================================================
         # START
-        # -------------------------------------------------
+        # =================================================
 
         if message_text == "/start":
 
@@ -3362,9 +3614,9 @@ def telegram_webhook(
                 first_name
             )
 
-        # -------------------------------------------------
+        # =================================================
         # CALLBACK
-        # -------------------------------------------------
+        # =================================================
 
         if callback_query:
 
@@ -3436,9 +3688,9 @@ def telegram_webhook(
                 "route": "callback_ignored"
             }
 
-        # -------------------------------------------------
+        # =================================================
         # YAKUNLADIM
-        # -------------------------------------------------
+        # =================================================
 
         if message_text == "/yakunladim":
 
@@ -3446,9 +3698,9 @@ def telegram_webhook(
                 chat_id
             )
 
-        # -------------------------------------------------
+        # =================================================
         # REPORTS
-        # -------------------------------------------------
+        # =================================================
 
         if message_text == "/hisobot":
 
@@ -3474,9 +3726,9 @@ def telegram_webhook(
                 chat_id
             )
 
-        # -------------------------------------------------
+        # =================================================
         # ADMIN
-        # -------------------------------------------------
+        # =================================================
 
         if message_text == "/admin":
 
@@ -3484,9 +3736,9 @@ def telegram_webhook(
                 chat_id
             )
 
-        # -------------------------------------------------
+        # =================================================
         # BROADCAST
-        # -------------------------------------------------
+        # =================================================
 
         if message_text.startswith(
             "/xabar"
@@ -3497,9 +3749,9 @@ def telegram_webhook(
                 message_text
             )
 
-        # -------------------------------------------------
+        # =================================================
         # UNKNOWN COMMAND
-        # -------------------------------------------------
+        # =================================================
 
         if message_text.startswith("/"):
 
@@ -3513,31 +3765,51 @@ def telegram_webhook(
                 "route": "unknown_command"
             }
 
-        # -------------------------------------------------
+        # =================================================
         # VOICE MESSAGE
-        # -------------------------------------------------
+        # =================================================
 
         if message.get("voice"):
+
+            print("========================================")
+            print("VOICE DETECTED")
+            print(
+                "VOICE CHAT ID:",
+                chat_id
+            )
+            print(
+                "VOICE OBJECT:",
+                message["voice"]
+            )
+            print("========================================")
 
             return handle_voice_message(
                 chat_id,
                 message["voice"]
             )
-            
-        # -------------------------------------------------
+
+        # =================================================
         # TASK TEXT
-        # -------------------------------------------------
+        # =================================================
 
         if message_text:
+
+            print(
+                "TEXT TASK DETECTED"
+            )
 
             return handle_create_tasks(
                 chat_id,
                 message_text
             )
 
-        # -------------------------------------------------
+        # =================================================
         # LEGACY
-        # -------------------------------------------------
+        # =================================================
+
+        print(
+            "WEBHOOK: LEGACY ROUTE"
+        )
 
         return proxy_to_legacy(
             update
@@ -3549,10 +3821,16 @@ def telegram_webhook(
 
     except Exception as error:
 
+        print("========================================")
         print(
             "TELEGRAM WEBHOOK ERROR:",
             repr(error)
         )
+        print(
+            "TELEGRAM WEBHOOK ERROR TYPE:",
+            type(error).__name__
+        )
+        print("========================================")
 
         raise HTTPException(
             status_code=500,
