@@ -1011,7 +1011,6 @@ def handle_create_tasks(
             "ok": False,
             "day_completed": True
         }
-
     # -----------------------------------------------------
     # SPLIT TASKS
     # -----------------------------------------------------
@@ -1028,6 +1027,8 @@ def handle_create_tasks(
         cleaned = clean_task_text(
             raw_task
         )
+
+        cleaned = uzbek_to_latin(cleaned)
 
         if cleaned:
 
@@ -1049,7 +1050,6 @@ def handle_create_tasks(
     # -----------------------------------------------------
     # EXISTING TASKS
     # -----------------------------------------------------
-
     with get_connection() as conn:
 
         with conn.cursor(
