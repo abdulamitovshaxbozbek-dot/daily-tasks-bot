@@ -1,3 +1,4 @@
+```python
 import os
 import re
 import json
@@ -190,7 +191,7 @@ def is_admin(chat_id: int) -> bool:
 
 
 # =========================================================
-# OPTIMIZED ACTIVITY UPDATE
+# ACTIVITY UPDATE
 # =========================================================
 
 def update_user_activity(chat_id: int):
@@ -229,10 +230,186 @@ def clean_task_text(text: str) -> str:
 
 
 def normalize_task(text: str) -> str:
-    """Takrorlarni yaxshiroq ushlash uchun kuchaytirilgan normalizatsiya"""
-    text = clean_task_text(text).lower()
-    text = re.sub(r"[^\w\s]", " ", text)   # tinish belgilarni olib tashlash
-    text = re.sub(r"\s+", " ", text)       # ortiqcha bo‘shliqlarni tozalash
+    """
+    Takroriy vazifalarni yaxshiroq aniqlash.
+    """
+
+    text = clean_task_text(
+        text
+    ).lower()
+
+    text = re.sub(
+        r"[^\w\s]",
+        " ",
+        text
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
+
+    return text.strip()
+
+
+# =========================================================
+# UZBEK CYRILLIC -> LATIN
+# =========================================================
+
+def uzbek_to_latin(text: str) -> str:
+    """
+    Groq tasodifan kirill alifbosida qaytarsa,
+    avtomatik o‘zbek lotiniga o'tkazadi.
+    """
+
+    if not text:
+        return text
+
+    replacements = {
+        # O'zbek harflari
+        "Ў": "O‘",
+        "ў": "o‘",
+
+        "Ғ": "G‘",
+        "ғ": "g‘",
+
+        "Қ": "Q",
+        "қ": "q",
+
+        "Ҳ": "H",
+        "ҳ": "h",
+
+        # Kirill -> lotin
+        "А": "A",
+        "а": "a",
+
+        "Б": "B",
+        "б": "b",
+
+        "В": "V",
+        "в": "v",
+
+        "Г": "G",
+        "г": "g",
+
+        "Д": "D",
+        "д": "d",
+
+        "Е": "E",
+        "е": "e",
+
+        "Ё": "Yo",
+        "ё": "yo",
+
+        "Ж": "J",
+        "ж": "j",
+
+        "З": "Z",
+        "з": "z",
+
+        "И": "I",
+        "и": "i",
+
+        "Й": "Y",
+        "й": "y",
+
+        "К": "K",
+        "к": "k",
+
+        "Л": "L",
+        "л": "l",
+
+        "М": "M",
+        "м": "m",
+
+        "Н": "N",
+        "н": "n",
+
+        "О": "O",
+        "о": "o",
+
+        "П": "P",
+        "п": "p",
+
+        "Р": "R",
+        "р": "r",
+
+        "С": "S",
+        "с": "s",
+
+        "Т": "T",
+        "т": "t",
+
+        "У": "U",
+        "у": "u",
+
+        "Ф": "F",
+        "ф": "f",
+
+        "Х": "X",
+        "х": "x",
+
+        "Ц": "Ts",
+        "ц": "ts",
+
+        "Ч": "Ch",
+        "ч": "ch",
+
+        "Ш": "Sh",
+        "ш": "sh",
+
+        "Щ": "Sh",
+        "щ": "sh",
+
+        "Ъ": "'",
+        "ъ": "'",
+
+        "Ы": "I",
+        "ы": "i",
+
+        "Ь": "",
+        "ь": "",
+
+        "Э": "E",
+        "э": "e",
+
+        "Ю": "Yu",
+        "ю": "yu",
+
+        "Я": "Ya",
+        "я": "ya"
+    }
+
+    for old, new in replacements.items():
+
+        text = text.replace(
+            old,
+            new
+        )
+
+    return text
+
+
+def clean_parsed_task(text: str) -> str:
+    """
+    Groq parserdan kelgan taskni yakuniy tozalash.
+    """
+
+    text = uzbek_to_latin(
+        text
+    )
+
+    text = clean_task_text(
+        text
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
+
     return text.strip()
 
 
@@ -274,7 +451,9 @@ def calculate_stats(tasks):
 
 def progress_bar(percent: int) -> str:
 
-    filled = round(percent / 10)
+    filled = round(
+        percent / 10
+    )
 
     empty = 10 - filled
 
@@ -787,6 +966,7 @@ def handle_create_tasks(
     text: str,
     from_voice: bool = False
 ):
+
     user = get_user_by_chat_id(
         chat_id
     )
@@ -943,63 +1123,87 @@ def handle_create_tasks(
                     )
                 )
 
-                existing.add(normalized)
-                added_tasks.append(task_text)
+                existing.add(
+                    normalized
+                )
+
+                added_tasks.append(
+                    task_text
+                )
+
                 added_count += 1
 
+        # MUHIM:
+        # commit endi to'g'ri indentationda.
         conn.commit()
 
-# -----------------------------------------------------
-# RESPONSE
-# -----------------------------------------------------
+    # -----------------------------------------------------
+    # RESPONSE
+    # -----------------------------------------------------
 
-response_parts = []
+    response_parts = []
 
-if added_count > 0:
+    if added_count > 0:
 
-    if from_voice:
-        # Faqat ovozdan kelganda ro‘yxatni ko‘rsatamiz
+        if from_voice:
+
+            # Ovozli xabarda vazifalar ro'yxatini ko'rsatamiz
+            response_parts.append(
+                f"🎉 {added_count} ta yangi vazifa "
+                f"qabul qilindi va saqlandi:"
+            )
+
+            for i, task in enumerate(
+                added_tasks,
+                1
+            ):
+
+                response_parts.append(
+                    f"{i}. {task}"
+                )
+
+        else:
+
+            # Textda vazifalar ro'yxatini ko'rsatmaymiz
+            response_parts.append(
+                f"🎉 {added_count} ta yangi vazifa "
+                f"qabul qilindi va saqlandi!"
+            )
+
+    if duplicate_count > 0:
+
         response_parts.append(
-            f"🎉 {added_count} ta yangi vazifa qabul qilindi va saqlandi:\n"
+            f"🔄 {duplicate_count} ta vazifa "
+            f"bugun allaqachon qo‘shilgan."
         )
-        for i, task in enumerate(added_tasks, 1):
-            response_parts.append(f"{i}. {task}")
-    else:
-        # Matn yozganda oddiy xabar
+
         response_parts.append(
-            f"🎉 {added_count} ta yangi vazifa qabul qilindi va saqlandi!"
+            "♻️ Qayta saqlanmadi."
         )
 
-if duplicate_count > 0:
-
     response_parts.append(
-        f"\n🔄 {duplicate_count} ta vazifa bugun allaqachon qo‘shilgan."
-    )
-    response_parts.append(
-        "♻️ Qayta saqlanmadi."
+        "🤲 Kuningiz barakali o‘tsin!"
     )
 
-response_parts.append(
-    "\n🤲 Kuningiz barakatli o‘tsin!"
-)
+    if added_count > 0:
 
-if added_count > 0:
+        response_parts.append(
+            "🏁 Kuningizni yakunlaganingizda "
+            "/yakunladim buyrug‘ini yuboring."
+        )
 
-    response_parts.append(
-        "🏁 Kuningizni yakunlaganingizda /yakunladim buyrug‘ini yuboring."
+    telegram_send_message(
+        chat_id,
+        "\n\n".join(response_parts)
     )
 
-telegram_send_message(
-    chat_id,
-    "\n".join(response_parts)
-)
+    return {
+        "ok": True,
+        "route": "create_tasks",
+        "added": added_count,
+        "duplicates": duplicate_count
+    }
 
-return {
-    "ok": True,
-    "route": "create_tasks",
-    "added": added_count,
-    "duplicates": duplicate_count
-}
 
 # =========================================================
 # FINISH DAY
@@ -1363,7 +1567,9 @@ def handle_daily_report(
 
     today = get_today()
 
-    yesterday = today - timedelta(days=1)
+    yesterday = today - timedelta(
+        days=1
+    )
 
     with get_connection() as conn:
 
@@ -3209,16 +3415,20 @@ def groq_parse_tasks(
 
     groq_response = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
+
         headers={
             "Authorization": f"Bearer {GROQ_API_KEY}",
             "Content-Type": "application/json"
         },
+
         json={
             "model": "openai/gpt-oss-20b",
+
             "messages": [
                 {
                     "role": "system",
-                   "content": """
+
+                    "content": """
 Siz o‘zbek tilidagi ovozli xabardan kundalik bajariladigan vazifalarni ajratuvchi yordamchisiz.
 
 Faqat aniq bajarilishi kerak bo‘lgan ishlarni tasks ichiga yozing.
@@ -3230,42 +3440,72 @@ Qoidalar:
 - Salomlashish, savol, fikr, izoh yoki minnatdorchilikni vazifa deb qabul qilmang.
 - Agar aniq bajariladigan vazifa bo‘lmasa, tasks=[] qaytaring.
 
-Muhim:
-- Ovozdan kelgan matnda xatolik bo‘lsa, ularni to‘g‘ri o‘zbekcha yozuvga tuzatib yozing.
-- Misollar:
-  "kitap okuş" → "kitob o‘qish"
-  "sözış" yoki "söz yotlaş" → "so‘z yodlash"
-  "sport bulanş uygulayış" → "sport bilan shug‘ullanish"
-  "ingliz tili" bilan bog‘liq narsalarni to‘g‘ri yozing.
-- Har doim to‘g‘ri o‘zbekcha imlo ishlating (o‘, g‘, sh, ch va h.k.).
+MUHIM — TIL VA ALIFBO:
+- HAR DOIM O‘ZBEK LOTIN ALIFBOSIDA yozing.
+- KIRILL ALIFBOSIDAN FOYDALANMANG.
+- Natijadagi tasks ichida hech qachon ruscha yoki o‘zbekcha kirill harflari bo‘lmasin.
+- O‘zbekcha maxsus harflarni to‘g‘ri yozing: o‘, g‘.
+- "o‘", "g‘", "sh", "ch" kabi yozuvlardan foydalaning.
+
+Misollar:
+"университетга бориш" → "Universitetga borish"
+"спорт қилиш" → "Sport qilish"
+"сўз ёдлаш" → "So‘z yodlash"
+"китоб ўқиш" → "Kitob o‘qish"
+"инглиз тилини ўрганиш" → "Ingliz tilini o‘rganish"
+
+Ovozdan kelgan matnda xatolik bo‘lsa:
+- Ma'noga qarab to‘g‘ri o‘zbekcha so‘zni tanlang.
+- Vazifaning ma'nosini o‘zgartirmang.
+- Faqat tushunilgan vazifalarni qaytaring.
+
+Misollar:
+"kitap okuş" → "Kitob o‘qish"
+"sözış" → "So‘z yodlash"
+"söz yotlaş" → "So‘z yodlash"
+"sport bulanş uygulayış" → "Sport bilan shug‘ullanish"
+
+Natija faqat berilgan JSON schema formatida bo‘lsin.
 """
                 },
+
                 {
                     "role": "user",
                     "content": transcript
                 }
             ],
+
             "response_format": {
                 "type": "json_schema",
+
                 "json_schema": {
                     "name": "task_list",
+
                     "strict": True,
+
                     "schema": {
                         "type": "object",
+
                         "properties": {
                             "tasks": {
                                 "type": "array",
+
                                 "items": {
                                     "type": "string"
                                 }
                             }
                         },
-                        "required": ["tasks"],
+
+                        "required": [
+                            "tasks"
+                        ],
+
                         "additionalProperties": False
                     }
                 }
             }
         },
+
         timeout=60
     )
 
@@ -3307,7 +3547,9 @@ Muhim:
 
     try:
 
-        data = json.loads(content)
+        data = json.loads(
+            content
+        )
 
     except json.JSONDecodeError as error:
 
@@ -3323,12 +3565,26 @@ Muhim:
         []
     )
 
-    cleaned_tasks = [
-        task.strip()
-        for task in tasks
-        if isinstance(task, str)
-        and task.strip()
-    ]
+    cleaned_tasks = []
+
+    for task in tasks:
+
+        if not isinstance(
+            task,
+            str
+        ):
+
+            continue
+
+        cleaned = clean_parsed_task(
+            task
+        )
+
+        if cleaned:
+
+            cleaned_tasks.append(
+                cleaned
+            )
 
     print(
         "VOICE PARSED TASKS:",
@@ -3474,9 +3730,11 @@ def handle_voice_message(
             task_text
         )
 
+        # MUHIM:
+        # from_voice=True oldidan vergul bor.
         result = handle_create_tasks(
             chat_id,
-            task_text
+            task_text,
             from_voice=True
         )
 
@@ -3502,10 +3760,12 @@ def handle_voice_message(
             "VOICE ERROR:",
             repr(error)
         )
+
         print(
             "VOICE ERROR TYPE:",
             type(error).__name__
         )
+
         print("========================================")
 
         try:
@@ -3786,14 +4046,17 @@ def telegram_webhook(
 
             print("========================================")
             print("VOICE DETECTED")
+
             print(
                 "VOICE CHAT ID:",
                 chat_id
             )
+
             print(
                 "VOICE OBJECT:",
                 message["voice"]
             )
+
             print("========================================")
 
             return handle_voice_message(
@@ -3835,14 +4098,17 @@ def telegram_webhook(
     except Exception as error:
 
         print("========================================")
+
         print(
             "TELEGRAM WEBHOOK ERROR:",
             repr(error)
         )
+
         print(
             "TELEGRAM WEBHOOK ERROR TYPE:",
             type(error).__name__
         )
+
         print("========================================")
 
         raise HTTPException(
@@ -4069,3 +4335,4 @@ def proxy_to_legacy(
         )
 
     return response.json()
+```
