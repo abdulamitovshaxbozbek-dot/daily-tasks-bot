@@ -3388,49 +3388,29 @@ def groq_transcribe_telegram_voice(
         "VOICE: Groq Whisper'ga yuborilmoqda..."
     )
 
-    groq_response = requests.post(
-        "https://api.groq.com/openai/v1/audio/transcriptions",
+   groq_response = requests.post(
+    "https://api.groq.com/openai/v1/audio/transcriptions",
 
-        headers={
-            "Authorization":
-                f"Bearer {GROQ_API_KEY}"
-        },
+    headers={
+        "Authorization":
+            f"Bearer {GROQ_API_KEY}"
+    },
 
-        files={
-            "file": (
-                "voice.ogg",
-                audio_response.content,
-                "audio/ogg"
-            )
-        },
+    files={
+        "file": (
+            "voice.ogg",
+            audio_response.content,
+            "audio/ogg"
+        )
+    },
 
-        data={
-            "model": "whisper-large-v3-turbo",
-
-            # MUHIM:
-            # Foydalanuvchi asosan o‘zbekcha gapiradi.
-            "language": "uz",
-
-            # MUHIM:
-            # Whisper'ga o'zbek tilidagi kundalik vazifalar
-            # uslubi va lug'ati haqida yo'nalish beramiz.
-            # Bu aralash til (qozoq/turkcha) bilan
-            # chalkashishni kamaytiradi.
-            "prompt": WHISPER_PROMPT_UZ,
-
-            "response_format": "json",
-
-            # MUHIM:
-            # temperature=0 har doim "eng ishonchli" so'zni tanlaydi,
-            # lekin tez/notinch nutqda bu ko'pincha noto'g'ri bo'ladi.
-            # Kichik oraliq bersak, Whisper qiyin joylarda fallback
-            # qilib, qaytadan baholaydi.
-            "temperature": "0.2"
-        },
-
-        timeout=60
-    )
-
+    data={
+        "model": "whisper-large-v3",
+        "language": "uz",
+        "response_format": "json",
+        "temperature": "0"
+    },
+       
     print(
         "VOICE: Groq Whisper status:",
         groq_response.status_code
