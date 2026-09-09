@@ -50,7 +50,10 @@ API_KEY = os.getenv("API_KEY")
 WHISPER_PROMPT_UZ = (
     "Ertaga maktabga boraman, kitob o'qiyman, sport qilaman, "
     "ingliz tili darsiga boraman, uy vazifasini bajaraman, "
-    "universitetga boraman, so'z yodlayman, kursga boraman."
+    "universitetga boraman, so'z yodlayman, kursga boraman, "
+    "nemis tiliga darsga boraman, ertalab soat sakkizda kursga "
+    "boraman, ikki soat o'qiyman, uch soat sport qilaman, "
+    "bir soat kitob o'qiyman, soat to'qqizda uyg'onaman."
 )
 
 # Ovozdan aniqlangan, lekin ishonch darajasi past bo'lgan
@@ -3417,7 +3420,12 @@ def groq_transcribe_telegram_voice(
 
             "response_format": "json",
 
-            "temperature": "0"
+            # MUHIM:
+            # temperature=0 har doim "eng ishonchli" so'zni tanlaydi,
+            # lekin tez/notinch nutqda bu ko'pincha noto'g'ri bo'ladi.
+            # Kichik oraliq bersak, Whisper qiyin joylarda fallback
+            # qilib, qaytadan baholaydi.
+            "temperature": "0.2"
         },
 
         timeout=60
@@ -3667,6 +3675,25 @@ Masalan:
 Ikkilanganda — har doim "low" tanlang. "low" xato emas, u shunchaki foydalanuvchidan tasdiq so‘rashga yordam beradi.
 
 16. Agar bitta transcriptda bir xil vazifa takrorlansa, uni faqat bir marta qaytaring.
+
+17. Raqamlar, soatlar va vaqt ifodalari (masalan "soat nol sakkiz",
+"ikki soat", "uch marta") ko'pincha tez nutqda noto'g'ri
+tanilgan bo'ladi. Agar raqam/vaqt qismi tushunarsiz yoki
+chalkash bo'lsa:
+
+- Uni task matniga QO'SHMANG (faqat asosiy harakatni ajrating).
+- Bu raqam tufayli butun taskni "low" deb belgilamang, agar
+  qolgan qism (harakatning o'zi) aniq bo'lsa.
+
+Masalan:
+"Ertalab soat nol sækiz nol nol-dil kursga boraman"
+→ {"text": "Kursga borish", "confidence": "high"}
+(chunki "kursga borish" aniq, faqat vaqt qismi chalkash)
+
+Lekin agar harakatning o'zi ham vaqt/raqam bilan chambarchas
+bog'liq bo'lib, raqamsiz ma'nosiz qolsa (masalan noaniq son
+nechta marta takrorlanishi kerakligini bildirsa), confidence
+"low" qiling.
 
 MUHIM:
 Sizning vazifangiz transcriptni tarjima qilish emas.
