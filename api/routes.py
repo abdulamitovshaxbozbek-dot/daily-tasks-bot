@@ -3387,26 +3387,14 @@ def groq_parse_tasks(
     print("========================================")
 
     if not transcript.strip():
-
-        print(
-            "VOICE TASK PARSER: transcript bo‘sh"
-        )
-
+        print("VOICE TASK PARSER: transcript bo‘sh")
         return []
 
     if not GROQ_API_KEY:
+        print("VOICE TASK PARSER ERROR: GROQ_API_KEY yo‘q")
+        raise RuntimeError("GROQ_API_KEY sozlanmagan")
 
-        print(
-            "VOICE TASK PARSER ERROR: GROQ_API_KEY yo‘q"
-        )
-
-        raise RuntimeError(
-            "GROQ_API_KEY sozlanmagan"
-        )
-
-    print(
-        "VOICE TASK PARSER: Groq API'ga yuborilmoqda..."
-    )
+    print("VOICE TASK PARSER: Groq API'ga yuborilmoqda...")
 
     groq_response = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
@@ -3422,48 +3410,184 @@ def groq_parse_tasks(
             "messages": [
                 {
                     "role": "system",
-
                     "content": """
-Siz o‘zbek tilidagi ovozli xabardan kundalik bajariladigan vazifalarni ajratuvchi yordamchisiz.
+Siz o‘zbek tilidagi ovozli xabardan kundalik bajarilishi kerak bo‘lgan vazifalarni aniqlaydigan aqlli task parser siz.
 
-Faqat aniq bajarilishi kerak bo‘lgan ishlarni tasks ichiga yozing.
+Sizga Telegram Whisper orqali olingan TRANSCRIPT beriladi.
 
-Qoidalar:
-- "xo‘sh", "keyin", "yana", "shuningdek", "demak", "mayli" kabi fillerlarni e'tiborsiz qoldiring.
-- Bir gapda bir nechta vazifa bo‘lsa, ularni alohida tasklarga ajrating.
-- Vazifa nomini qisqa va mazmunini saqlagan holda yozing.
-- Salomlashish, savol, fikr, izoh yoki minnatdorchilikni vazifa deb qabul qilmang.
-- Agar aniq bajariladigan vazifa bo‘lmasa, tasks=[] qaytaring.
+MUHIM:
+Whisper o‘zbekcha gaplarni ba'zan turkcha, ozarbayjoncha, qozoqcha yoki aralash ko‘rinishda noto‘g‘ri yozishi mumkin.
 
-MUHIM — TIL VA ALIFBO:
-- HAR DOIM O‘ZBEK LOTIN ALIFBOSIDA yozing.
-- KIRILL ALIFBOSIDAN FOYDALANMANG.
-- Natijadagi tasks ichida hech qachon ruscha yoki o‘zbekcha kirill harflari bo‘lmasin.
-- O‘zbekcha maxsus harflarni to‘g‘ri yozing: o‘, g‘.
-- "o‘", "g‘", "sh", "ch" kabi yozuvlardan foydalaning.
+Siz transcriptni so‘zma-so‘z qabul qilmang.
+Avval foydalanuvchi nima demoqchi bo‘lganini MA'NO bo‘yicha tushuning.
+Keyin uni tabiiy o‘zbek tilidagi vazifa shakliga keltiring.
 
-Misollar:
-"университетга бориш" → "Universitetga borish"
-"спорт қилиш" → "Sport qilish"
-"сўз ёдлаш" → "So‘z yodlash"
-"китоб ўқиш" → "Kitob o‘qish"
-"инглиз тилини ўрганиш" → "Ingliz tilini o‘rganish"
+ASOSIY QOIDALAR:
 
-Ovozdan kelgan matnda xatolik bo‘lsa:
-- Ma'noga qarab to‘g‘ri o‘zbekcha so‘zni tanlang.
-- Vazifaning ma'nosini o‘zgartirmang.
-- Faqat tushunilgan vazifalarni qaytaring.
+1. Har bir aniq bajariladigan ishni alohida task qiling.
+
+2. "boraman", "boraman", "boram an", "bora mann", "bora man",
+   "keboram", "kelaman", "qilaman", "o‘qiyman", "yodlayman"
+   kabi buzilgan fe'l shakllarini ma'nosiga qarab to‘g‘rilang.
+
+3. Ovoz tanib olishdagi fonetik xatolarni tuzating.
 
 Misollar:
-"kitap okuş" → "Kitob o‘qish"
-"sözış" → "So‘z yodlash"
-"söz yotlaş" → "So‘z yodlash"
-"sport bulanş uygulayış" → "Sport bilan shug‘ullanish"
 
-Natija faqat berilgan JSON schema formatida bo‘lsin.
+"universitetke boraman"
+→ "Universitetga borish"
+
+"universitetka boraman"
+→ "Universitetga borish"
+
+"kursu ge bora man"
+→ "Kursga borish"
+
+"kursga boraman"
+→ "Kursga borish"
+
+"mektep ke bora mann"
+→ "Maktabga borish"
+
+"məktepke boraman"
+→ "Maktabga borish"
+
+"mektepga boraman"
+→ "Maktabga borish"
+
+"maktab keboram"
+→ "Maktabga borish"
+
+"maktabga boraman"
+→ "Maktabga borish"
+
+"kitap okuş"
+→ "Kitob o‘qish"
+
+"kitob oqish"
+→ "Kitob o‘qish"
+
+"söz yotlaş"
+→ "So‘z yodlash"
+
+"söz yodlash"
+→ "So‘z yodlash"
+
+"inglesislislir dærske boraman"
+→ "Ingliz tili darsiga borish"
+
+"ingliz tiliga darsga boraman"
+→ "Ingliz tili darsiga borish"
+
+"ingliz tili darsiga boraman"
+→ "Ingliz tili darsiga borish"
+
+4. O‘zbek tilida tabiiy va grammatik jihatdan to‘g‘ri shakldan foydalaning.
+
+Masalan:
+"Mektepga borish" YOMON.
+"Maktabga borish" YAXSHI.
+
+"Universitetga borish" YAXSHI.
+
+"Ingliz tilini darsga borish" YOMON.
+"Ingliz tili darsiga borish" YAXSHI.
+
+5. Foydalanuvchi gapida vaqt bo‘lsa, task ma'nosini saqlang.
+
+Masalan:
+"Bugun soat sakkizda kursga boraman"
+→ "Kursga borish"
+
+"Bugun maktabga boraman"
+→ "Maktabga borish"
+
+Hozircha vaqtni task nomiga qo‘shmang, faqat asosiy vazifani ajrating.
+
+6. Bir gapda bir nechta ish bo‘lsa, ularni alohida tasklarga ajrating.
+
+Masalan:
+"Bugun universitetga boraman, keyin maktabga boraman"
+→
+"Universitetga borish"
+"Maktabga borish"
+
+7. "xo‘sh", "keyin", "yana", "shuningdek", "demak",
+"mayli", "ana", "endi" kabi filler so‘zlarni task deb hisoblamang.
+
+8. Salomlashish, savol, fikr, izoh, minnatdorchilik yoki oddiy suhbatni task qilmang.
+
+9. Transcript juda buzilgan bo‘lsa ham, undagi tanish so‘zlar va gap tuzilmasidan foydalanib, foydalanuvchining ehtimoliy ma'nosini tiklashga harakat qiling.
+
+Masalan:
+
+"Maktab keboram an abit tanki in."
+
+Bu transcript grammatik jihatdan buzilgan.
+Lekin "Maktab" va "keboram" qismlaridan foydalanuvchi
+maktabga borishni nazarda tutgan bo‘lishi mumkin.
+
+Shuning uchun:
+→ "Maktabga borish"
+
+10. Ammo transcriptda umuman bajariladigan ishni anglatadigan yetarli signal bo‘lmasa, taxmin qilib task yaratmang.
+
+Masalan:
+"Salom, yaxshimisiz?"
+→ []
+
+11. Natijadagi barcha tasklar O‘ZBEK LOTIN ALIFBOSIDA bo‘lsin.
+
+KIRILL ISHLATMANG.
+
+To‘g‘ri:
+- Maktabga borish
+- Universitetga borish
+- Kitob o‘qish
+- So‘z yodlash
+- Ingliz tili darsiga borish
+
+12. O‘zbekcha maxsus harflarni to‘g‘ri ishlating:
+o‘, g‘
+
+13. Tasklar qisqa bo‘lsin va odatda infinitiv shaklida tugasin:
+- borish
+- qilish
+- o‘qish
+- yodlash
+- o‘rganish
+
+14. Transcriptdagi xatoni saqlab qolmang.
+Masalan:
+"mektep" → "maktab"
+"kitap" → "kitob"
+"bora man" → "borish"
+"bora mann" → "borish"
+
+15. Agar bitta transcriptda bir xil vazifa takrorlansa, uni faqat bir marta qaytaring.
+
+MUHIM:
+Sizning vazifangiz transcriptni tarjima qilish emas.
+Sizning vazifangiz transcriptdan FOYDALANUVCHI NIMA QILISHI KERAKLIGINI aniqlash.
+
+Natija faqat quyidagi JSON schema formatida bo‘lsin:
+
+{
+  "tasks": [
+    "Maktabga borish",
+    "Kursga borish"
+  ]
+}
+
+Agar aniq vazifa topilmasa:
+
+{
+  "tasks": []
+}
+
+Hech qanday qo‘shimcha matn yozmang.
 """
                 },
-
                 {
                     "role": "user",
                     "content": transcript
@@ -3472,29 +3596,20 @@ Natija faqat berilgan JSON schema formatida bo‘lsin.
 
             "response_format": {
                 "type": "json_schema",
-
                 "json_schema": {
                     "name": "task_list",
-
                     "strict": True,
-
                     "schema": {
                         "type": "object",
-
                         "properties": {
                             "tasks": {
                                 "type": "array",
-
                                 "items": {
                                     "type": "string"
                                 }
                             }
                         },
-
-                        "required": [
-                            "tasks"
-                        ],
-
+                        "required": ["tasks"],
                         "additionalProperties": False
                     }
                 }
@@ -3510,12 +3625,10 @@ Natija faqat berilgan JSON schema formatida bo‘lsin.
     )
 
     if groq_response.status_code != 200:
-
         print(
             "VOICE GROQ TASK PARSER ERROR:",
             groq_response.text
         )
-
         raise RuntimeError(
             "Groq task parser xatolik qaytardi"
         )
@@ -3541,54 +3654,45 @@ Natija faqat berilgan JSON schema formatida bo‘lsin.
     )
 
     try:
-
-        data = json.loads(
-            content
-        )
+        data = json.loads(content)
 
     except json.JSONDecodeError as error:
-
         print(
             "VOICE TASK PARSER JSON ERROR:",
             repr(error)
         )
-
         return []
 
-    tasks = data.get(
-        "tasks",
-        []
-    )
+    tasks = data.get("tasks", [])
 
     cleaned_tasks = []
+    seen_tasks = set()
 
     for task in tasks:
 
-        if not isinstance(
-            task,
-            str
-        ):
-
+        if not isinstance(task, str):
             continue
 
-        cleaned = clean_parsed_task(
-            task
-        )
+        cleaned = clean_parsed_task(task)
 
-        if cleaned:
+        if not cleaned:
+            continue
 
-            cleaned_tasks.append(
-                cleaned
-            )
+        normalized = normalize_task(cleaned)
+
+        if normalized in seen_tasks:
+            continue
+
+        seen_tasks.add(normalized)
+
+        cleaned_tasks.append(cleaned)
 
     print(
         "VOICE PARSED TASKS:",
         cleaned_tasks
     )
 
-    print(
-        "VOICE TASK PARSER DONE"
-    )
+    print("VOICE TASK PARSER DONE")
 
     return cleaned_tasks
 
