@@ -1,10 +1,10 @@
 providers = ["python"]
 
 [phases.setup]
-nixPkgs = ["python311", "gcc"]
+nixPkgs = ["python311", "python311Packages.pip", "gcc"]
 
 [phases.install]
-cmds = ["pip install -r api/requirements.txt"]
+cmds = ["python -m pip install -r api/requirements.txt"]
 
 [start]
-cmd = "cd api && uvicorn main:app --host 0.0.0.0 --port $PORT"
+cmd = "cd api && python -m uvicorn main:app --host 0.0.0.0 --port $PORT"
