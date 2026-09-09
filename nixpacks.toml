@@ -3,8 +3,8 @@ providers = ["python"]
 [phases.setup]
 nixPkgs = ["python311", "python311Packages.pip", "gcc"]
 
-[phases.install]
-cmds = ["pip install --break-system-packages -r api/requirements.txt"]
+[variables]
+PIP_BREAK_SYSTEM_PACKAGES = "1"
 
 [start]
 cmd = "cd api && python -m uvicorn main:app --host 0.0.0.0 --port $PORT"
