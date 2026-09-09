@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 from datetime import date, timedelta
 from typing import Optional
 
@@ -42,6 +43,25 @@ ADMIN_CHAT_ID = "8908985083"
 TIMEZONE = "Asia/Tashkent"
 
 API_KEY = os.getenv("API_KEY")
+
+# Whisper transkripsiya sifatini oshirish uchun namuna matn.
+# Bu audio kontent emas, balki Whisper'ga "qanday so'zlar va
+# uslub kutilyapti" degan yo'nalish beradi.
+WHISPER_PROMPT_UZ = (
+    "Ertaga maktabga boraman, kitob o'qiyman, sport qilaman, "
+    "ingliz tili darsiga boraman, uy vazifasini bajaraman, "
+    "universitetga boraman, so'z yodlayman, kursga boraman."
+)
+
+# Ovozdan aniqlangan, lekin ishonch darajasi past bo'lgan
+# vazifalarni foydalanuvchi tasdiqlaguncha vaqtincha saqlash.
+# DB sxemasini o'zgartirmaslik uchun xotirada saqlanadi.
+# Format: { chat_id: {"tasks": [...], "created_at": float} }
+PENDING_VOICE_TASKS: dict[int, dict] = {}
+
+# Tasdiqlanmagan vazifalar necha soniyadan keyin eskirgan
+# hisoblanishi (foydalanuvchi tugmani bosmasa).
+PENDING_VOICE_TTL_SECONDS = 15 * 60
 
 
 # =========================================================
@@ -1180,9 +1200,11 @@ def handle_create_tasks(
             "♻️ Qayta saqlanmadi."
         )
 
-    response_parts.append(
-        "🤲 Kuningiz barakali o‘tsin!"
-    )
+    if added_count > 0 or duplicate_count > 0:
+
+        response_parts.append(
+            "🤲 Kuningiz barakali o‘tsin!"
+        )
 
     if added_count > 0:
 
@@ -1191,10 +1213,12 @@ def handle_create_tasks(
             "/yakunladim buyrug‘ini yuboring."
         )
 
-    telegram_send_message(
-        chat_id,
-        "\n\n".join(response_parts)
-    )
+    if response_parts:
+
+        telegram_send_message(
+            chat_id,
+            "\n\n".join(response_parts)
+        )
 
     return {
         "ok": True,
@@ -3171,6 +3195,59 @@ Masalan:
 
 
 # =========================================================
+# PENDING VOICE TASKS (in-memory)
+# =========================================================
+
+def _cleanup_expired_pending_voice_tasks():
+    """
+    Eskirgan (TTL o'tgan) tasdiqlanmagan vazifalarni tozalaydi.
+    """
+
+    now = time.time()
+
+    expired_chat_ids = [
+        cid
+        for cid, entry in PENDING_VOICE_TASKS.items()
+        if now - entry["created_at"] > PENDING_VOICE_TTL_SECONDS
+    ]
+
+    for cid in expired_chat_ids:
+
+        PENDING_VOICE_TASKS.pop(cid, None)
+
+
+def set_pending_voice_tasks(
+    chat_id: int,
+    tasks: list[str]
+):
+
+    _cleanup_expired_pending_voice_tasks()
+
+    PENDING_VOICE_TASKS[chat_id] = {
+        "tasks": tasks,
+        "created_at": time.time()
+    }
+
+
+def pop_pending_voice_tasks(
+    chat_id: int
+) -> Optional[list[str]]:
+
+    _cleanup_expired_pending_voice_tasks()
+
+    entry = PENDING_VOICE_TASKS.pop(
+        chat_id,
+        None
+    )
+
+    if not entry:
+
+        return None
+
+    return entry["tasks"]
+
+
+# =========================================================
 # GROQ VOICE TRANSCRIPTION
 # =========================================================
 
@@ -3331,6 +3408,13 @@ def groq_transcribe_telegram_voice(
             # Foydalanuvchi asosan o‘zbekcha gapiradi.
             "language": "uz",
 
+            # MUHIM:
+            # Whisper'ga o'zbek tilidagi kundalik vazifalar
+            # uslubi va lug'ati haqida yo'nalish beramiz.
+            # Bu aralash til (qozoq/turkcha) bilan
+            # chalkashishni kamaytiradi.
+            "prompt": WHISPER_PROMPT_UZ,
+
             "response_format": "json",
 
             "temperature": "0"
@@ -3379,7 +3463,10 @@ def groq_transcribe_telegram_voice(
 
 def groq_parse_tasks(
     transcript: str
-) -> list[str]:
+) -> list[dict]:
+    """
+    Har bir element: {"text": str, "confidence": "high" | "low"}
+    """
 
     print("========================================")
     print("VOICE TASK PARSER START")
@@ -3517,7 +3604,7 @@ Masalan:
 
 8. Salomlashish, savol, fikr, izoh, minnatdorchilik yoki oddiy suhbatni task qilmang.
 
-9. Transcript juda buzilgan bo‘lsa ham, undagi tanish so‘zlar va gap tuzilmasidan foydalanib, foydalanuvchining ehtimoliy ma'nosini tiklashga harakat qiling.
+9. Transcript juda buzilgan bo‘lsa ham, undagi tanish so‘zlar va gap tuzilmasidan foydalanib, foydalanuvchining ehtimoliy ma'nosini tiklashga harakat qiling — LEKIN bu holatda confidence="low" deb belgilang (15-qoidaga qarang).
 
 Masalan:
 
@@ -3528,7 +3615,7 @@ Lekin "Maktab" va "keboram" qismlaridan foydalanuvchi
 maktabga borishni nazarda tutgan bo‘lishi mumkin.
 
 Shuning uchun:
-→ "Maktabga borish"
+→ {"text": "Maktabga borish", "confidence": "low"}
 
 10. Ammo transcriptda umuman bajariladigan ishni anglatadigan yetarli signal bo‘lmasa, taxmin qilib task yaratmang.
 
@@ -3564,7 +3651,22 @@ Masalan:
 "bora man" → "borish"
 "bora mann" → "borish"
 
-15. Agar bitta transcriptda bir xil vazifa takrorlansa, uni faqat bir marta qaytaring.
+15. HAR BIR vazifa uchun "confidence" maydonini belgilang:
+
+"high" — agar:
+- Transcript aniq va tushunarli bo‘lsa
+- So‘zlar deyarli to‘g‘ri tanilgan bo‘lsa (ozgina fonetik xato bo‘lishi mumkin)
+- Vazifa ma'nosi shubhasiz bo‘lsa
+
+"low" — agar:
+- Transcript juda buzilgan yoki tushunarsiz bo‘lsa
+- Siz so‘zlarni katta darajada taxmin qilib tiklagan bo‘lsangiz
+- Bir nechta boshqacha talqin ham mumkin bo‘lsa
+- Transcript tarkibida aralash til (qozoqcha/turkcha) so‘zlar ko‘p bo‘lib, ma'noni aniq tiklash qiyin bo‘lsa
+
+Ikkilanganda — har doim "low" tanlang. "low" xato emas, u shunchaki foydalanuvchidan tasdiq so‘rashga yordam beradi.
+
+16. Agar bitta transcriptda bir xil vazifa takrorlansa, uni faqat bir marta qaytaring.
 
 MUHIM:
 Sizning vazifangiz transcriptni tarjima qilish emas.
@@ -3574,8 +3676,8 @@ Natija faqat quyidagi JSON schema formatida bo‘lsin:
 
 {
   "tasks": [
-    "Maktabga borish",
-    "Kursga borish"
+    {"text": "Maktabga borish", "confidence": "high"},
+    {"text": "Kursga borish", "confidence": "low"}
   ]
 }
 
@@ -3605,7 +3707,24 @@ Hech qanday qo‘shimcha matn yozmang.
                             "tasks": {
                                 "type": "array",
                                 "items": {
-                                    "type": "string"
+                                    "type": "object",
+                                    "properties": {
+                                        "text": {
+                                            "type": "string"
+                                        },
+                                        "confidence": {
+                                            "type": "string",
+                                            "enum": [
+                                                "high",
+                                                "low"
+                                            ]
+                                        }
+                                    },
+                                    "required": [
+                                        "text",
+                                        "confidence"
+                                    ],
+                                    "additionalProperties": False
                                 }
                             }
                         },
@@ -3663,17 +3782,27 @@ Hech qanday qo‘shimcha matn yozmang.
         )
         return []
 
-    tasks = data.get("tasks", [])
+    raw_tasks = data.get("tasks", [])
 
     cleaned_tasks = []
     seen_tasks = set()
 
-    for task in tasks:
+    for item in raw_tasks:
 
-        if not isinstance(task, str):
+        if not isinstance(item, dict):
             continue
 
-        cleaned = clean_parsed_task(task)
+        task_text = item.get("text")
+        confidence = item.get("confidence")
+
+        if not isinstance(task_text, str):
+            continue
+
+        if confidence not in ("high", "low"):
+            # Noma'lum holatda ehtiyotkorlik bilan "low" deb olamiz
+            confidence = "low"
+
+        cleaned = clean_parsed_task(task_text)
 
         if not cleaned:
             continue
@@ -3685,7 +3814,12 @@ Hech qanday qo‘shimcha matn yozmang.
 
         seen_tasks.add(normalized)
 
-        cleaned_tasks.append(cleaned)
+        cleaned_tasks.append(
+            {
+                "text": cleaned,
+                "confidence": confidence
+            }
+        )
 
     print(
         "VOICE PARSED TASKS:",
@@ -3782,7 +3916,7 @@ def handle_voice_message(
             "VOICE STEP 2: task parser boshlanmoqda"
         )
 
-        tasks = groq_parse_tasks(
+        parsed_tasks = groq_parse_tasks(
             transcript
         )
 
@@ -3792,10 +3926,10 @@ def handle_voice_message(
 
         print(
             "VOICE TASKS:",
-            tasks
+            parsed_tasks
         )
 
-        if not tasks:
+        if not parsed_tasks:
 
             print(
                 "VOICE: task topilmadi"
@@ -3812,39 +3946,109 @@ def handle_voice_message(
                 "tasks": []
             }
 
+        high_conf_tasks = [
+            item["text"]
+            for item in parsed_tasks
+            if item["confidence"] == "high"
+        ]
+
+        low_conf_tasks = [
+            item["text"]
+            for item in parsed_tasks
+            if item["confidence"] == "low"
+        ]
+
+        print(
+            "VOICE HIGH CONFIDENCE:",
+            high_conf_tasks
+        )
+
+        print(
+            "VOICE LOW CONFIDENCE:",
+            low_conf_tasks
+        )
+
+        result = {
+            "ok": True,
+            "route": "voice"
+        }
+
         # =================================================
-        # STEP 3 — CREATE TASKS
+        # STEP 3a — ISHONCHLI VAZIFALARNI DARHOL SAQLASH
         # =================================================
 
-        print(
-            "VOICE STEP 3: handle_create_tasks"
-        )
+        if high_conf_tasks:
 
-        task_text = "\n".join(
-            tasks
-        )
+            print(
+                "VOICE STEP 3a: high-confidence tasklarni saqlash"
+            )
 
-        print(
-            "VOICE TASK TEXT:",
-            task_text
-        )
+            task_text = "\n".join(
+                high_conf_tasks
+            )
 
-        # MUHIM:
-        # from_voice=True oldidan vergul bor.
-        result = handle_create_tasks(
-            chat_id,
-            task_text,
-            from_voice=True
-        )
+            create_result = handle_create_tasks(
+                chat_id,
+                task_text,
+                from_voice=True
+            )
 
-        print(
-            "VOICE STEP 3 DONE"
-        )
+            result["auto_saved"] = create_result
 
-        print(
-            "VOICE FINAL RESULT:",
-            result
-        )
+            print(
+                "VOICE STEP 3a DONE:",
+                create_result
+            )
+
+        # =================================================
+        # STEP 3b — NOANIQ VAZIFALARNI TASDIQLASH
+        # =================================================
+
+        if low_conf_tasks:
+
+            print(
+                "VOICE STEP 3b: low-confidence tasklarni tasdiqlashga yuborish"
+            )
+
+            set_pending_voice_tasks(
+                chat_id,
+                low_conf_tasks
+            )
+
+            confirm_lines = "\n".join(
+                f"• {t}" for t in low_conf_tasks
+            )
+
+            keyboard = {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "✅ Ha, to‘g‘ri",
+                            "callback_data": "voice_confirm|yes"
+                        },
+                        {
+                            "text": "❌ Yo‘q, bekor qilish",
+                            "callback_data": "voice_confirm|no"
+                        }
+                    ]
+                ]
+            }
+
+            telegram_send_message_with_keyboard(
+                chat_id,
+
+                "🤔 Ovozingizni to‘liq aniq tushunolmadim.\n\n"
+                "Quyidagi vazifa(lar)ni to‘g‘ri tushundimmi?\n\n"
+                f"{confirm_lines}",
+
+                keyboard
+            )
+
+            result["pending_confirmation"] = low_conf_tasks
+
+            print(
+                "VOICE STEP 3b DONE"
+            )
 
         print("========================================")
         print("HANDLE VOICE DONE")
@@ -3885,6 +4089,90 @@ def handle_voice_message(
             "ok": False,
             "error": str(error)
         }
+
+
+# =========================================================
+# HANDLE VOICE CONFIRM CALLBACK
+# =========================================================
+
+def handle_voice_confirm(
+    chat_id: int,
+    decision: str,
+    callback_query_id: Optional[str] = None,
+    message_id: Optional[int] = None
+):
+
+    pending_tasks = pop_pending_voice_tasks(
+        chat_id
+    )
+
+    if not pending_tasks:
+
+        if callback_query_id:
+
+            telegram_answer_callback(
+                callback_query_id,
+                "Bu so‘rov eskirgan."
+            )
+
+        return {
+            "ok": True,
+            "expired": True
+        }
+
+    if message_id:
+
+        try:
+
+            telegram_delete_message(
+                chat_id,
+                message_id
+            )
+
+        except Exception as error:
+
+            print(
+                "Voice confirm delete message error:",
+                error
+            )
+
+    if decision == "yes":
+
+        if callback_query_id:
+
+            telegram_answer_callback(
+                callback_query_id,
+                "Saqlanmoqda ✅"
+            )
+
+        task_text = "\n".join(
+            pending_tasks
+        )
+
+        return handle_create_tasks(
+            chat_id,
+            task_text,
+            from_voice=True
+        )
+
+    # decision == "no"
+
+    if callback_query_id:
+
+        telegram_answer_callback(
+            callback_query_id,
+            "Bekor qilindi"
+        )
+
+    telegram_send_message(
+        chat_id,
+        "❌ Bekor qilindi. Vazifani matn yoki ovoz orqali qayta yuborishingiz mumkin."
+    )
+
+    return {
+        "ok": True,
+        "cancelled": True
+    }
 
 
 # =========================================================
@@ -4048,6 +4336,28 @@ def telegram_webhook(
                         callback_query_id,
                         callback_message_id
                     )
+
+            # ---------------------------------------------
+            # VOICE CONFIRM
+            # ---------------------------------------------
+
+            if callback_data.startswith(
+                "voice_confirm|"
+            ):
+
+                decision = (
+                    callback_data.split(
+                        "|",
+                        1
+                    )[1]
+                )
+
+                return handle_voice_confirm(
+                    chat_id,
+                    decision,
+                    callback_query_id,
+                    callback_message_id
+                )
 
             if callback_query_id:
 
