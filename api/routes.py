@@ -3185,21 +3185,11 @@ def groq_transcribe_telegram_voice(
     print("========================================")
 
     if not TELEGRAM_TOKEN:
-
-        print(
-            "VOICE ERROR: TELEGRAM_TOKEN sozlanmagan"
-        )
-
         raise RuntimeError(
             "TELEGRAM_TOKEN sozlanmagan"
         )
 
     if not GROQ_API_KEY:
-
-        print(
-            "VOICE ERROR: GROQ_API_KEY sozlanmagan"
-        )
-
         raise RuntimeError(
             "GROQ_API_KEY sozlanmagan"
         )
@@ -3238,10 +3228,6 @@ def groq_transcribe_telegram_voice(
 
     telegram_file_data = (
         telegram_file_response.json()
-    )
-
-    print(
-        "VOICE: Telegram file response olindi"
     )
 
     file_path = (
@@ -3299,17 +3285,17 @@ def groq_transcribe_telegram_voice(
             "Ovoz faylini yuklab olishda xatolik"
         )
 
+    audio_size = len(
+        audio_response.content
+    )
+
     print(
         "VOICE AUDIO SIZE:",
-        len(audio_response.content),
+        audio_size,
         "bytes"
     )
 
     if not audio_response.content:
-
-        print(
-            "VOICE ERROR: Audio fayl bo‘sh"
-        )
 
         raise RuntimeError(
             "Ovoz fayli bo‘sh"
@@ -3325,9 +3311,12 @@ def groq_transcribe_telegram_voice(
 
     groq_response = requests.post(
         "https://api.groq.com/openai/v1/audio/transcriptions",
+
         headers={
-            "Authorization": f"Bearer {GROQ_API_KEY}"
+            "Authorization":
+                f"Bearer {GROQ_API_KEY}"
         },
+
         files={
             "file": (
                 "voice.ogg",
@@ -3335,11 +3324,19 @@ def groq_transcribe_telegram_voice(
                 "audio/ogg"
             )
         },
+
         data={
             "model": "whisper-large-v3-turbo",
+
+            # MUHIM:
+            # Foydalanuvchi asosan o‘zbekcha gapiradi.
+            "language": "uz",
+
             "response_format": "json",
+
             "temperature": "0"
         },
+
         timeout=60
     )
 
@@ -3376,7 +3373,6 @@ def groq_transcribe_telegram_voice(
     )
 
     return transcript
-
 
 # =========================================================
 # GROQ TASK PARSER
