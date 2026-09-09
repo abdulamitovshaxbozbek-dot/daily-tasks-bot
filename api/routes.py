@@ -3388,29 +3388,32 @@ def groq_transcribe_telegram_voice(
         "VOICE: Groq Whisper'ga yuborilmoqda..."
     )
 
-   groq_response = requests.post(
-    "https://api.groq.com/openai/v1/audio/transcriptions",
+    groq_response = requests.post(
+        "https://api.groq.com/openai/v1/audio/transcriptions",
 
-    headers={
-        "Authorization":
-            f"Bearer {GROQ_API_KEY}"
-    },
+        headers={
+            "Authorization":
+                f"Bearer {GROQ_API_KEY}"
+        },
 
-    files={
-        "file": (
-            "voice.ogg",
-            audio_response.content,
-            "audio/ogg"
-        )
-    },
+        files={
+            "file": (
+                "voice.ogg",
+                audio_response.content,
+                "audio/ogg"
+            )
+        },
 
-    data={
-        "model": "whisper-large-v3",
-        "language": "uz",
-        "response_format": "json",
-        "temperature": "0"
-    },
-       
+        data={
+            "model": "whisper-large-v3",
+            "language": "uz",
+            "response_format": "json",
+            "temperature": "0"
+        },
+
+        timeout=60
+    )
+
     print(
         "VOICE: Groq Whisper status:",
         groq_response.status_code
