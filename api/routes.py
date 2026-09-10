@@ -3408,7 +3408,11 @@ def groq_transcribe_telegram_voice(
             "model": "whisper-large-v3",
             "language": "uz",
             "response_format": "json",
-            "temperature": "0"
+            "temperature": "0",
+            # MUHIM: Whisper'ga o'zbekcha uslub va so'z boyligi
+            # haqida yo'l-yo'riq beradi. Bu fonetik chalkashliklarni
+            # (masalan "maktabga" -> "mektepke") sezilarli kamaytiradi.
+            "prompt": WHISPER_PROMPT_UZ
         },
 
         timeout=60
@@ -3595,24 +3599,52 @@ Masalan:
 
 8. Salomlashish, savol, fikr, izoh, minnatdorchilik yoki oddiy suhbatni task qilmang.
 
-9. Transcript juda buzilgan bo‘lsa ham, undagi tanish so‘zlar va gap tuzilmasidan foydalanib, foydalanuvchining ehtimoliy ma'nosini tiklashga harakat qiling — LEKIN bu holatda confidence="low" deb belgilang (15-qoidaga qarang).
+9. Transcript qisman buzilgan bo‘lsa (masalan, bitta-ikkita so‘z
+fonetik jihatdan noto‘g‘ri tanilgan, lekin harakatni bildiruvchi
+asosiy so‘z — masalan "maktab", "kurs", "kitob", "dars" va fe'l
+ildizi — tanish bo‘lsa), undagi tanish so‘zlar va gap tuzilmasidan
+foydalanib, foydalanuvchining ehtimoliy ma'nosini tiklashga
+harakat qiling — LEKIN bu holatda confidence="low" deb belgilang
+(15-qoidaga qarang).
 
 Masalan:
 
 "Maktab keboram an abit tanki in."
 
-Bu transcript grammatik jihatdan buzilgan.
-Lekin "Maktab" va "keboram" qismlaridan foydalanuvchi
-maktabga borishni nazarda tutgan bo‘lishi mumkin.
+Bu transcriptda "Maktab" so‘zi aniq tanilgan va "keboram" so‘zi
+fonetik jihatdan "boraman" ga yaqin. Asosiy harakat (maktabga
+borish) taniqli.
 
 Shuning uchun:
 → {"text": "Maktabga borish", "confidence": "low"}
 
-10. Ammo transcriptda umuman bajariladigan ishni anglatadigan yetarli signal bo‘lmasa, taxmin qilib task yaratmang.
+MUHIM CHEKLOV:
+Agar transcriptda HECH QANDAY tanish o‘zbekcha ildiz so‘z
+(masalan joy nomi, fan nomi, harakat fe'li) topilmasa — ya'ni
+butun gap sizga notanish, boshqa tilga o‘xshash yoki tasodifiy
+tovushlar ketma-ketligidek tuyulsa — taxmin qilib task
+yaratmang. Bunday holatda 10-qoidaga o‘ting va bo‘sh massiv
+qaytaring, hatto gap grammatik jihatdan "harakat" haqida
+bo‘lgandek tuyulsa ham. "Tanish so‘z yo‘q" holatida
+low-confidence taxmin ham qilinmaydi — chunki bunday taxmin
+foydalanuvchi uchun tasodifiy va foydasiz bo‘ladi.
+
+10. Ammo transcriptda umuman bajariladigan ishni anglatadigan
+yetarli signal bo‘lmasa — ya'ni gapda tanish o‘zbekcha joy nomi,
+fan nomi yoki harakat fe'lining ildizi umuman topilmasa — taxmin
+qilib task yaratmang. Bu qoida 9-qoidadan USTUN turadi: agar
+shubha bo‘lsa (tanish so‘z bormi-yo‘qmi aniq bo‘lmasa), bo‘sh
+massiv qaytarish "low" bilan taxmin qilishdan yaxshiroqdir.
 
 Masalan:
 "Salom, yaxshimisiz?"
 → []
+
+"Nəmə stələdən dərs qələsh Dəm aləsh"
+→ []
+(chunki bu yerda "dərs" so‘zidan tashqari hech narsa
+o‘zbekcha ildizga o‘xshamaydi, va faqat bitta so‘zga
+tayanib butun jumlaning ma'nosini tiklash imkonsiz)
 
 11. Natijadagi barcha tasklar O‘ZBEK LOTIN ALIFBOSIDA bo‘lsin.
 
@@ -3650,12 +3682,17 @@ Masalan:
 - Vazifa ma'nosi shubhasiz bo‘lsa
 
 "low" — agar:
-- Transcript juda buzilgan yoki tushunarsiz bo‘lsa
-- Siz so‘zlarni katta darajada taxmin qilib tiklagan bo‘lsangiz
+- Transcript qisman buzilgan bo‘lsa, lekin asosiy harakat
+  bildiruvchi so‘z(lar) tanish bo‘lsa
+- Siz so‘zlarni ma'lum darajada taxmin qilib tiklagan bo‘lsangiz
 - Bir nechta boshqacha talqin ham mumkin bo‘lsa
 - Transcript tarkibida aralash til (qozoqcha/turkcha) so‘zlar ko‘p bo‘lib, ma'noni aniq tiklash qiyin bo‘lsa
 
 Ikkilanganda — har doim "low" tanlang. "low" xato emas, u shunchaki foydalanuvchidan tasdiq so‘rashga yordam beradi.
+
+Lekin agar transcriptda umuman tanish so‘z topilmasa — "low"
+bilan ham task yaratmang, 10-qoidaga muvofiq bo‘sh massiv
+qaytaring.
 
 16. Agar bitta transcriptda bir xil vazifa takrorlansa, uni faqat bir marta qaytaring.
 
