@@ -3489,6 +3489,12 @@ def groq_parse_tasks(
         json={
             "model": "openai/gpt-oss-20b",
 
+            # Reasoning + JSON javobi uchun yetarli joy.
+            # Standart qiymat past bo'lsa, model uzoq reasoning
+            # qilib, JSON'ni to'liq yoza olmasdan strict schema
+            # validatsiyasidan o'tolmay 400 xato qaytarishi mumkin.
+            "max_tokens": 4096,
+
             "messages": [
                 {
                     "role": "system",
@@ -3680,6 +3686,11 @@ Masalan:
 - Transcript aniq va tushunarli bo‘lsa
 - So‘zlar deyarli to‘g‘ri tanilgan bo‘lsa (ozgina fonetik xato bo‘lishi mumkin)
 - Vazifa ma'nosi shubhasiz bo‘lsa
+- Aniq nom (fan nomi, joy nomi, til nomi va h.k.) ishlatilgan
+  bo‘lsa, bu nom transcriptda TO‘G‘RIDAN-TO‘G‘RI, tanib
+  bo‘ladigan holda aytilgan bo‘lishi kerak — nomni fonetik
+  o‘xshashlik asosida "topib chiqarish" high emas, low
+  hisoblanadi (pastdagi misolga qarang)
 
 "low" — agar:
 - Transcript qisman buzilgan bo‘lsa, lekin asosiy harakat
@@ -3687,6 +3698,19 @@ Masalan:
 - Siz so‘zlarni ma'lum darajada taxmin qilib tiklagan bo‘lsangiz
 - Bir nechta boshqacha talqin ham mumkin bo‘lsa
 - Transcript tarkibida aralash til (qozoqcha/turkcha) so‘zlar ko‘p bo‘lib, ma'noni aniq tiklash qiyin bo‘lsa
+- Siz o‘zingiz ichki fikrlash jarayonida ikkita yoki undan ortiq
+  talqin orasida tanlov qilgan bo‘lsangiz (masalan "bu so‘z X
+  ham, Y ham bo‘lishi mumkin" deb o‘ylagan bo‘lsangiz) — bunday
+  holatda tanlangan variant har doim "low", hech qachon "high"
+  emas
+
+Diqqat: "geboraman", "uyguraman" kabi fe'l ildiziga o‘xshamagan,
+lekin sizga negadir tanish tuyulgan so‘zlarni aniq bir nomga
+(masalan til yoki millat nomiga) bog‘lab, keyin uni "high"
+confidence bilan chiqarish xato. Masalan "uyguraman" so‘zini
+"Uygur tili" deb o‘qish spekulyativ taxmin — bunday holatlar
+har doim "low" bo‘lishi kerak, chunki bu yerda haqiqiy nom
+transcriptda tanib bo‘lmaydi, faqat tovush o‘xshashligi bor.
 
 Ikkilanganda — har doim "low" tanlang. "low" xato emas, u shunchaki foydalanuvchidan tasdiq so‘rashga yordam beradi.
 
@@ -3795,6 +3819,17 @@ Hech qanday qo‘shimcha matn yozmang.
             "VOICE GROQ TASK PARSER ERROR:",
             groq_response.text
         )
+
+        # MUHIM: 400 (masalan json_validate_failed) odatda model
+        # strict JSON schema'ga mos javob generatsiya qila
+        # olmaganda yuz beradi (masalan uzoq reasoning tufayli
+        # token yetishmay qolganda). Bu holatda butun voice
+        # handling'ni qulatish o'rniga, transkriptni yo'qotmasdan
+        # bo'sh natija qaytaramiz — handle_voice_message keyin
+        # foydalanuvchiga "tushunmadim, qayta ayting" deb yozadi.
+        if groq_response.status_code == 400:
+            return []
+
         raise RuntimeError(
             "Groq task parser xatolik qaytardi"
         )
