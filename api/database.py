@@ -6,7 +6,7 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 
 pool = ThreadedConnectionPool(
     minconn=1,
-    maxconn=50,
+    maxconn=30,
     dsn=DATABASE_URL
 )
 
