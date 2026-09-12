@@ -965,6 +965,8 @@ def handle_morning_time(
 
 🚀 Hammasi tayyor. Endi kunlik vazifalaringizni yuborishingiz mumkin.
 
+✍️ Yozib yoki 🎙️ ovozli xabar orqali yuborishingiz mumkin — ovoz yuborsangiz, aniq va shoshilmasdan gapiring.
+
 ⏰ Belgilangan vaqtda sizga eslatma yuboramiz.
 
 📢 Yangiliklar va yangilanishlar: @kunlikvazifalar_news
@@ -3095,15 +3097,15 @@ Quyidagi vaqtlardan birini tanlang:"""
 
 📋 Oxirgi paytlarda yangi vazifalaringiz qo‘shilmagan.
 
-✍️ Bugungi 1–3 ta vazifangizni yozib ko‘ring.
+✍️ Bugungi 1–3 ta vazifangizni yozib yoki 🎙️ ovozli xabar orqali yuboring (aniq va sekin gapiring).
 
 Masalan:
-• Ingliz tilidan 20 ta so‘z yodlash
-• 10 bet kitob o‘qish
-• 30 daqiqa sport qilish
+- Ingliz tilidan 20 ta so‘z yodlash
+- 10 bet kitob o‘qish
+- 30 daqiqa sport qilish
 
 ✨ Har bir reja — tartibli hayot sari bir qadam!"""
-
+            
             reply_markup = None
 
         try:
