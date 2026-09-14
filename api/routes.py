@@ -742,23 +742,17 @@ def handle_telegram_start(
 ):
 
     first_name = first_name or "Do‘st"
-
     username = username or ""
 
-    user = get_user_by_chat_id(
-        chat_id
-    )
+    user = get_user_by_chat_id(chat_id)
 
     # -----------------------------------------------------
     # EXISTING USER
     # -----------------------------------------------------
-
     if user:
 
         with get_connection() as conn:
-
             with conn.cursor() as cur:
-
                 cur.execute(
                     """
                     UPDATE public.users
@@ -770,13 +764,11 @@ def handle_telegram_start(
                                 CURRENT_TIMESTAMP
                                 AT TIME ZONE 'Asia/Tashkent'
                             )::date,
-
                         state = CASE
                             WHEN state = 'blocked'
                             THEN 'active'
                             ELSE state
                         END
-
                     WHERE telegram_chat_id = %s
                     """,
                     (
@@ -785,12 +777,24 @@ def handle_telegram_start(
                         chat_id
                     )
                 )
-
             conn.commit()
 
+        # Onboarding tugamagan bo‘lsa (vaqt tanlanmagan) — qayta morning keyboard
+        if (
+            user["state"] == "waiting_morning_time"
+            or user["morning_time"] is None
+        ):
+            telegram_send_morning_keyboard(chat_id, first_name)
+            return {
+                "ok": True,
+                "route": "start",
+                "existing_user": True,
+                "waiting_morning_time": True
+            }
+
+        # Oddiy mavjud foydalanuvchi
         telegram_send_message(
             chat_id,
-
             f"""👋 Assalomu alaykum, {first_name}!
 
 Siz allaqachon ro‘yxatdan o‘tgansiz. ✅
@@ -807,11 +811,8 @@ Siz allaqachon ro‘yxatdan o‘tgansiz. ✅
     # -----------------------------------------------------
     # NEW USER
     # -----------------------------------------------------
-
     with get_connection() as conn:
-
         with conn.cursor() as cur:
-
             cur.execute(
                 """
                 INSERT INTO public.users (
@@ -843,13 +844,9 @@ Siz allaqachon ro‘yxatdan o‘tgansiz. ✅
                     TIMEZONE
                 )
             )
-
         conn.commit()
 
-    telegram_send_morning_keyboard(
-        chat_id,
-        first_name
-    )
+    telegram_send_morning_keyboard(chat_id, first_name)
 
     return {
         "ok": True,
