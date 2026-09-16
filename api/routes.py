@@ -719,11 +719,11 @@ def telegram_send_morning_keyboard(
 
         f"""🌅 Assalomu alaykum, {first_name}!
 
-📋 Kunlik vazifalar botiga xush kelibsiz.
+📋 Men sizga har kuni vazifalaringizni eslatib, natijangizni kuzatib boraman.
 
-Tizim ishga tushishi uchun savolga javob bering:
+Boshlash uchun — kuningizni qachon rejalashtirasiz?
 
-🕐 Kuningizni soat nechchida rejalashtirasiz?""",
+🕐 Vaqtni tanlang:""",
 
         {
             "inline_keyboard": keyboard
@@ -963,15 +963,15 @@ def handle_morning_time(
 
         f"""✅ Ertalabki vaqt belgilandi: {time_value}
 
-🚀 Hammasi tayyor. Endi kunlik vazifalaringizni yuborishingiz mumkin.
+🚀 Hammasi tayyor!
 
-✍️ Yozib yoki 🎙️ ovozli xabar orqali yuborishingiz mumkin — ovoz yuborsangiz, aniq va shoshilmasdan gapiring.
+📝 Keling, hoziroq birinchi vazifangizni yozamiz. Masalan:
 
-⏰ Belgilangan vaqtda sizga eslatma yuboramiz.
+"Kitob o‘qish" yoki "Sport qilish" deb yozib ko‘ring 👇
 
-📢 Yangiliklar va yangilanishlar: @kunlikvazifalar_news
+🎙️ Ovozli xabar orqali ham aytishingiz mumkin.
 
-🤲 Kuningiz barakali o‘tsin!"""
+📢 Yangiliklar: @kunlikvazifalar_news"""
     )
 
     return {
@@ -1072,6 +1072,26 @@ def handle_create_tasks(
     today = get_today()
 
     # -----------------------------------------------------
+    # IS THIS USER'S VERY FIRST TASK EVER?
+    # -----------------------------------------------------
+    with get_connection() as conn:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM public.tasks
+                    WHERE user_id = %s
+                )
+                """,
+                (user["id"],)
+            )
+
+            is_first_task_ever = not cur.fetchone()[0]
+
+    # -----------------------------------------------------
     # EXISTING TASKS
     # -----------------------------------------------------
     with get_connection() as conn:
@@ -1167,7 +1187,25 @@ def handle_create_tasks(
 
     response_parts = []
 
-    if added_count > 0:
+    if added_count > 0 and is_first_task_ever:
+
+        if added_count == 1:
+
+            response_parts.append(
+                "🎉 Ajoyib! Birinchi vazifangiz saqlandi."
+            )
+
+        else:
+
+            response_parts.append(
+                f"🎉 Ajoyib boshlanish! {added_count} ta vazifangiz saqlandi."
+            )
+
+        response_parts.append(
+            "Shu tarzda davom eting — har bir kichik qadam katta natijaga olib boradi! 💪"
+        )
+
+    elif added_count > 0:
 
         if from_voice:
 
@@ -1272,6 +1310,42 @@ def handle_finish_day(
         }
 
     today = get_today()
+
+    with get_connection() as conn:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
+            cur.execute(
+                """
+                SELECT COUNT(*)::int
+                FROM public.tasks
+                WHERE user_id = %s
+                  AND task_date = %s
+                """,
+                (
+                    user["id"],
+                    today
+                )
+            )
+
+            total_tasks_today = cur.fetchone()[0]
+
+    if total_tasks_today == 0:
+
+        telegram_send_message(
+            chat_id,
+
+            """📭 Bugun hali vazifa yozmagansiz.
+
+✍️ Avval bugungi 1-3 ta vazifangizni yozib yoki ovozli xabar orqali yuboring, keyin /yakunladim buyrug'ini bering."""
+        )
+
+        return {
+            "ok": True,
+            "no_tasks_today": True
+        }
 
     with get_connection() as conn:
 
@@ -3105,7 +3179,7 @@ Masalan:
 - 30 daqiqa sport qilish
 
 ✨ Har bir reja — tartibli hayot sari bir qadam!"""
-            
+
             reply_markup = None
 
         try:
@@ -3955,6 +4029,11 @@ def handle_voice_message(
     )
 
     try:
+
+        telegram_send_message(
+            chat_id,
+            "🎙️ Ovozingizni tinglayapman..."
+        )
 
         # =================================================
         # STEP 1 — TRANSCRIPTION
