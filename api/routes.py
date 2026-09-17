@@ -190,9 +190,7 @@ def get_user_by_chat_id(chat_id: int):
 
     with get_connection() as conn:
 
-        with conn.cursor(
-            cursor_factory=RealDictCursor
-        ) as cur:
+        with conn.cursor() as cur:
 
             cur.execute(
                 """
@@ -1311,11 +1309,10 @@ def handle_finish_day(
 
     today = get_today()
 
+    # --- TUZATILGAN: RealDictCursor olib tashlandi ---
     with get_connection() as conn:
 
-        with conn.cursor(
-            cursor_factory=RealDictCursor
-        ) as cur:
+        with conn.cursor() as cur:
 
             cur.execute(
                 """
@@ -1331,6 +1328,7 @@ def handle_finish_day(
             )
 
             total_tasks_today = cur.fetchone()[0]
+    # --- TUZATILGAN QISM TUGADI ---
 
     if total_tasks_today == 0:
 
@@ -3527,6 +3525,7 @@ def groq_transcribe_telegram_voice(
     )
 
     return transcript
+
 
 # =========================================================
 # GROQ TASK PARSER
