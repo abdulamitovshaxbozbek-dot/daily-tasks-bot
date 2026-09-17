@@ -3341,107 +3341,6 @@ def handle_admin(
         "route": "admin"
     }
 
-
-# =========================================================
-# BROADCAST
-# =========================================================
-
-def handle_broadcast(
-    chat_id: int,
-    message_text: str
-):
-
-    if not is_admin(chat_id):
-
-        telegram_send_message(
-            chat_id,
-            "⛔ Sizda admin huquqi yo‘q."
-        )
-
-        return {
-            "ok": False
-        }
-
-    text = re.sub(
-        r"^/xabar\s*",
-        "",
-        message_text,
-        flags=re.IGNORECASE
-    ).strip()
-
-    if not text:
-
-        telegram_send_message(
-            chat_id,
-
-            """📢 Xabar yuborish formati:
-
-/xabar Sizning xabaringiz"""
-        )
-
-        return {
-            "ok": False
-        }
-
-    with get_connection() as conn:
-
-        with conn.cursor(
-            cursor_factory=RealDictCursor
-        ) as cur:
-
-            cur.execute(
-                """
-                SELECT telegram_chat_id
-                FROM public.users
-                WHERE telegram_chat_id IS NOT NULL
-                  AND state != 'blocked'
-                """
-            )
-
-            users = cur.fetchall()
-
-    sent = 0
-    failed = 0
-
-    for user in users:
-
-        try:
-
-            telegram_send_message(
-                user["telegram_chat_id"],
-                text
-            )
-
-            sent += 1
-
-        except Exception as error:
-
-            failed += 1
-
-            print(
-                "Broadcast error:",
-                error
-            )
-
-    telegram_send_message(
-        chat_id,
-
-        f"""📢 Broadcast yakunlandi.
-
-✅ Yuborildi: {sent} ta
-
-❌ Xatolik: {failed} ta
-
-👥 Jami: {len(users)} ta"""
-    )
-
-    return {
-        "ok": True,
-        "sent": sent,
-        "failed": failed
-    }
-
-
 # =========================================================
 # REMINDERS
 # =========================================================
@@ -4734,16 +4633,7 @@ def telegram_webhook(
             return handle_admin(
                 chat_id
             )
-
-        if message_text.startswith(
-            "/xabar"
-        ):
-
-            return handle_broadcast(
-                chat_id,
-                message_text
-            )
-
+    
         if message_text.startswith("/"):
 
             telegram_send_message(
