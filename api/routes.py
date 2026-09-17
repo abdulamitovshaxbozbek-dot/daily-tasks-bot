@@ -44,9 +44,6 @@ TIMEZONE = "Asia/Tashkent"
 
 API_KEY = os.getenv("API_KEY")
 
-# Whisper transkripsiya sifatini oshirish uchun namuna matn.
-# Bu audio kontent emas, balki Whisper'ga "qanday so'zlar va
-# uslub kutilyapti" degan yo'nalish beradi.
 WHISPER_PROMPT_UZ = (
     "Ertaga maktabga boraman, kitob o'qiyman, sport qilaman, "
     "ingliz tili darsiga boraman, uy vazifasini bajaraman, "
@@ -56,14 +53,8 @@ WHISPER_PROMPT_UZ = (
     "bir soat kitob o'qiyman, soat to'qqizda uyg'onaman."
 )
 
-# Ovozdan aniqlangan, lekin ishonch darajasi past bo'lgan
-# vazifalarni foydalanuvchi tasdiqlaguncha vaqtincha saqlash.
-# DB sxemasini o'zgartirmaslik uchun xotirada saqlanadi.
-# Format: { chat_id: {"tasks": [...], "created_at": float} }
 PENDING_VOICE_TASKS: dict[int, dict] = {}
 
-# Tasdiqlanmagan vazifalar necha soniyadan keyin eskirgan
-# hisoblanishi (foydalanuvchi tugmani bosmasa).
 PENDING_VOICE_TTL_SECONDS = 15 * 60
 
 
@@ -252,9 +243,6 @@ def clean_task_text(text: str) -> str:
 
 
 def normalize_task(text: str) -> str:
-    """
-    Takroriy vazifalarni yaxshiroq aniqlash.
-    """
 
     text = clean_task_text(
         text
@@ -280,125 +268,83 @@ def normalize_task(text: str) -> str:
 # =========================================================
 
 def uzbek_to_latin(text: str) -> str:
-    """
-    Groq tasodifan kirill alifbosida qaytarsa,
-    avtomatik o‘zbek lotiniga o'tkazadi.
-    """
 
     if not text:
         return text
 
     replacements = {
-        # O'zbek harflari
         "Ў": "O‘",
         "ў": "o‘",
-
         "Ғ": "G‘",
         "ғ": "g‘",
-
         "Қ": "Q",
         "қ": "q",
-
         "Ҳ": "H",
         "ҳ": "h",
-
-        # Kirill -> lotin
         "А": "A",
         "а": "a",
-
         "Б": "B",
         "б": "b",
-
         "В": "V",
         "в": "v",
-
         "Г": "G",
         "г": "g",
-
         "Д": "D",
         "д": "d",
-
         "Е": "E",
         "е": "e",
-
         "Ё": "Yo",
         "ё": "yo",
-
         "Ж": "J",
         "ж": "j",
-
         "З": "Z",
         "з": "z",
-
         "И": "I",
         "и": "i",
-
         "Й": "Y",
         "й": "y",
-
         "К": "K",
         "к": "k",
-
         "Л": "L",
         "л": "l",
-
         "М": "M",
         "м": "m",
-
         "Н": "N",
         "н": "n",
-
         "О": "O",
         "о": "o",
-
         "П": "P",
         "п": "p",
-
         "Р": "R",
         "р": "r",
-
         "С": "S",
         "с": "s",
-
         "Т": "T",
         "т": "t",
-
         "У": "U",
         "у": "u",
-
         "Ф": "F",
         "ф": "f",
-
         "Х": "X",
         "х": "x",
-
         "Ц": "Ts",
         "ц": "ts",
-
         "Ч": "Ch",
         "ч": "ch",
-
         "Ш": "Sh",
         "ш": "sh",
-
         "Щ": "Sh",
         "щ": "sh",
-
         "Ъ": "'",
         "ъ": "'",
-
         "Ы": "I",
         "ы": "i",
-
         "Ь": "",
         "ь": "",
-
         "Э": "E",
         "э": "e",
-
         "Ю": "Yu",
         "ю": "yu",
-
         "Я": "Ya",
         "я": "ya"
     }
@@ -414,9 +360,6 @@ def uzbek_to_latin(text: str) -> str:
 
 
 def clean_parsed_task(text: str) -> str:
-    """
-    Groq parserdan kelgan taskni yakuniy tozalash.
-    """
 
     text = uzbek_to_latin(
         text
@@ -749,10 +692,6 @@ def handle_telegram_start(
         chat_id
     )
 
-    # -----------------------------------------------------
-    # EXISTING USER
-    # -----------------------------------------------------
-
     if user:
 
         with get_connection() as conn:
@@ -803,10 +742,6 @@ Siz allaqachon ro‘yxatdan o‘tgansiz. ✅
             "route": "start",
             "existing_user": True
         }
-
-    # -----------------------------------------------------
-    # NEW USER
-    # -----------------------------------------------------
 
     with get_connection() as conn:
 
@@ -900,10 +835,6 @@ def handle_morning_time(
         return {
             "ok": False
         }
-
-    # -----------------------------------------------------
-    # SECOND CLICK
-    # -----------------------------------------------------
 
     if (
         user["morning_time"] is not None
@@ -1017,10 +948,6 @@ def handle_create_tasks(
             "ok": False
         }
 
-    # -----------------------------------------------------
-    # COMPLETED DAY
-    # -----------------------------------------------------
-
     if user["state"] == "completed":
 
         telegram_send_message(
@@ -1035,9 +962,6 @@ def handle_create_tasks(
             "ok": False,
             "day_completed": True
         }
-    # -----------------------------------------------------
-    # SPLIT TASKS
-    # -----------------------------------------------------
 
     raw_tasks = re.split(
         r"\r?\n+",
@@ -1071,9 +995,24 @@ def handle_create_tasks(
 
     today = get_today()
 
-    # -----------------------------------------------------
-    # EXISTING TASKS
-    # -----------------------------------------------------
+    # Birinchi vazifami? (1-koddan, to‘g‘ri cursor bilan)
+    with get_connection() as conn:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM public.tasks
+                    WHERE user_id = %s
+                )
+                """,
+                (user["id"],)
+            )
+
+            is_first_task_ever = not cur.fetchone()[0]
+
     with get_connection() as conn:
 
         with conn.cursor(
@@ -1105,10 +1044,6 @@ def handle_create_tasks(
     added_count = 0
     duplicate_count = 0
     added_tasks = []
-
-    # -----------------------------------------------------
-    # INSERT TASKS
-    # -----------------------------------------------------
 
     with get_connection() as conn:
 
@@ -1157,21 +1092,32 @@ def handle_create_tasks(
 
                 added_count += 1
 
-        # MUHIM:
-        # commit endi to'g'ri indentationda.
         conn.commit()
-
-    # -----------------------------------------------------
-    # RESPONSE
-    # -----------------------------------------------------
 
     response_parts = []
 
-    if added_count > 0:
+    if added_count > 0 and is_first_task_ever:
+
+        if added_count == 1:
+
+            response_parts.append(
+                "🎉 Ajoyib! Birinchi vazifangiz saqlandi."
+            )
+
+        else:
+
+            response_parts.append(
+                f"🎉 Ajoyib boshlanish! {added_count} ta vazifangiz saqlandi."
+            )
+
+        response_parts.append(
+            "Shu tarzda davom eting — har bir kichik qadam katta natijaga olib boradi! 💪"
+        )
+
+    elif added_count > 0:
 
         if from_voice:
 
-            # Ovozli xabarda vazifalar ro'yxatini ko'rsatamiz
             response_parts.append(
                 f"🎉 {added_count} ta yangi vazifa "
                 f"qabul qilindi va saqlandi:"
@@ -1188,7 +1134,6 @@ def handle_create_tasks(
 
         else:
 
-            # Textda vazifalar ro'yxatini ko'rsatmaymiz
             response_parts.append(
                 f"🎉 {added_count} ta yangi vazifa "
                 f"qabul qilindi va saqlandi!"
@@ -1272,6 +1217,42 @@ def handle_finish_day(
         }
 
     today = get_today()
+
+    # Bugun umuman vazifa bormi?
+    # MU HIM: oddiy cursor — RealDictCursor bo‘lsa KeyError(0) chiqadi
+    with get_connection() as conn:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT COUNT(*)::int
+                FROM public.tasks
+                WHERE user_id = %s
+                  AND task_date = %s
+                """,
+                (
+                    user["id"],
+                    today
+                )
+            )
+
+            total_tasks_today = cur.fetchone()[0]
+
+    if total_tasks_today == 0:
+
+        telegram_send_message(
+            chat_id,
+
+            """📭 Bugun hali vazifa yozmagansiz.
+
+✍️ Avval bugungi 1-3 ta vazifangizni yozib yoki ovozli xabar orqali yuboring, keyin /yakunladim buyrug'ini bering."""
+        )
+
+        return {
+            "ok": True,
+            "no_tasks_today": True
+        }
 
     with get_connection() as conn:
 
@@ -3105,7 +3086,7 @@ Masalan:
 - 30 daqiqa sport qilish
 
 ✨ Har bir reja — tartibli hayot sari bir qadam!"""
-            
+
             reply_markup = None
 
         try:
@@ -3204,9 +3185,6 @@ Masalan:
 # =========================================================
 
 def _cleanup_expired_pending_voice_tasks():
-    """
-    Eskirgan (TTL o'tgan) tasdiqlanmagan vazifalarni tozalaydi.
-    """
 
     now = time.time()
 
@@ -3275,10 +3253,6 @@ def groq_transcribe_telegram_voice(
             "GROQ_API_KEY sozlanmagan"
         )
 
-    # =====================================================
-    # 1. TELEGRAM GET FILE
-    # =====================================================
-
     print(
         "VOICE: Telegram getFile chaqirilmoqda..."
     )
@@ -3337,10 +3311,6 @@ def groq_transcribe_telegram_voice(
         file_path
     )
 
-    # =====================================================
-    # 2. TELEGRAM'DAN OGG YUKLASH
-    # =====================================================
-
     print(
         "VOICE: Ovoz fayli Telegram'dan yuklanmoqda..."
     )
@@ -3382,10 +3352,6 @@ def groq_transcribe_telegram_voice(
             "Ovoz fayli bo‘sh"
         )
 
-    # =====================================================
-    # 3. GROQ WHISPER
-    # =====================================================
-
     print(
         "VOICE: Groq Whisper'ga yuborilmoqda..."
     )
@@ -3411,9 +3377,6 @@ def groq_transcribe_telegram_voice(
             "language": "uz",
             "response_format": "json",
             "temperature": "0",
-            # MUHIM: Whisper'ga o'zbekcha uslub va so'z boyligi
-            # haqida yo'l-yo'riq beradi. Bu fonetik chalkashliklarni
-            # (masalan "maktabga" -> "mektepke") sezilarli kamaytiradi.
             "prompt": WHISPER_PROMPT_UZ
         },
 
@@ -3454,6 +3417,7 @@ def groq_transcribe_telegram_voice(
 
     return transcript
 
+
 # =========================================================
 # GROQ TASK PARSER
 # =========================================================
@@ -3461,9 +3425,6 @@ def groq_transcribe_telegram_voice(
 def groq_parse_tasks(
     transcript: str
 ) -> list[dict]:
-    """
-    Har bir element: {"text": str, "confidence": "high" | "low"}
-    """
 
     print("========================================")
     print("VOICE TASK PARSER START")
@@ -3490,11 +3451,6 @@ def groq_parse_tasks(
 
         json={
             "model": "openai/gpt-oss-20b",
-
-            # Reasoning + JSON javobi uchun yetarli joy.
-            # Standart qiymat past bo'lsa, model uzoq reasoning
-            # qilib, JSON'ni to'liq yoza olmasdan strict schema
-            # validatsiyasidan o'tolmay 400 xato qaytarishi mumkin.
             "max_tokens": 4096,
 
             "messages": [
@@ -3524,229 +3480,43 @@ ASOSIY QOIDALAR:
 
 Misollar:
 
-"universitetke boraman"
-→ "Universitetga borish"
-
-"universitetka boraman"
-→ "Universitetga borish"
-
-"kursu ge bora man"
-→ "Kursga borish"
-
-"kursga boraman"
-→ "Kursga borish"
-
-"mektep ke bora mann"
-→ "Maktabga borish"
-
-"məktepke boraman"
-→ "Maktabga borish"
-
-"mektepga boraman"
-→ "Maktabga borish"
-
-"maktab keboram"
-→ "Maktabga borish"
-
-"maktabga boraman"
-→ "Maktabga borish"
-
-"kitap okuş"
-→ "Kitob o‘qish"
-
-"kitob oqish"
-→ "Kitob o‘qish"
-
-"söz yotlaş"
-→ "So‘z yodlash"
-
-"söz yodlash"
-→ "So‘z yodlash"
-
-"inglesislislir dærske boraman"
-→ "Ingliz tili darsiga borish"
-
-"ingliz tiliga darsga boraman"
-→ "Ingliz tili darsiga borish"
-
-"ingliz tili darsiga boraman"
-→ "Ingliz tili darsiga borish"
+"universitetke boraman" → "Universitetga borish"
+"kursga boraman" → "Kursga borish"
+"mektep ke bora mann" → "Maktabga borish"
+"maktabga boraman" → "Maktabga borish"
+"kitob oqish" → "Kitob o‘qish"
+"söz yodlash" → "So‘z yodlash"
+"ingliz tili darsiga boraman" → "Ingliz tili darsiga borish"
 
 4. O‘zbek tilida tabiiy va grammatik jihatdan to‘g‘ri shakldan foydalaning.
 
-Masalan:
-"Mektepga borish" YOMON.
-"Maktabga borish" YAXSHI.
+5. Vaqt bo‘lsa, faqat asosiy vazifani ajrating (vaqtni task nomiga qo‘shmang).
 
-"Universitetga borish" YAXSHI.
+6. Bir gapda bir nechta ish bo‘lsa, alohida tasklarga ajrating.
 
-"Ingliz tilini darsga borish" YOMON.
-"Ingliz tili darsiga borish" YAXSHI.
+7. Filler so‘zlarni ("xo‘sh", "keyin", "yana" va h.k.) task deb hisoblamang.
 
-5. Foydalanuvchi gapida vaqt bo‘lsa, task ma'nosini saqlang.
+8. Salomlashish, savol, suhbatni task qilmang.
 
-Masalan:
-"Bugun soat sakkizda kursga boraman"
-→ "Kursga borish"
+9. Transcript qisman buzilgan bo‘lsa, lekin asosiy so‘z tanish bo‘lsa — confidence="low".
 
-"Bugun maktabga boraman"
-→ "Maktabga borish"
+10. Tanish so‘z umuman topilmasa — bo‘sh massiv qaytaring.
 
-Hozircha vaqtni task nomiga qo‘shmang, faqat asosiy vazifani ajrating.
+11. Natija O‘ZBEK LOTIN ALIFBOSIDA bo‘lsin. KIRILL ISHLATMANG.
 
-6. Bir gapda bir nechta ish bo‘lsa, ularni alohida tasklarga ajrating.
+12. o‘, g‘ harflarini to‘g‘ri ishlating.
 
-Masalan:
-"Bugun universitetga boraman, keyin maktabga boraman"
-→
-"Universitetga borish"
-"Maktabga borish"
-
-7. "xo‘sh", "keyin", "yana", "shuningdek", "demak",
-"mayli", "ana", "endi" kabi filler so‘zlarni task deb hisoblamang.
-
-8. Salomlashish, savol, fikr, izoh, minnatdorchilik yoki oddiy suhbatni task qilmang.
-
-9. Transcript qisman buzilgan bo‘lsa (masalan, bitta-ikkita so‘z
-fonetik jihatdan noto‘g‘ri tanilgan, lekin harakatni bildiruvchi
-asosiy so‘z — masalan "maktab", "kurs", "kitob", "dars" va fe'l
-ildizi — tanish bo‘lsa), undagi tanish so‘zlar va gap tuzilmasidan
-foydalanib, foydalanuvchining ehtimoliy ma'nosini tiklashga
-harakat qiling — LEKIN bu holatda confidence="low" deb belgilang
-(15-qoidaga qarang).
-
-Masalan:
-
-"Maktab keboram an abit tanki in."
-
-Bu transcriptda "Maktab" so‘zi aniq tanilgan va "keboram" so‘zi
-fonetik jihatdan "boraman" ga yaqin. Asosiy harakat (maktabga
-borish) taniqli.
-
-Shuning uchun:
-→ {"text": "Maktabga borish", "confidence": "low"}
-
-MUHIM CHEKLOV:
-Agar transcriptda HECH QANDAY tanish o‘zbekcha ildiz so‘z
-(masalan joy nomi, fan nomi, harakat fe'li) topilmasa — ya'ni
-butun gap sizga notanish, boshqa tilga o‘xshash yoki tasodifiy
-tovushlar ketma-ketligidek tuyulsa — taxmin qilib task
-yaratmang. Bunday holatda 10-qoidaga o‘ting va bo‘sh massiv
-qaytaring, hatto gap grammatik jihatdan "harakat" haqida
-bo‘lgandek tuyulsa ham. "Tanish so‘z yo‘q" holatida
-low-confidence taxmin ham qilinmaydi — chunki bunday taxmin
-foydalanuvchi uchun tasodifiy va foydasiz bo‘ladi.
-
-10. Ammo transcriptda umuman bajariladigan ishni anglatadigan
-yetarli signal bo‘lmasa — ya'ni gapda tanish o‘zbekcha joy nomi,
-fan nomi yoki harakat fe'lining ildizi umuman topilmasa — taxmin
-qilib task yaratmang. Bu qoida 9-qoidadan USTUN turadi: agar
-shubha bo‘lsa (tanish so‘z bormi-yo‘qmi aniq bo‘lmasa), bo‘sh
-massiv qaytarish "low" bilan taxmin qilishdan yaxshiroqdir.
-
-Masalan:
-"Salom, yaxshimisiz?"
-→ []
-
-"Nəmə stələdən dərs qələsh Dəm aləsh"
-→ []
-(chunki bu yerda "dərs" so‘zidan tashqari hech narsa
-o‘zbekcha ildizga o‘xshamaydi, va faqat bitta so‘zga
-tayanib butun jumlaning ma'nosini tiklash imkonsiz)
-
-11. Natijadagi barcha tasklar O‘ZBEK LOTIN ALIFBOSIDA bo‘lsin.
-
-KIRILL ISHLATMANG.
-
-To‘g‘ri:
-- Maktabga borish
-- Universitetga borish
-- Kitob o‘qish
-- So‘z yodlash
-- Ingliz tili darsiga borish
-
-12. O‘zbekcha maxsus harflarni to‘g‘ri ishlating:
-o‘, g‘
-
-13. Tasklar qisqa bo‘lsin va odatda infinitiv shaklida tugasin:
-- borish
-- qilish
-- o‘qish
-- yodlash
-- o‘rganish
+13. Tasklar qisqa, infinitiv shaklida: borish, qilish, o‘qish, yodlash.
 
 14. Transcriptdagi xatoni saqlab qolmang.
-Masalan:
-"mektep" → "maktab"
-"kitap" → "kitob"
-"bora man" → "borish"
-"bora mann" → "borish"
 
-15. HAR BIR vazifa uchun "confidence" maydonini belgilang:
+15. confidence: "high" yoki "low". Ikkilanganda — "low".
 
-"high" — agar:
-- Transcript aniq va tushunarli bo‘lsa
-- So‘zlar deyarli to‘g‘ri tanilgan bo‘lsa (ozgina fonetik xato bo‘lishi mumkin)
-- Vazifa ma'nosi shubhasiz bo‘lsa
-- Aniq nom (fan nomi, joy nomi, til nomi va h.k.) ishlatilgan
-  bo‘lsa, bu nom transcriptda TO‘G‘RIDAN-TO‘G‘RI, tanib
-  bo‘ladigan holda aytilgan bo‘lishi kerak — nomni fonetik
-  o‘xshashlik asosida "topib chiqarish" high emas, low
-  hisoblanadi (pastdagi misolga qarang)
+16. Takroriy vazifani bir marta qaytaring.
 
-"low" — agar:
-- Transcript qisman buzilgan bo‘lsa, lekin asosiy harakat
-  bildiruvchi so‘z(lar) tanish bo‘lsa
-- Siz so‘zlarni ma'lum darajada taxmin qilib tiklagan bo‘lsangiz
-- Bir nechta boshqacha talqin ham mumkin bo‘lsa
-- Transcript tarkibida aralash til (qozoqcha/turkcha) so‘zlar ko‘p bo‘lib, ma'noni aniq tiklash qiyin bo‘lsa
-- Siz o‘zingiz ichki fikrlash jarayonida ikkita yoki undan ortiq
-  talqin orasida tanlov qilgan bo‘lsangiz (masalan "bu so‘z X
-  ham, Y ham bo‘lishi mumkin" deb o‘ylagan bo‘lsangiz) — bunday
-  holatda tanlangan variant har doim "low", hech qachon "high"
-  emas
+17. Raqam/vaqt chalkash bo‘lsa, task matniga qo‘shmang.
 
-Diqqat: "geboraman", "uyguraman" kabi fe'l ildiziga o‘xshamagan,
-lekin sizga negadir tanish tuyulgan so‘zlarni aniq bir nomga
-(masalan til yoki millat nomiga) bog‘lab, keyin uni "high"
-confidence bilan chiqarish xato. Masalan "uyguraman" so‘zini
-"Uygur tili" deb o‘qish spekulyativ taxmin — bunday holatlar
-har doim "low" bo‘lishi kerak, chunki bu yerda haqiqiy nom
-transcriptda tanib bo‘lmaydi, faqat tovush o‘xshashligi bor.
-
-Ikkilanganda — har doim "low" tanlang. "low" xato emas, u shunchaki foydalanuvchidan tasdiq so‘rashga yordam beradi.
-
-Lekin agar transcriptda umuman tanish so‘z topilmasa — "low"
-bilan ham task yaratmang, 10-qoidaga muvofiq bo‘sh massiv
-qaytaring.
-
-16. Agar bitta transcriptda bir xil vazifa takrorlansa, uni faqat bir marta qaytaring.
-
-17. Raqamlar, soatlar va vaqt ifodalari (masalan "soat nol sakkiz",
-"ikki soat", "uch marta") ko'pincha tez nutqda noto'g'ri
-tanilgan bo'ladi. Agar raqam/vaqt qismi tushunarsiz yoki
-chalkash bo'lsa:
-
-- Uni task matniga QO'SHMANG (faqat asosiy harakatni ajrating).
-- Bu raqam tufayli butun taskni "low" deb belgilamang, agar
-  qolgan qism (harakatning o'zi) aniq bo'lsa.
-
-Masalan:
-"Ertalab soat nol sækiz nol nol-dil kursga boraman"
-→ {"text": "Kursga borish", "confidence": "high"}
-(chunki "kursga borish" aniq, faqat vaqt qismi chalkash)
-
-Lekin agar harakatning o'zi ham vaqt/raqam bilan chambarchas
-bog'liq bo'lib, raqamsiz ma'nosiz qolsa (masalan noaniq son
-nechta marta takrorlanishi kerakligini bildirsa), confidence
-"low" qiling.
-
-MUHIM:
-Sizning vazifangiz transcriptni tarjima qilish emas.
-Sizning vazifangiz transcriptdan FOYDALANUVCHI NIMA QILISHI KERAKLIGINI aniqlash.
-
-Natija faqat quyidagi JSON schema formatida bo‘lsin:
-
+Natija faqat JSON:
 {
   "tasks": [
     {"text": "Maktabga borish", "confidence": "high"},
@@ -3754,8 +3524,7 @@ Natija faqat quyidagi JSON schema formatida bo‘lsin:
   ]
 }
 
-Agar aniq vazifa topilmasa:
-
+Yoki:
 {
   "tasks": []
 }
@@ -3822,13 +3591,6 @@ Hech qanday qo‘shimcha matn yozmang.
             groq_response.text
         )
 
-        # MUHIM: 400 (masalan json_validate_failed) odatda model
-        # strict JSON schema'ga mos javob generatsiya qila
-        # olmaganda yuz beradi (masalan uzoq reasoning tufayli
-        # token yetishmay qolganda). Bu holatda butun voice
-        # handling'ni qulatish o'rniga, transkriptni yo'qotmasdan
-        # bo'sh natija qaytaramiz — handle_voice_message keyin
-        # foydalanuvchiga "tushunmadim, qayta ayting" deb yozadi.
         if groq_response.status_code == 400:
             return []
 
@@ -3883,7 +3645,6 @@ Hech qanday qo‘shimcha matn yozmang.
             continue
 
         if confidence not in ("high", "low"):
-            # Noma'lum holatda ehtiyotkorlik bilan "low" deb olamiz
             confidence = "low"
 
         cleaned = clean_parsed_task(task_text)
@@ -3956,9 +3717,10 @@ def handle_voice_message(
 
     try:
 
-        # =================================================
-        # STEP 1 — TRANSCRIPTION
-        # =================================================
+        telegram_send_message(
+            chat_id,
+            "🎙️ Ovozingizni tinglayapman..."
+        )
 
         print(
             "VOICE STEP 1: transcription boshlanmoqda"
@@ -3991,10 +3753,6 @@ def handle_voice_message(
             return {
                 "ok": False
             }
-
-        # =================================================
-        # STEP 2 — TASK PARSER
-        # =================================================
 
         print(
             "VOICE STEP 2: task parser boshlanmoqda"
@@ -4057,10 +3815,6 @@ def handle_voice_message(
             "route": "voice"
         }
 
-        # =================================================
-        # STEP 3a — ISHONCHLI VAZIFALARNI DARHOL SAQLASH
-        # =================================================
-
         if high_conf_tasks:
 
             print(
@@ -4083,10 +3837,6 @@ def handle_voice_message(
                 "VOICE STEP 3a DONE:",
                 create_result
             )
-
-        # =================================================
-        # STEP 3b — NOANIQ VAZIFALARNI TASDIQLASH
-        # =================================================
 
         if low_conf_tasks:
 
@@ -4239,8 +3989,6 @@ def handle_voice_confirm(
             from_voice=True
         )
 
-    # decision == "no"
-
     if callback_query_id:
 
         telegram_answer_callback(
@@ -4330,10 +4078,6 @@ def telegram_webhook(
             or "Do‘st"
         )
 
-        # =================================================
-        # ACTIVITY
-        # =================================================
-
         print(
             "WEBHOOK: ACTIVITY UPDATE START"
         )
@@ -4346,10 +4090,6 @@ def telegram_webhook(
             "WEBHOOK: ACTIVITY UPDATE DONE"
         )
 
-        # =================================================
-        # START
-        # =================================================
-
         if message_text == "/start":
 
             return handle_telegram_start(
@@ -4357,10 +4097,6 @@ def telegram_webhook(
                 username,
                 first_name
             )
-
-        # =================================================
-        # CALLBACK
-        # =================================================
 
         if callback_query:
 
@@ -4373,10 +4109,6 @@ def telegram_webhook(
                     "message_id"
                 )
             )
-
-            # ---------------------------------------------
-            # MORNING TIME
-            # ---------------------------------------------
 
             if callback_data.startswith(
                 "morning_time|"
@@ -4394,10 +4126,6 @@ def telegram_webhook(
                     time_value,
                     callback_query_id
                 )
-
-            # ---------------------------------------------
-            # TASK STATUS
-            # ---------------------------------------------
 
             if callback_data.startswith(
                 "task_status|"
@@ -4420,10 +4148,6 @@ def telegram_webhook(
                         callback_query_id,
                         callback_message_id
                     )
-
-            # ---------------------------------------------
-            # VOICE CONFIRM
-            # ---------------------------------------------
 
             if callback_data.startswith(
                 "voice_confirm|"
@@ -4454,19 +4178,11 @@ def telegram_webhook(
                 "route": "callback_ignored"
             }
 
-        # =================================================
-        # YAKUNLADIM
-        # =================================================
-
         if message_text == "/yakunladim":
 
             return handle_finish_day(
                 chat_id
             )
-
-        # =================================================
-        # REPORTS
-        # =================================================
 
         if message_text == "/hisobot":
 
@@ -4492,19 +4208,11 @@ def telegram_webhook(
                 chat_id
             )
 
-        # =================================================
-        # ADMIN
-        # =================================================
-
         if message_text == "/admin":
 
             return handle_admin(
                 chat_id
             )
-
-        # =================================================
-        # BROADCAST
-        # =================================================
 
         if message_text.startswith(
             "/xabar"
@@ -4514,10 +4222,6 @@ def telegram_webhook(
                 chat_id,
                 message_text
             )
-
-        # =================================================
-        # UNKNOWN COMMAND
-        # =================================================
 
         if message_text.startswith("/"):
 
@@ -4530,10 +4234,6 @@ def telegram_webhook(
                 "ok": True,
                 "route": "unknown_command"
             }
-
-        # =================================================
-        # VOICE MESSAGE
-        # =================================================
 
         if message.get("voice"):
 
@@ -4557,10 +4257,6 @@ def telegram_webhook(
                 message["voice"]
             )
 
-        # =================================================
-        # TASK TEXT
-        # =================================================
-
         if message_text:
 
             print(
@@ -4571,10 +4267,6 @@ def telegram_webhook(
                 chat_id,
                 message_text
             )
-
-        # =================================================
-        # LEGACY
-        # =================================================
 
         print(
             "WEBHOOK: LEGACY ROUTE"
