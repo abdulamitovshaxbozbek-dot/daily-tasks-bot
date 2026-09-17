@@ -894,15 +894,20 @@ def handle_morning_time(
 
         f"""✅ Ertalabki vaqt belgilandi: {time_value}
 
-🚀 Hammasi tayyor. Endi kunlik vazifalaringizni yuborishingiz mumkin.
+🚀 Hammasi tayyor!
 
-✍️ Yozib yoki 🎙️ ovozli xabar orqali yuborishingiz mumkin — ovoz yuborsangiz, aniq va shoshilmasdan gapiring.
+📝 Endi birinchi qadam — bugungi 1–3 ta vazifangizni yozing.
 
-⏰ Belgilangan vaqtda sizga eslatma yuboramiz.
+Masalan:
+• Kitob o‘qish
+• Sport qilish
+• Ingliz tilidan 20 ta so‘z yodlash
 
-📢 Yangiliklar va yangilanishlar: @kunlikvazifalar_news
+✍️ Yozib yuboring yoki 🎙️ ovozli xabar orqali ayting (aniq va sekin gapiring).
 
-🤲 Kuningiz barakali o‘tsin!"""
+Har bir kichik reja — tartibli kun sari bir qadam 💪
+
+📢 Yangiliklar: @kunlikvazifalar_news"""
     )
 
     return {
@@ -910,7 +915,6 @@ def handle_morning_time(
         "route": "morning_time",
         "time": time_value
     }
-
 
 # =========================================================
 # CREATE TASKS
