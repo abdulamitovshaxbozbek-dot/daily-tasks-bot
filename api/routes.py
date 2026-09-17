@@ -3383,6 +3383,60 @@ def handle_broadcast(
             "ok": False
         }
 
+    # -----------------------------------------------------
+    # DUPLICATE BROADCAST PROTECTION
+    # -----------------------------------------------------
+    # Telegram webhook yoki Railway retry sababli
+    # bir xil /xabar qayta kelib qolsa, qayta yubormaydi.
+    #
+    # Bir xil xabar 10 daqiqa ichida qayta yuborilmaydi.
+    # -----------------------------------------------------
+
+    now = time.time()
+
+    broadcast_key = (
+        f"{chat_id}:"
+        f"{text}"
+    )
+
+    last_key = getattr(
+        handle_broadcast,
+        "_last_broadcast_key",
+        None
+    )
+
+    last_time = getattr(
+        handle_broadcast,
+        "_last_broadcast_time",
+        0
+    )
+
+    if (
+        last_key == broadcast_key
+        and
+        now - last_time < 600
+    ):
+
+        print(
+            "BROADCAST DUPLICATE IGNORED:",
+            broadcast_key
+        )
+
+        return {
+            "ok": True,
+            "duplicate": True,
+            "message": "Bu broadcast allaqachon yuborilgan."
+        }
+
+    # Broadcastni yuborish boshlanishidan oldin
+    # belgilab qo‘yamiz.
+    handle_broadcast._last_broadcast_key = broadcast_key
+    handle_broadcast._last_broadcast_time = now
+
+    # -----------------------------------------------------
+    # USERS
+    # -----------------------------------------------------
+
     with get_connection() as conn:
 
         with conn.cursor(
@@ -3402,6 +3456,10 @@ def handle_broadcast(
 
     sent = 0
     failed = 0
+
+    # -----------------------------------------------------
+    # SEND BROADCAST
+    # -----------------------------------------------------
 
     for user in users:
 
@@ -3423,25 +3481,38 @@ def handle_broadcast(
                 error
             )
 
-    telegram_send_message(
-        chat_id,
+    # -----------------------------------------------------
+    # ADMIN RESULT
+    # -----------------------------------------------------
 
-        f"""📢 Broadcast yakunlandi.
+    try:
+
+        telegram_send_message(
+            chat_id,
+
+            f"""📢 Broadcast yakunlandi.
 
 ✅ Yuborildi: {sent} ta
 
 ❌ Xatolik: {failed} ta
 
 👥 Jami: {len(users)} ta"""
-    )
+        )
+
+    except Exception as error:
+
+        print(
+            "Broadcast result message error:",
+            error
+        )
 
     return {
         "ok": True,
         "sent": sent,
-        "failed": failed
+        "failed": failed,
+        "total": len(users)
     }
-
-
+    
 # =========================================================
 # REMINDERS
 # =========================================================
