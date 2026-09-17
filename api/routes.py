@@ -59,190 +59,6 @@ PENDING_VOICE_TTL_SECONDS = 15 * 60
 
 
 # =========================================================
-# FAIL REASONS (task bajarilmaganiga sabab)
-# =========================================================
-#
-# Kodlar bazada (tasks.fail_reason) shu ko'rinishda saqlanadi.
-# Bu markazlashtirilgan lug'at bo'lib, kelajakda:
-#   - Mini App dashboard (foiz taqsimoti)
-#   - AI insight / tavsiyalar
-#   - Haftalik/oylik/yillik "eng ko'p sabab" statistikasi
-# uchun bitta manba bo'lib xizmat qiladi. Til yoki emoji
-# o'zgarsa ham, bazadagi kod o'zgarmaydi.
-
-FAIL_REASONS: dict[str, dict] = {
-    "no_time": {
-        "emoji": "🕐",
-        "label": "Vaqt yetmadi"
-    },
-    "forgot": {
-        "emoji": "😴",
-        "label": "Unutib qo'ydim"
-    },
-    "bad_mood": {
-        "emoji": "😩",
-        "label": "Kayfiyat bo'lmadi"
-    },
-    "too_hard": {
-        "emoji": "💪",
-        "label": "Juda qiyin bo'ldi"
-    },
-    "priority": {
-        "emoji": "🔀",
-        "label": "Muhimroq ish chiqdi"
-    },
-    "other": {
-        "emoji": "🤷",
-        "label": "Boshqa sabab"
-    }
-}
-
-FAIL_REASON_NOT_SET_LABEL = "sababi yozilmadi"
-
-
-def fail_reason_display(code: Optional[str]) -> str:
-    """
-    fail_reason kodini foydalanuvchiga ko'rsatiladigan
-    "emoji + matn" ko'rinishiga aylantiradi.
-    Kod noma'lum yoki None bo'lsa, standart matnni qaytaradi.
-    """
-
-    if not code:
-
-        return FAIL_REASON_NOT_SET_LABEL
-
-    reason = FAIL_REASONS.get(code)
-
-    if not reason:
-
-        return FAIL_REASON_NOT_SET_LABEL
-
-    return f"{reason['emoji']} {reason['label']}"
-
-
-def build_fail_reason_keyboard(task_id: str) -> dict:
-    """
-    Sabab tanlash uchun inline keyboard yasaydi.
-    Har bir tugma callback_data: fail_reason|<task_id>|<code>
-    """
-
-    buttons = []
-
-    codes = list(FAIL_REASONS.keys())
-
-    for i in range(0, len(codes), 2):
-
-        row = []
-
-        for code in codes[i:i + 2]:
-
-            reason = FAIL_REASONS[code]
-
-            row.append(
-                {
-                    "text": f"{reason['emoji']} {reason['label']}",
-                    "callback_data": f"fail_reason|{task_id}|{code}"
-                }
-            )
-
-        buttons.append(row)
-
-    return {
-        "inline_keyboard": buttons
-    }
-
-
-# =========================================================
-# PENDING FAIL REASON TASKS (in-memory)
-# =========================================================
-#
-# Task "bajarilmadi" deb belgilangandan keyin, sabab hali
-# tanlanmagan bo'lsa, shu yerda kuzatiladi:
-#   PENDING_FAIL_REASON[chat_id] = {
-#       task_id: message_id,
-#       ...
-#   }
-#
-# Foydalanuvchi istalgan vaqtda eski tugmani bosishi mumkin
-# (status allaqachon 'failed', faqat fail_reason to'ldiriladi,
-# shuning uchun muddat cheklovi shart emas).
-#
-# /hisobot chaqirilganda, shu paytgacha javob berilmagan
-# barcha so'rov xabarlari o'chiriladi va fail_reason NULL
-# ("sababi yozilmadi") holida qoladi — chunki hisobot "hozirgi
-# holat"ning suratini oladi.
-
-PENDING_FAIL_REASON: dict[int, dict[str, int]] = {}
-
-
-def add_pending_fail_reason(
-    chat_id: int,
-    task_id: str,
-    message_id: Optional[int]
-):
-
-    if message_id is None:
-
-        return
-
-    if chat_id not in PENDING_FAIL_REASON:
-
-        PENDING_FAIL_REASON[chat_id] = {}
-
-    PENDING_FAIL_REASON[chat_id][task_id] = message_id
-
-
-def remove_pending_fail_reason(
-    chat_id: int,
-    task_id: str
-):
-
-    entry = PENDING_FAIL_REASON.get(chat_id)
-
-    if not entry:
-
-        return
-
-    entry.pop(task_id, None)
-
-    if not entry:
-
-        PENDING_FAIL_REASON.pop(chat_id, None)
-
-
-def flush_pending_fail_reasons(chat_id: int):
-    """
-    Chat uchun barcha ochiq sabab-so'rov xabarlarini o'chiradi
-    (Telegram xabari sifatida) va kuzatuvdan chiqaradi.
-    fail_reason bazada shunchaki NULL bo'lib qoladi.
-
-    /hisobot chaqirilganda ishlatiladi.
-    """
-
-    entry = PENDING_FAIL_REASON.pop(chat_id, None)
-
-    if not entry:
-
-        return
-
-    for task_id, message_id in entry.items():
-
-        try:
-
-            telegram_delete_message(
-                chat_id,
-                message_id
-            )
-
-        except Exception as error:
-
-            print(
-                "flush_pending_fail_reasons delete error:",
-                error
-            )
-
-
-# =========================================================
 # API KEY
 # =========================================================
 
@@ -596,65 +412,6 @@ def calculate_stats(tasks):
         )
 
     return stats
-
-
-def calculate_fail_reason_breakdown(tasks):
-    """
-    Berilgan tasklar ro'yxati ichidan status='failed'
-    bo'lganlarning fail_reason kodlari bo'yicha sonini
-    hisoblaydi. Eng ko'p uchragan sababni qaytaradi.
-
-    Qaytadi: (top_code_or_None, count, breakdown_dict)
-    breakdown_dict: {code_or_None: count}
-    """
-
-    breakdown: dict[Optional[str], int] = {}
-
-    for task in tasks:
-
-        if task["status"] != "failed":
-
-            continue
-
-        code = task.get("fail_reason")
-
-        breakdown[code] = breakdown.get(code, 0) + 1
-
-    if not breakdown:
-
-        return None, 0, breakdown
-
-    top_code = max(
-        breakdown,
-        key=lambda k: breakdown[k]
-    )
-
-    return top_code, breakdown[top_code], breakdown
-
-
-def format_top_fail_reason_line(tasks) -> Optional[str]:
-    """
-    Hisobotlarning pastida ko'rsatiladigan
-    "Vazifalar bajarilmaganiga eng ko'p sabab: ..." qatorini
-    tayyorlaydi. Bajarilmagan task bo'lmasa, None qaytaradi.
-    """
-
-    top_code, top_count, _ = calculate_fail_reason_breakdown(
-        tasks
-    )
-
-    if top_count == 0:
-
-        return None
-
-    label = fail_reason_display(top_code)
-
-    marta_word = "marta"
-
-    return (
-        f"🔍 Vazifalar bajarilmaganiga eng ko‘p sabab: "
-        f"{label} ({top_count} {marta_word})"
-    )
 
 
 def progress_bar(percent: int) -> str:
@@ -1710,56 +1467,7 @@ def handle_task_status(
                 "Bajarilmadi ❌"
             )
 
-    # ---------------------------------------------------
-    # "Bajarilmadi" bosilganda: eski tugmali xabarni o'chirib,
-    # sabab tanlash uchun yangi xabar yuboramiz. Status
-    # allaqachon 'failed' deb yozilgan (yuqorida), shuning
-    # uchun pending_count hisobiga darhol ta'sir qiladi va
-    # kun "yakunlandi" jarayoni bloklanmaydi.
-    # ---------------------------------------------------
-
-    if status == "failed":
-
-        if message_id:
-
-            try:
-
-                telegram_delete_message(
-                    chat_id,
-                    message_id
-                )
-
-            except Exception as error:
-
-                print(
-                    "Delete message error:",
-                    error
-                )
-
-        reason_message = telegram_send_message_with_keyboard(
-            chat_id,
-
-            f"❌ {task['task_text']}\n\n"
-            "🤔 Nima sabab bajarilmadi?",
-
-            build_fail_reason_keyboard(
-                str(task["id"])
-            )
-        )
-
-        reason_message_id = (
-            reason_message
-            .get("result", {})
-            .get("message_id")
-        )
-
-        add_pending_fail_reason(
-            chat_id,
-            str(task["id"]),
-            reason_message_id
-        )
-
-    elif message_id:
+    if message_id:
 
         try:
 
@@ -1848,140 +1556,6 @@ def handle_task_status(
 
 
 # =========================================================
-# FAIL REASON (bajarilmadi sababi)
-# =========================================================
-
-def handle_fail_reason(
-    chat_id: int,
-    task_id: str,
-    reason_code: str,
-    callback_query_id: Optional[str] = None,
-    message_id: Optional[int] = None
-):
-
-    if reason_code not in FAIL_REASONS:
-
-        if callback_query_id:
-
-            telegram_answer_callback(
-                callback_query_id,
-                "Noto‘g‘ri sabab."
-            )
-
-        return {
-            "ok": False
-        }
-
-    user = get_user_by_chat_id(
-        chat_id
-    )
-
-    if not user:
-
-        if callback_query_id:
-
-            telegram_answer_callback(
-                callback_query_id,
-                "Foydalanuvchi topilmadi."
-            )
-
-        return {
-            "ok": False
-        }
-
-    with get_connection() as conn:
-
-        with conn.cursor(
-            cursor_factory=RealDictCursor
-        ) as cur:
-
-            cur.execute(
-                """
-                UPDATE public.tasks
-                SET fail_reason = %s
-                WHERE id = %s
-                  AND user_id = %s
-                  AND status = 'failed'
-                RETURNING *
-                """,
-                (
-                    reason_code,
-                    task_id,
-                    user["id"]
-                )
-            )
-
-            task = cur.fetchone()
-
-        conn.commit()
-
-    remove_pending_fail_reason(
-        chat_id,
-        task_id
-    )
-
-    if not task:
-
-        if callback_query_id:
-
-            telegram_answer_callback(
-                callback_query_id,
-                "Bu so‘rov eskirgan."
-            )
-
-        if message_id:
-
-            try:
-
-                telegram_delete_message(
-                    chat_id,
-                    message_id
-                )
-
-            except Exception as error:
-
-                print(
-                    "Delete message error:",
-                    error
-                )
-
-        return {
-            "ok": True,
-            "expired": True
-        }
-
-    if callback_query_id:
-
-        telegram_answer_callback(
-            callback_query_id,
-            "Qayd etildi ✅"
-        )
-
-    if message_id:
-
-        try:
-
-            telegram_delete_message(
-                chat_id,
-                message_id
-            )
-
-        except Exception as error:
-
-            print(
-                "Delete message error:",
-                error
-            )
-
-    return {
-        "ok": True,
-        "route": "fail_reason",
-        "task_id": task_id,
-        "reason": reason_code
-    }
-
-
-# =========================================================
 # DAILY REPORT
 # =========================================================
 
@@ -2003,13 +1577,6 @@ def handle_daily_report(
         return {
             "ok": False
         }
-
-    # /hisobot — "hozirgi holat"ning suratini oladi. Shu payt
-    # hali javob berilmagan sabab-so'rov xabarlarini yopamiz,
-    # fail_reason bazada NULL ("sababi yozilmadi") holida qoladi.
-    flush_pending_fail_reasons(
-        chat_id
-    )
 
     today = get_today()
 
@@ -2112,25 +1679,19 @@ def handle_daily_report(
 
             if task["status"] == "completed":
 
-                lines.append(
-                    f"☑️ {task['task_text']}"
-                )
+                icon = "☑️"
 
             elif task["status"] == "failed":
 
-                reason_text = fail_reason_display(
-                    task.get("fail_reason")
-                )
-
-                lines.append(
-                    f"❌ {task['task_text']} — {reason_text}"
-                )
+                icon = "❌"
 
             else:
 
-                lines.append(
-                    f"⏳ {task['task_text']}"
-                )
+                icon = "⏳"
+
+            lines.append(
+                f"{icon} {task['task_text']}"
+            )
 
     lines.append(
         "━━━━━━━━━━━━━━━━━━━━"
@@ -2217,20 +1778,6 @@ def handle_daily_report(
     lines.append(
         "🎯 Kechagi o‘zingizdan kuchliroq bo‘ling!"
     )
-
-    top_reason_line = format_top_fail_reason_line(
-        today_tasks
-    )
-
-    if top_reason_line:
-
-        lines.append(
-            "━━━━━━━━━━━━━━━━━━━━"
-        )
-
-        lines.append(
-            top_reason_line
-        )
 
     telegram_send_message(
         chat_id,
@@ -2566,20 +2113,6 @@ def handle_weekly_report(
             motivation["text"]
         )
 
-    top_reason_line = format_top_fail_reason_line(
-        tasks
-    )
-
-    if top_reason_line:
-
-        lines.append(
-            "━━━━━━━━━━━━━━━━━━━━"
-        )
-
-        lines.append(
-            top_reason_line
-        )
-
     telegram_send_message(
         chat_id,
         "\n\n".join(lines)
@@ -2846,20 +2379,6 @@ def handle_monthly_report(
     lines.append(
         "🎯 Har bir kun yangi imkoniyat!"
     )
-
-    top_reason_line = format_top_fail_reason_line(
-        tasks
-    )
-
-    if top_reason_line:
-
-        lines.append(
-            "━━━━━━━━━━━━━━━━━━━━"
-        )
-
-        lines.append(
-            top_reason_line
-        )
 
     telegram_send_message(
         chat_id,
@@ -3163,20 +2682,6 @@ def handle_yearly_report(
         "🏆 Yangi yil yangi natijalar uchun imkoniyat!"
     )
 
-    top_reason_line = format_top_fail_reason_line(
-        tasks
-    )
-
-    if top_reason_line:
-
-        lines.append(
-            "━━━━━━━━━━━━━━━━━━━━"
-        )
-
-        lines.append(
-            top_reason_line
-        )
-
     telegram_send_message(
         chat_id,
         "\n\n".join(lines)
@@ -3383,60 +2888,6 @@ def handle_broadcast(
             "ok": False
         }
 
-    # -----------------------------------------------------
-    # DUPLICATE BROADCAST PROTECTION
-    # -----------------------------------------------------
-    # Telegram webhook yoki Railway retry sababli
-    # bir xil /xabar qayta kelib qolsa, qayta yubormaydi.
-    #
-    # Bir xil xabar 10 daqiqa ichida qayta yuborilmaydi.
-    # -----------------------------------------------------
-
-    now = time.time()
-
-    broadcast_key = (
-        f"{chat_id}:"
-        f"{text}"
-    )
-
-    last_key = getattr(
-        handle_broadcast,
-        "_last_broadcast_key",
-        None
-    )
-
-    last_time = getattr(
-        handle_broadcast,
-        "_last_broadcast_time",
-        0
-    )
-
-    if (
-        last_key == broadcast_key
-        and
-        now - last_time < 600
-    ):
-
-        print(
-            "BROADCAST DUPLICATE IGNORED:",
-            broadcast_key
-        )
-
-        return {
-            "ok": True,
-            "duplicate": True,
-            "message": "Bu broadcast allaqachon yuborilgan."
-        }
-
-    # Broadcastni yuborish boshlanishidan oldin
-    # belgilab qo‘yamiz.
-    handle_broadcast._last_broadcast_key = broadcast_key
-    handle_broadcast._last_broadcast_time = now
-
-    # -----------------------------------------------------
-    # USERS
-    # -----------------------------------------------------
-
     with get_connection() as conn:
 
         with conn.cursor(
@@ -3456,10 +2907,6 @@ def handle_broadcast(
 
     sent = 0
     failed = 0
-
-    # -----------------------------------------------------
-    # SEND BROADCAST
-    # -----------------------------------------------------
 
     for user in users:
 
@@ -3481,38 +2928,25 @@ def handle_broadcast(
                 error
             )
 
-    # -----------------------------------------------------
-    # ADMIN RESULT
-    # -----------------------------------------------------
+    telegram_send_message(
+        chat_id,
 
-    try:
-
-        telegram_send_message(
-            chat_id,
-
-            f"""📢 Broadcast yakunlandi.
+        f"""📢 Broadcast yakunlandi.
 
 ✅ Yuborildi: {sent} ta
 
 ❌ Xatolik: {failed} ta
 
 👥 Jami: {len(users)} ta"""
-        )
-
-    except Exception as error:
-
-        print(
-            "Broadcast result message error:",
-            error
-        )
+    )
 
     return {
         "ok": True,
         "sent": sent,
-        "failed": failed,
-        "total": len(users)
+        "failed": failed
     }
-    
+
+
 # =========================================================
 # REMINDERS
 # =========================================================
@@ -4715,28 +4149,6 @@ def telegram_webhook(
                         chat_id,
                         task_id,
                         status,
-                        callback_query_id,
-                        callback_message_id
-                    )
-
-            if callback_data.startswith(
-                "fail_reason|"
-            ):
-
-                parts = (
-                    callback_data.split("|")
-                )
-
-                if len(parts) == 3:
-
-                    task_id = parts[1]
-
-                    reason_code = parts[2]
-
-                    return handle_fail_reason(
-                        chat_id,
-                        task_id,
-                        reason_code,
                         callback_query_id,
                         callback_message_id
                     )
