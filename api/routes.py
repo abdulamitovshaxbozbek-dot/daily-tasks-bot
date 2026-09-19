@@ -1806,10 +1806,19 @@ def handle_create_tasks(
 
     if user["state"] == "completed":
 
+        next_morning_time = (
+            str(user["morning_time"])[:5]
+            if user["morning_time"]
+            else "ertalab"
+        )
+
         telegram_send_message_with_keyboard(
             chat_id,
 
-            "🏁 Bugungi kuningiz allaqachon yakunlangan.\n\n"
+            "🌙 Bugungi kuningiz yakunlangan.\n\n"
+            f"Yangi kuningiz soat {next_morning_time} da "
+            "boshlanadi. Shundan keyin yangi vazifalarni "
+            "yuborishingiz mumkin.\n\n"
             "📊 Natijangizni pastdagi tugma orqali ko‘rishingiz "
             "mumkin.",
 
@@ -2114,6 +2123,8 @@ def handle_task_status(
             "ok": False
         }
 
+    today = get_today()
+
     with get_connection() as conn:
 
         with conn.cursor(
@@ -2127,12 +2138,14 @@ def handle_task_status(
                 WHERE id = %s
                   AND user_id = %s
                   AND status = 'pending'
+                  AND task_date = %s
                 RETURNING *
                 """,
                 (
                     status,
                     task_id,
-                    user["id"]
+                    user["id"],
+                    today
                 )
             )
 
@@ -2146,7 +2159,7 @@ def handle_task_status(
 
             telegram_answer_callback(
                 callback_query_id,
-                "Bu vazifa allaqachon belgilangandi."
+                "Bu vazifa allaqachon belgilangan yoki eski kun uchun."
             )
 
         return {
@@ -2170,7 +2183,6 @@ def handle_task_status(
                 "Bajarilmadi ❌"
             )
 
-    today = get_today()
     live_message_id = get_live_checklist_message_id(
         user["id"],
         today
@@ -3973,6 +3985,213 @@ def handle_broadcast(
 # REMINDERS
 # =========================================================
 
+def handle_day_cycle():
+    """
+    User holatini Asia/Tashkent vaqti bo'yicha boshqaradi.
+
+    - 00:00 da active -> completed va kechagi checklist yopiladi.
+    - Har userning morning_time vaqti kelganda completed -> active
+      bo'ladi va yangi kunni rejalashtirish xabari yuboriladi.
+
+    Endpoint har daqiqada chaqirilishi mumkin: state shartlari sababli
+    bir xil o'tish va xabar takroran bajarilmaydi.
+    """
+
+    with get_connection() as conn:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT
+                    TO_CHAR(
+                        CURRENT_TIMESTAMP
+                        AT TIME ZONE 'Asia/Tashkent',
+                        'HH24:MI'
+                    )
+                """
+            )
+
+            current_time = cur.fetchone()[0]
+
+    # -----------------------------------------------------
+    # Yangi kun: userlarni tungi yopiq holatga o'tkazamiz.
+    # Eski checklist message_id sini RETURNING orqali olib,
+    # Telegramdagi xabarni ham o'chirishga harakat qilamiz.
+    # -----------------------------------------------------
+    if current_time == "00:00":
+
+        with get_connection() as conn:
+
+            with conn.cursor(
+                cursor_factory=RealDictCursor
+            ) as cur:
+
+                cur.execute(
+                    """
+                    UPDATE public.users AS u
+                    SET
+                        state = 'completed',
+                        live_checklist_message_id = NULL,
+                        live_checklist_date = NULL
+                    FROM (
+                        SELECT
+                            id,
+                            telegram_chat_id,
+                            live_checklist_message_id
+                        FROM public.users
+                        WHERE state = 'active'
+                        FOR UPDATE
+                    ) AS old
+                    WHERE u.id = old.id
+                    RETURNING
+                        old.telegram_chat_id,
+                        old.live_checklist_message_id
+                    """
+                )
+
+                closed_users = cur.fetchall()
+
+            conn.commit()
+
+        deleted_checklists = 0
+
+        for user in closed_users:
+
+            if not user["live_checklist_message_id"]:
+
+                continue
+
+            try:
+
+                telegram_delete_message(
+                    user["telegram_chat_id"],
+                    user["live_checklist_message_id"]
+                )
+
+                deleted_checklists += 1
+
+            except Exception as error:
+
+                print(
+                    "Midnight checklist delete error:",
+                    user["telegram_chat_id"],
+                    repr(error)
+                )
+
+        return {
+            "ok": True,
+            "action": "day_closed",
+            "time": current_time,
+            "users": len(closed_users),
+            "deleted_checklists": deleted_checklists
+        }
+
+    # -----------------------------------------------------
+    # User tanlagan ertalabki vaqti: faqat completed userni
+    # atomar tarzda active qilamiz. Bir daqiqada endpoint bir necha
+    # marta chaqirilsa ham xabar faqat bir marta yuboriladi.
+    # -----------------------------------------------------
+    with get_connection() as conn:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
+            cur.execute(
+                """
+                UPDATE public.users
+                SET
+                    state = 'active',
+                    last_active_date = (
+                        CURRENT_TIMESTAMP
+                        AT TIME ZONE 'Asia/Tashkent'
+                    )::date
+                WHERE state = 'completed'
+                  AND morning_time IS NOT NULL
+                  AND LEFT(morning_time::text, 5) = %s
+                RETURNING
+                    id,
+                    telegram_chat_id,
+                    first_name
+                """,
+                (current_time,)
+            )
+
+            activated_users = cur.fetchall()
+
+        conn.commit()
+
+    results = []
+
+    for user in activated_users:
+
+        chat_id = user["telegram_chat_id"]
+        first_name = user["first_name"] or "Do‘st"
+
+        try:
+
+            telegram_send_message(
+                chat_id,
+                f"""🌅 Assalomu alaykum, {first_name}!
+
+Yangi kun boshlandi. Bugungi vazifalaringizni yozib yoki 🎙️ ovozli xabar orqali yuboring.
+
+Har bir vazifani alohida qatorda yozing.
+
+Masalan:
+• Farmakologiyadan 20 bet o‘qish
+• Ingliz tilidan 20 ta so‘z yodlash
+• 30 daqiqa sport qilish"""
+            )
+
+            results.append(
+                {
+                    "chat_id": chat_id,
+                    "sent": True
+                }
+            )
+
+        except Exception as error:
+
+            error_text = str(error)
+
+            if (
+                "403" in error_text
+                or "bot was blocked" in error_text.lower()
+            ):
+
+                with get_connection() as block_conn:
+
+                    with block_conn.cursor() as block_cur:
+
+                        block_cur.execute(
+                            """
+                            UPDATE public.users
+                            SET state = 'blocked'
+                            WHERE id = %s
+                            """,
+                            (user["id"],)
+                        )
+
+                    block_conn.commit()
+
+            results.append(
+                {
+                    "chat_id": chat_id,
+                    "sent": False,
+                    "error": error_text
+                }
+            )
+
+    return {
+        "ok": True,
+        "action": "morning_activation",
+        "time": current_time,
+        "activated": len(activated_users),
+        "results": results
+    }
+
 def handle_live_checklist_reminders(period: str):
     """
     Mavjud 14:00 va 23:00 schedule uchun smart checklist yuboradi.
@@ -5539,6 +5758,15 @@ def run_reminders(
 ):
 
     return handle_reminders()
+
+
+@router.post("/day-cycle/run")
+def run_day_cycle(
+    _: None = Depends(verify_api_key)
+):
+    """Har daqiqalik cron: 00:00 yopish va morning_time aktivatsiyasi."""
+
+    return handle_day_cycle()
 
 
 @router.post("/checklist-reminders/run")
