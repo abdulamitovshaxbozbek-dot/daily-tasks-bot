@@ -2,6 +2,9 @@ import os
 import re
 import json
 import time
+import hmac
+import hashlib
+from urllib.parse import parse_qsl
 from datetime import date, timedelta
 from typing import Optional
 
@@ -12,7 +15,8 @@ from fastapi import (
     BackgroundTasks,
     Depends,
     Header,
-    HTTPException
+    HTTPException,
+    Query
 )
 
 from pydantic import BaseModel, Field
@@ -37,6 +41,15 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 LEGACY_BACKEND_URL = os.getenv(
     "LEGACY_BACKEND_URL"
+)
+
+# Mini App (Telegram WebApp) sahifasining to'liq HTTPS manzili.
+# Railway'da bu odatda https://<service>.up.railway.app/miniapp
+# ko'rinishida bo'ladi. Muhit o'zgaruvchisi orqali sozlanadi,
+# shuning uchun domen o'zgarsa kodni tahrirlash shart emas.
+MINIAPP_URL = os.getenv(
+    "MINIAPP_URL",
+    "https://daily-tasks-bot-production.up.railway.app/miniapp"
 )
 
 ADMIN_CHAT_ID = "8908985083"
@@ -220,6 +233,177 @@ def verify_api_key(
         )
 
     return None
+
+
+# =========================================================
+# MINI APP: TELEGRAM initData TEKSHIRUVI
+# =========================================================
+#
+# Telegram Mini App ochilganda, brauzerga window.Telegram
+# WebApp.initData degan satr beriladi: bu foydalanuvchi
+# ma'lumotlari (user, auth_date va h.k.) va Telegram bot
+# tokenidan olingan maxfiy kalit bilan hisoblangan
+# HMAC-SHA256 imzo (hash) dan iborat.
+#
+# Backend shu imzoni QAYTA HISOBLAB, Telegram yuborgan hash
+# bilan solishtiradi. Agar mos kelsa — bu haqiqatan Telegram
+# tomonidan yuborilgan, soxta emas, degani. Bu mexanizmsiz,
+# istalgan kishi o'zining chat_id'sini yozib, boshqa
+# foydalanuvchining ma'lumotini so'rashi mumkin bo'lar edi.
+#
+# Rasmiy Telegram hujjatidagi algoritm:
+# https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
+
+def verify_telegram_init_data(
+    init_data: str,
+    max_age_seconds: int = 24 * 60 * 60
+) -> dict:
+    """
+    initData satrini tekshiradi va ichidagi 'user' obyektini
+    (dict) qaytaradi. Tekshiruv muvaffaqiyatsiz bo'lsa yoki
+    ma'lumot eskirgan bo'lsa, HTTPException(401) ko'taradi.
+    """
+
+    if not TELEGRAM_TOKEN:
+
+        raise HTTPException(
+            status_code=500,
+            detail="TELEGRAM_TOKEN is not configured"
+        )
+
+    if not init_data:
+
+        raise HTTPException(
+            status_code=401,
+            detail="initData yo'q"
+        )
+
+    try:
+
+        pairs = parse_qsl(
+            init_data,
+            strict_parsing=True
+        )
+
+    except ValueError:
+
+        raise HTTPException(
+            status_code=401,
+            detail="initData formati noto'g'ri"
+        )
+
+    data = dict(pairs)
+
+    received_hash = data.pop(
+        "hash",
+        None
+    )
+
+    if not received_hash:
+
+        raise HTTPException(
+            status_code=401,
+            detail="initData ichida hash yo'q"
+        )
+
+    # Telegram algoritmi: qolgan kalitlarni alifbo tartibida
+    # "kalit=qiymat" ko'rinishida, \n bilan qo'shib, tekshiruv
+    # satrini hosil qilamiz.
+    check_string = "\n".join(
+        f"{key}={data[key]}"
+        for key in sorted(data.keys())
+    )
+
+    # Maxfiy kalit: HMAC-SHA256("WebAppData", bot_token)
+    secret_key = hmac.new(
+        b"WebAppData",
+        TELEGRAM_TOKEN.encode(),
+        hashlib.sha256
+    ).digest()
+
+    computed_hash = hmac.new(
+        secret_key,
+        check_string.encode(),
+        hashlib.sha256
+    ).hexdigest()
+
+    if not hmac.compare_digest(
+        computed_hash,
+        received_hash
+    ):
+
+        raise HTTPException(
+            status_code=401,
+            detail="initData imzosi noto'g'ri"
+        )
+
+    auth_date = data.get("auth_date")
+
+    if auth_date:
+
+        try:
+
+            age = time.time() - int(auth_date)
+
+        except ValueError:
+
+            age = None
+
+        if age is not None and age > max_age_seconds:
+
+            raise HTTPException(
+                status_code=401,
+                detail="initData eskirgan"
+            )
+
+    user_raw = data.get("user")
+
+    if not user_raw:
+
+        raise HTTPException(
+            status_code=401,
+            detail="initData ichida user yo'q"
+        )
+
+    try:
+
+        user = json.loads(user_raw)
+
+    except json.JSONDecodeError:
+
+        raise HTTPException(
+            status_code=401,
+            detail="initData user JSON emas"
+        )
+
+    return user
+
+
+def get_miniapp_chat_id(
+    init_data: str = Query(
+        ...,
+        alias="initData",
+        description="Telegram WebApp.initData qiymati"
+    )
+) -> int:
+    """
+    FastAPI dependency: initData'ni tekshiradi va undan
+    telegram chat_id (foydalanuvchi id) ni chiqarib beradi.
+    Mini App endpointlari shuni Depends() orqali ishlatadi.
+    """
+
+    user = verify_telegram_init_data(init_data)
+
+    chat_id = user.get("id")
+
+    if not chat_id:
+
+        raise HTTPException(
+            status_code=401,
+            detail="initData user.id topilmadi"
+        )
+
+    return int(chat_id)
 
 
 # =========================================================
@@ -437,12 +621,25 @@ def maybe_notify_day_fully_completed(
 
     if claimant:
 
-        telegram_send_message(
+        telegram_send_message_with_keyboard(
             chat_id,
 
-            """🎉 Barcha vazifalar belgilandi!
+            "🎉 Barcha vazifalar belgilandi!\n\n"
+            "📊 Bugungi hisobotingizni pastdagi tugma orqali "
+            "ko‘rishingiz mumkin.",
 
-📊 Endi /hisobot buyrug‘ini bersangiz, bugungi hisobotingizni yuboraman."""
+            {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "📊 Hisobotni ko‘rish",
+                            "web_app": {
+                                "url": MINIAPP_URL
+                            }
+                        }
+                    ]
+                ]
+            }
         )
 
 
@@ -4885,29 +5082,11 @@ def telegram_webhook(
                 chat_id
             )
 
-        if message_text == "/hisobot":
-
-            return handle_daily_report(
-                chat_id
-            )
-
-        if message_text == "/haftalik":
-
-            return handle_weekly_report(
-                chat_id
-            )
-
-        if message_text == "/oylik":
-
-            return handle_monthly_report(
-                chat_id
-            )
-
-        if message_text == "/yillik":
-
-            return handle_yearly_report(
-                chat_id
-            )
+        # Eslatma: /hisobot, /haftalik, /oylik, /yillik matnli
+        # buyruqlar endi mavjud emas — hisobotlar faqat Mini App
+        # (Dashboard) orqali ko'riladi. Foydalanuvchi "Barcha
+        # vazifalar belgilandi" xabaridagi tugma orqali yoki
+        # botning menyu tugmasi orqali Dashboard'ni ochadi.
 
         if message_text == "/admin":
 
@@ -5243,6 +5422,474 @@ def yearly_report_api(
     return handle_yearly_report(
         chat_id
     )
+
+
+# =========================================================
+# MINI APP API (JSON, Telegram xabar yubormaydi)
+# =========================================================
+#
+# Bu endpointlar Mini App (WebApp) sahifasi uchun mo'ljallangan.
+# Ular handle_daily_report va shunga o'xshash funksiyalardan
+# farqli o'laroq, Telegram'ga xabar yubormaydi — faqat JSON
+# ma'lumot qaytaradi, dashboard shu ma'lumot bilan o'zini
+# chizadi. Har biri get_miniapp_chat_id orqali Telegram
+# initData'ni tekshiradi.
+
+@router.get("/miniapp/me")
+def miniapp_me(
+    chat_id: int = Depends(get_miniapp_chat_id)
+):
+
+    user = get_user_by_chat_id(chat_id)
+
+    if not user:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Foydalanuvchi topilmadi"
+        )
+
+    return {
+        "ok": True,
+        "chat_id": chat_id,
+        "first_name": user.get("first_name"),
+        "morning_time": user.get("morning_time"),
+        "state": user.get("state"),
+        "subscription_status": user.get("subscription_status"),
+        "created_at": user.get("created_at"),
+    }
+
+
+def _tasks_to_json(tasks) -> list[dict]:
+    """
+    RealDictRow tasklar ro'yxatini Mini App uchun mos JSON
+    ko'rinishga o'giradi: sabab kodini emoji+matn bilan
+    birga beradi, sana/vaqt maydonlarini string qiladi.
+    """
+
+    result = []
+
+    for task in tasks:
+
+        task_date = task["task_date"]
+
+        if not isinstance(task_date, str):
+
+            task_date = task_date.isoformat()
+
+        created_at = task.get("created_at")
+
+        if created_at is not None and not isinstance(created_at, str):
+
+            created_at = created_at.isoformat()
+
+        result.append(
+            {
+                "id": str(task["id"]),
+                "task_text": task["task_text"],
+                "status": task["status"],
+                "task_date": task_date,
+                "created_at": created_at,
+                "fail_reason": task.get("fail_reason"),
+                "fail_reason_display": (
+                    fail_reason_display(task.get("fail_reason"))
+                    if task["status"] == "failed"
+                    else None
+                ),
+            }
+        )
+
+    return result
+
+
+@router.get("/miniapp/daily")
+def miniapp_daily(
+    chat_id: int = Depends(get_miniapp_chat_id)
+):
+
+    user = get_user_by_chat_id(chat_id)
+
+    if not user:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Foydalanuvchi topilmadi"
+        )
+
+    today = get_today()
+
+    yesterday = today - timedelta(days=1)
+
+    with get_connection() as conn:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
+            cur.execute(
+                """
+                SELECT *
+                FROM public.tasks
+                WHERE user_id = %s
+                  AND task_date = %s
+                ORDER BY created_at ASC
+                """,
+                (user["id"], today)
+            )
+
+            today_tasks = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT *
+                FROM public.tasks
+                WHERE user_id = %s
+                  AND task_date = %s
+                ORDER BY created_at ASC
+                """,
+                (user["id"], yesterday)
+            )
+
+            yesterday_tasks = cur.fetchall()
+
+    today_stats = calculate_stats(today_tasks)
+    yesterday_stats = calculate_stats(yesterday_tasks)
+
+    top_code, top_count, breakdown = calculate_fail_reason_breakdown(
+        today_tasks
+    )
+
+    return {
+        "ok": True,
+        "date": today.isoformat(),
+        "stats": today_stats,
+        "tasks": _tasks_to_json(today_tasks),
+        "yesterday": {
+            "date": yesterday.isoformat(),
+            "stats": yesterday_stats,
+        },
+        "top_fail_reason": {
+            "code": top_code,
+            "display": fail_reason_display(top_code) if top_count else None,
+            "count": top_count,
+        } if top_count else None,
+        "motivation": get_motivation(today_stats["percent"]),
+    }
+
+
+@router.get("/miniapp/weekly")
+def miniapp_weekly(
+    chat_id: int = Depends(get_miniapp_chat_id)
+):
+
+    user = get_user_by_chat_id(chat_id)
+
+    if not user:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Foydalanuvchi topilmadi"
+        )
+
+    today = get_today()
+
+    monday = today - timedelta(days=today.weekday())
+    start_date = monday - timedelta(days=7)
+    end_date = monday - timedelta(days=1)
+
+    with get_connection() as conn:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
+            cur.execute(
+                """
+                SELECT *
+                FROM public.tasks
+                WHERE user_id = %s
+                  AND task_date BETWEEN %s AND %s
+                ORDER BY task_date ASC, created_at ASC
+                """,
+                (user["id"], start_date, end_date)
+            )
+
+            tasks = cur.fetchall()
+
+    stats = calculate_stats(tasks)
+
+    day_names = [
+        "Dushanba", "Seshanba", "Chorshanba", "Payshanba",
+        "Juma", "Shanba", "Yakshanba"
+    ]
+
+    daily = {}
+
+    for i in range(7):
+
+        current_date = start_date + timedelta(days=i)
+
+        daily[current_date.isoformat()] = {
+            "date": current_date.isoformat(),
+            "name": day_names[i],
+            "total": 0,
+            "completed": 0,
+            "failed": 0,
+            "percent": 0,
+        }
+
+    for task in tasks:
+
+        task_date = task["task_date"]
+
+        if isinstance(task_date, str):
+
+            task_date = date.fromisoformat(task_date)
+
+        key = task_date.isoformat()
+
+        if key not in daily:
+
+            continue
+
+        daily[key]["total"] += 1
+
+        if task["status"] == "completed":
+
+            daily[key]["completed"] += 1
+
+        elif task["status"] == "failed":
+
+            daily[key]["failed"] += 1
+
+    for item in daily.values():
+
+        if item["total"] > 0:
+
+            item["percent"] = round(
+                item["completed"] / item["total"] * 100
+            )
+
+    top_code, top_count, breakdown = calculate_fail_reason_breakdown(
+        tasks
+    )
+
+    return {
+        "ok": True,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "stats": stats,
+        "days": list(daily.values()),
+        "top_fail_reason": {
+            "code": top_code,
+            "display": fail_reason_display(top_code) if top_count else None,
+            "count": top_count,
+        } if top_count else None,
+        "motivation": get_motivation(stats["percent"]) if stats["total"] > 0 else None,
+    }
+
+
+@router.get("/miniapp/monthly")
+def miniapp_monthly(
+    chat_id: int = Depends(get_miniapp_chat_id)
+):
+
+    user = get_user_by_chat_id(chat_id)
+
+    if not user:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Foydalanuvchi topilmadi"
+        )
+
+    today = get_today()
+    start_date = today.replace(day=1)
+
+    with get_connection() as conn:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
+            cur.execute(
+                """
+                SELECT *
+                FROM public.tasks
+                WHERE user_id = %s
+                  AND task_date BETWEEN %s AND %s
+                ORDER BY task_date ASC, created_at ASC
+                """,
+                (user["id"], start_date, today)
+            )
+
+            tasks = cur.fetchall()
+
+    stats = calculate_stats(tasks)
+
+    daily = {}
+
+    for task in tasks:
+
+        task_date = task["task_date"]
+
+        if isinstance(task_date, str):
+
+            task_date = date.fromisoformat(task_date)
+
+        key = task_date.isoformat()
+
+        if key not in daily:
+
+            daily[key] = {
+                "date": key,
+                "total": 0,
+                "completed": 0,
+                "failed": 0,
+                "percent": 0,
+            }
+
+        daily[key]["total"] += 1
+
+        if task["status"] == "completed":
+
+            daily[key]["completed"] += 1
+
+        elif task["status"] == "failed":
+
+            daily[key]["failed"] += 1
+
+    for item in daily.values():
+
+        item["percent"] = round(
+            item["completed"] / item["total"] * 100
+        )
+
+    top_code, top_count, breakdown = calculate_fail_reason_breakdown(
+        tasks
+    )
+
+    return {
+        "ok": True,
+        "start_date": start_date.isoformat(),
+        "end_date": today.isoformat(),
+        "stats": stats,
+        "days": sorted(
+            daily.values(),
+            key=lambda item: item["date"]
+        ),
+        "top_fail_reason": {
+            "code": top_code,
+            "display": fail_reason_display(top_code) if top_count else None,
+            "count": top_count,
+        } if top_count else None,
+        "motivation": get_motivation(stats["percent"]) if stats["total"] > 0 else None,
+    }
+
+
+@router.get("/miniapp/yearly")
+def miniapp_yearly(
+    chat_id: int = Depends(get_miniapp_chat_id)
+):
+
+    user = get_user_by_chat_id(chat_id)
+
+    if not user:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Foydalanuvchi topilmadi"
+        )
+
+    today = get_today()
+    year = today.year
+    start_date = date(year, 1, 1)
+
+    with get_connection() as conn:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
+            cur.execute(
+                """
+                SELECT *
+                FROM public.tasks
+                WHERE user_id = %s
+                  AND task_date BETWEEN %s AND %s
+                ORDER BY task_date ASC, created_at ASC
+                """,
+                (user["id"], start_date, today)
+            )
+
+            tasks = cur.fetchall()
+
+    stats = calculate_stats(tasks)
+
+    month_names = {
+        1: "Yanvar", 2: "Fevral", 3: "Mart", 4: "Aprel",
+        5: "May", 6: "Iyun", 7: "Iyul", 8: "Avgust",
+        9: "Sentabr", 10: "Oktabr", 11: "Noyabr", 12: "Dekabr",
+    }
+
+    monthly = {}
+
+    for task in tasks:
+
+        task_date = task["task_date"]
+
+        if isinstance(task_date, str):
+
+            task_date = date.fromisoformat(task_date)
+
+        month = task_date.month
+
+        if month not in monthly:
+
+            monthly[month] = {
+                "month": month,
+                "month_name": month_names[month],
+                "total": 0,
+                "completed": 0,
+                "failed": 0,
+                "percent": 0,
+            }
+
+        monthly[month]["total"] += 1
+
+        if task["status"] == "completed":
+
+            monthly[month]["completed"] += 1
+
+        elif task["status"] == "failed":
+
+            monthly[month]["failed"] += 1
+
+    for item in monthly.values():
+
+        item["percent"] = round(
+            item["completed"] / item["total"] * 100
+        )
+
+    top_code, top_count, breakdown = calculate_fail_reason_breakdown(
+        tasks
+    )
+
+    return {
+        "ok": True,
+        "year": year,
+        "stats": stats,
+        "months": sorted(
+            monthly.values(),
+            key=lambda item: item["month"]
+        ),
+        "top_fail_reason": {
+            "code": top_code,
+            "display": fail_reason_display(top_code) if top_count else None,
+            "count": top_count,
+        } if top_count else None,
+        "motivation": get_motivation(stats["percent"]) if stats["total"] > 0 else None,
+    }
 
 
 # =========================================================
