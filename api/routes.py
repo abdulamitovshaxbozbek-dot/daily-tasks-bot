@@ -6019,6 +6019,55 @@ def _tasks_to_json(tasks) -> list[dict]:
     return result
 
 
+@router.get("/miniapp/day")
+def miniapp_day(
+    selected_date: date = Query(..., alias="date"),
+    chat_id: int = Depends(get_miniapp_chat_id)
+):
+
+    user = get_user_by_chat_id(chat_id)
+
+    if not user:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Foydalanuvchi topilmadi"
+        )
+
+    if selected_date > get_today():
+
+        raise HTTPException(
+            status_code=400,
+            detail="Kelajakdagi kunni ko‘rib bo‘lmaydi"
+        )
+
+    with get_connection() as conn:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
+            cur.execute(
+                """
+                SELECT *
+                FROM public.tasks
+                WHERE user_id = %s
+                  AND task_date = %s
+                ORDER BY created_at ASC
+                """,
+                (user["id"], selected_date)
+            )
+
+            tasks = cur.fetchall()
+
+    return {
+        "ok": True,
+        "date": selected_date.isoformat(),
+        "stats": calculate_stats(tasks),
+        "tasks": _tasks_to_json(tasks),
+    }
+
+
 @router.get("/miniapp/daily")
 def miniapp_daily(
     chat_id: int = Depends(get_miniapp_chat_id)
