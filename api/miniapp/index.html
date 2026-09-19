@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<!-- MINIAPP NAVIGATION FINAL: weekly/monthly previous-next navigation -->
 <html lang="uz">
 <head>
 <meta charset="UTF-8">
@@ -145,6 +146,42 @@
   .tab.active {
     background: var(--accent);
     color: #1A2E1A;
+  }
+
+  .period-nav {
+    display: grid;
+    grid-template-columns: 44px 1fr 44px;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 12px;
+  }
+
+  .period-nav-title {
+    min-width: 0;
+    text-align: center;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .period-nav-btn {
+    width: 44px;
+    height: 44px;
+    border: 1px solid var(--border);
+    border-radius: 13px;
+    background: var(--bg-elevated);
+    color: var(--text);
+    font: inherit;
+    font-size: 23px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .period-nav-btn:active:not(:disabled) { transform: scale(0.94); }
+
+  .period-nav-btn:disabled {
+    cursor: default;
+    opacity: 0.3;
   }
 
   /* ---------- Progress hero ---------- */
@@ -704,6 +741,14 @@
   const cache = {};
   let currentPeriod = 'daily';
   let lastUpdatedAt = null;
+  let selectedWeekStart = null;
+  let selectedMonthYear = null;
+  let selectedMonth = null;
+
+  const monthNames = [
+    'Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun',
+    'Iyul', 'Avgust', 'Sentabr', 'Oktabr', 'Noyabr', 'Dekabr'
+  ];
 
   function haptic(style) {
     if (tg && tg.HapticFeedback) {
@@ -715,6 +760,26 @@
     if (!iso) return '';
     const parts = iso.split('-');
     return parts.length === 3 ? parts[2] + '.' + parts[1] + '.' + parts[0] : iso;
+  }
+
+  function periodNavMarkup(type, title, canGoNext) {
+    return '<div class="period-nav">' +
+      '<button class="period-nav-btn" type="button" data-period-nav="previous" data-nav-type="' + type + '" aria-label="Oldingi davr">‹</button>' +
+      '<div class="period-nav-title">' + escapeHtml(title) + '</div>' +
+      '<button class="period-nav-btn" type="button" data-period-nav="next" data-nav-type="' + type + '" aria-label="Keyingi davr"' +
+        (canGoNext ? '' : ' disabled') + '>›</button>' +
+    '</div>';
+  }
+
+  function addDays(iso, amount) {
+    const value = new Date(iso + 'T12:00:00');
+    value.setDate(value.getDate() + amount);
+    return value.getFullYear() + '-' + String(value.getMonth() + 1).padStart(2, '0') + '-' + String(value.getDate()).padStart(2, '0');
+  }
+
+  function changeMonth(year, month, amount) {
+    const value = new Date(year, month - 1 + amount, 1, 12, 0, 0);
+    return { year: value.getFullYear(), month: value.getMonth() + 1 };
   }
 
   function updatedMarkup() {
@@ -854,7 +919,13 @@
 
   function renderWeekly(data) {
     const s = data.stats;
-    let html = '<div class="hero">' +
+    selectedWeekStart = data.start_date;
+    let html = periodNavMarkup(
+      'weekly',
+      shortDate(data.start_date) + ' — ' + shortDate(data.end_date),
+      data.can_go_next
+    );
+    html += '<div class="hero">' +
       ringMarkup(s.percent) +
       '<div class="hero-info">' +
         '<p class="hero-count"><strong>' + s.completed + '</strong> / ' + s.total + ' vazifa bajarildi</p>' +
@@ -884,7 +955,15 @@
 
   function renderMonthly(data) {
     const s = data.stats;
-    let html = '<div class="hero">' +
+    const selectedStart = new Date(data.start_date + 'T12:00:00');
+    selectedMonthYear = selectedStart.getFullYear();
+    selectedMonth = selectedStart.getMonth() + 1;
+    let html = periodNavMarkup(
+      'monthly',
+      monthNames[selectedMonth - 1] + ' ' + selectedMonthYear,
+      data.can_go_next
+    );
+    html += '<div class="hero">' +
       ringMarkup(s.percent) +
       '<div class="hero-info">' +
         '<p class="hero-count"><strong>' + s.completed + '</strong> / ' + s.total + ' vazifa bajarildi</p>' +
@@ -920,7 +999,9 @@
       let level = '';
       if (d) level = d.percent >= 80 ? ' high' : (d.percent >= 50 ? ' medium' : ' low');
       const iso = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
-      const isToday = iso === data.end_date;
+      const now = new Date();
+      const todayIso = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+      const isToday = iso === todayIso;
       const title = d ? (d.completed + '/' + d.total + ' — ' + d.percent + '%') : 'Vazifa yo‘q';
       html += '<div class="calendar-day' + level + (d ? ' has-tasks' : '') + (isToday ? ' today' : '') + '"' +
         (d ? ' data-day-date="' + iso + '" role="button" tabindex="0"' : '') +
@@ -1046,6 +1127,26 @@
     if (target) openDaySheet(target.dataset.dayDate);
   });
 
+  contentEl.addEventListener('click', function (event) {
+    const button = event.target.closest('[data-period-nav]');
+    if (!button || button.disabled) return;
+
+    haptic('light');
+    const amount = button.dataset.periodNav === 'previous' ? -1 : 1;
+
+    if (button.dataset.navType === 'weekly' && selectedWeekStart) {
+      selectedWeekStart = addDays(selectedWeekStart, amount * 7);
+      loadPeriod('weekly');
+    }
+
+    if (button.dataset.navType === 'monthly' && selectedMonthYear && selectedMonth) {
+      const changed = changeMonth(selectedMonthYear, selectedMonth, amount);
+      selectedMonthYear = changed.year;
+      selectedMonth = changed.month;
+      loadPeriod('monthly');
+    }
+  });
+
   contentEl.addEventListener('keydown', function (event) {
     const target = event.target.closest('[data-day-date]');
     if (target && (event.key === 'Enter' || event.key === ' ')) {
@@ -1054,20 +1155,34 @@
     }
   });
 
+  function periodPath(period) {
+    if (period === 'weekly' && selectedWeekStart) {
+      return '/weekly?start=' + encodeURIComponent(selectedWeekStart);
+    }
+
+    if (period === 'monthly' && selectedMonthYear && selectedMonth) {
+      return '/monthly?year=' + selectedMonthYear + '&month=' + selectedMonth;
+    }
+
+    return '/' + period;
+  }
+
   function loadPeriod(period, force) {
     currentPeriod = period;
+    const path = periodPath(period);
+    const cacheKey = path;
 
-    if (!force && cache[period]) {
-      renderers[period](cache[period]);
+    if (!force && cache[cacheKey]) {
+      renderers[period](cache[cacheKey]);
       return;
     }
 
     refreshBtn.classList.add('loading');
     showSkeleton();
 
-    apiFetch('/' + period)
+    apiFetch(path)
       .then(function (data) {
-        cache[period] = data;
+        cache[cacheKey] = data;
         lastUpdatedAt = new Date();
         refreshBtn.classList.remove('loading');
         if (currentPeriod === period) {
@@ -1097,7 +1212,7 @@
 
   refreshBtn.addEventListener('click', function () {
     haptic('medium');
-    delete cache[currentPeriod];
+    delete cache[periodPath(currentPeriod)];
     loadPeriod(currentPeriod, true);
   });
 
