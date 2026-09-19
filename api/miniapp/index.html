@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Vazifalarim</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0F2E2B;
+    --bg-elevated: #163D38;
+    --bg-card: #1A4540;
+    --border: #24544E;
+    --text: #F2EFE6;
+    --text-dim: #9FB8B3;
+    --accent: #E8B04B;
+    --accent-dim: #C99640;
+    --success: #6FBF8C;
+    --danger: #D97757;
+    --radius: 18px;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  * { box-sizing: border-box; }
+
+  html {
+    scroll-padding-top: env(safe-area-inset-top, 0px);
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Manrope', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .app {
+    max-width: 560px;
+    margin: 0 auto;
+    padding: 20px 18px 32px;
+    min-height: 100%;
+  }
+
+  /* ---------- Header ---------- */
+
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 22px;
+  }
+
+  .header .greeting {
+    font-size: 14px;
+    color: var(--text-dim);
+    margin: 0 0 2px;
+  }
+
+  .header .name {
+    font-size: 22px;
+    font-weight: 700;
+    margin: 0;
+  }
+
+  .avatar {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), #F2C874);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 17px;
+    color: #1A2E1A;
+    flex-shrink: 0;
+  }
+
+  /* ---------- Tabs ---------- */
+
+  .tabs {
+    display: flex;
+    gap: 6px;
+    background: var(--bg-elevated);
+    border-radius: 14px;
+    padding: 4px;
+    margin-bottom: 20px;
+  }
+
+  .tab {
+    flex: 1;
+    text-align: center;
+    padding: 10px 4px;
+    border-radius: 10px;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text-dim);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease;
+    font-family: inherit;
+  }
+
+  .tab.active {
+    background: var(--accent);
+    color: #1A2E1A;
+  }
+
+  /* ---------- Progress hero ---------- */
+
+  .hero {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 26px 22px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .ring-wrap {
+    position: relative;
+    width: 96px;
+    height: 96px;
+    flex-shrink: 0;
+  }
+
+  .ring-wrap svg { transform: rotate(-90deg); }
+
+  .ring-bg {
+    fill: none;
+    stroke: var(--bg-elevated);
+    stroke-width: 9;
+  }
+
+  .ring-fg {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 9;
+    stroke-linecap: round;
+    transition: stroke-dashoffset 0.6s cubic-bezier(.4,0,.2,1);
+  }
+
+  .ring-label {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+
+  .hero-info { flex: 1; min-width: 0; }
+
+  .hero-count {
+    font-size: 15px;
+    color: var(--text-dim);
+    margin: 0 0 6px;
+  }
+
+  .hero-count strong { color: var(--text); font-weight: 700; }
+
+  .hero-period {
+    font-size: 13px;
+    color: var(--text-dim);
+    margin: 0;
+  }
+
+  /* ---------- Section title ---------- */
+
+  .section-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-dim);
+    margin: 22px 2px 10px;
+  }
+
+  /* ---------- Task list (daily) ---------- */
+
+  .task-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 16px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .task-icon {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    margin-top: 1px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+  }
+
+  .task-icon.completed { background: rgba(111,191,140,0.18); color: var(--success); }
+  .task-icon.failed { background: rgba(217,119,87,0.18); color: var(--danger); }
+  .task-icon.pending { background: rgba(159,184,179,0.18); color: var(--text-dim); }
+
+  .task-body { flex: 1; min-width: 0; }
+
+  .task-text {
+    font-size: 15px;
+    font-weight: 500;
+    margin: 0;
+    word-break: break-word;
+  }
+
+  .task-text.done { color: var(--text-dim); text-decoration: line-through; text-decoration-color: var(--border); }
+
+  .task-reason {
+    font-size: 12.5px;
+    color: var(--danger);
+    margin: 4px 0 0;
+  }
+
+  /* ---------- Day/month grid (weekly/monthly) ---------- */
+
+  .grid-list { display: flex; flex-direction: column; gap: 8px; }
+
+  .grid-row {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 13px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .grid-row .bar-wrap {
+    flex: 1;
+    height: 8px;
+    background: var(--bg-elevated);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+
+  .grid-row .bar-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 999px;
+  }
+
+  .grid-row .row-label {
+    width: 84px;
+    flex-shrink: 0;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .grid-row .row-pct {
+    width: 42px;
+    flex-shrink: 0;
+    text-align: right;
+    font-size: 13.5px;
+    font-weight: 700;
+    color: var(--text-dim);
+  }
+
+  .grid-row.empty .row-pct,
+  .grid-row.empty .row-label { color: var(--text-dim); opacity: 0.55; }
+
+  /* ---------- Insight card ---------- */
+
+  .insight {
+    background: linear-gradient(135deg, rgba(232,176,75,0.12), rgba(232,176,75,0.03));
+    border: 1px solid rgba(232,176,75,0.3);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    margin-top: 18px;
+  }
+
+  .insight-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--accent);
+    margin: 0 0 6px;
+  }
+
+  .insight-text {
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text);
+    margin: 0;
+  }
+
+  /* ---------- States ---------- */
+
+  .state-msg {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 14px;
+    padding: 40px 20px;
+  }
+
+  .skeleton {
+    background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-elevated) 37%, var(--bg-card) 63%);
+    background-size: 400% 100%;
+    animation: shimmer 1.4s ease infinite;
+    border-radius: 14px;
+    height: 64px;
+    margin-bottom: 8px;
+  }
+
+  @keyframes shimmer {
+    0% { background-position: 100% 50%; }
+    100% { background-position: 0 50%; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ring-fg { transition: none; }
+    .skeleton { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="header">
+    <div>
+      <p class="greeting" id="greeting">Xush kelibsiz</p>
+      <p class="name" id="userName">&nbsp;</p>
+    </div>
+    <div class="avatar" id="avatarInitial">?</div>
+  </div>
+
+  <div class="tabs" role="tablist">
+    <button class="tab active" data-period="daily">Kunlik</button>
+    <button class="tab" data-period="weekly">Haftalik</button>
+    <button class="tab" data-period="monthly">Oylik</button>
+    <button class="tab" data-period="yearly">Yillik</button>
+  </div>
+
+  <div id="content">
+    <div class="skeleton"></div>
+    <div class="skeleton"></div>
+    <div class="skeleton"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const tg = window.Telegram && window.Telegram.WebApp;
+
+  if (tg) {
+    tg.ready();
+    tg.expand();
+    if (tg.setHeaderColor) { try { tg.setHeaderColor('#0F2E2B'); } catch (e) {} }
+    if (tg.setBackgroundColor) { try { tg.setBackgroundColor('#0F2E2B'); } catch (e) {} }
+  }
+
+  const initData = tg ? tg.initData : '';
+  const tgUser = tg && tg.initDataUnsafe ? tg.initDataUnsafe.user : null;
+
+  const API_BASE = window.location.origin + '/api/miniapp';
+
+  const contentEl = document.getElementById('content');
+  const userNameEl = document.getElementById('userName');
+  const greetingEl = document.getElementById('greeting');
+  const avatarEl = document.getElementById('avatarInitial');
+
+  const cache = {};
+  let currentPeriod = 'daily';
+
+  function greetingForHour() {
+    const h = new Date().getHours();
+    if (h < 12) return 'Xayrli tong';
+    if (h < 18) return 'Assalomu alaykum';
+    return 'Xayrli kech';
+  }
+
+  function setHeaderName(name) {
+    userNameEl.textContent = name || 'Foydalanuvchi';
+    avatarEl.textContent = (name || '?').trim().charAt(0).toUpperCase();
+    greetingEl.textContent = greetingForHour();
+  }
+
+  if (tgUser && tgUser.first_name) {
+    setHeaderName(tgUser.first_name);
+  }
+
+  function apiFetch(path) {
+    const url = API_BASE + path + (path.includes('?') ? '&' : '?') +
+      'initData=' + encodeURIComponent(initData || '');
+    return fetch(url).then(function (res) {
+      if (!res.ok) {
+        return res.json().catch(function () { return {}; }).then(function (body) {
+          throw new Error(body.detail || ('Xatolik: ' + res.status));
+        });
+      }
+      return res.json();
+    });
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str == null ? '' : String(str);
+    return div.innerHTML;
+  }
+
+  function ringMarkup(percent) {
+    const r = 40;
+    const c = 2 * Math.PI * r;
+    const offset = c - (Math.max(0, Math.min(100, percent)) / 100) * c;
+    return (
+      '<div class="ring-wrap">' +
+        '<svg width="96" height="96" viewBox="0 0 96 96">' +
+          '<circle class="ring-bg" cx="48" cy="48" r="' + r + '"></circle>' +
+          '<circle class="ring-fg" cx="48" cy="48" r="' + r + '" ' +
+            'stroke-dasharray="' + c.toFixed(1) + '" ' +
+            'stroke-dashoffset="' + offset.toFixed(1) + '"></circle>' +
+        '</svg>' +
+        '<div class="ring-label">' + percent + '%</div>' +
+      '</div>'
+    );
+  }
+
+  function insightMarkup(topReason, motivation) {
+    let html = '';
+    if (motivation && motivation.title) {
+      html += (
+        '<div class="insight">' +
+          '<p class="insight-title">' + escapeHtml(motivation.title) + '</p>' +
+          '<p class="insight-text">' + escapeHtml(motivation.text) + '</p>' +
+        '</div>'
+      );
+    }
+    if (topReason && topReason.display) {
+      html += (
+        '<div class="insight" style="margin-top:10px;">' +
+          '<p class="insight-title">🔍 Eng ko‘p uchragan sabab</p>' +
+          '<p class="insight-text">' + escapeHtml(topReason.display) +
+            ' — ' + topReason.count + ' marta</p>' +
+        '</div>'
+      );
+    }
+    return html;
+  }
+
+  function renderDaily(data) {
+    const s = data.stats;
+    let html = '<div class="hero">' +
+      ringMarkup(s.percent) +
+      '<div class="hero-info">' +
+        '<p class="hero-count"><strong>' + s.completed + '</strong> / ' + s.total + ' vazifa bajarildi</p>' +
+        '<p class="hero-period">' + escapeHtml(data.date) + '</p>' +
+      '</div>' +
+    '</div>';
+
+    html += '<p class="section-title">VAZIFALAR</p>';
+
+    if (!data.tasks.length) {
+      html += '<div class="state-msg">Bugun uchun vazifalar topilmadi</div>';
+    } else {
+      data.tasks.forEach(function (t) {
+        const iconClass = t.status === 'completed' ? 'completed' : (t.status === 'failed' ? 'failed' : 'pending');
+        const icon = t.status === 'completed' ? '✓' : (t.status === 'failed' ? '✕' : '⏳');
+        html += (
+          '<div class="task-card">' +
+            '<div class="task-icon ' + iconClass + '">' + icon + '</div>' +
+            '<div class="task-body">' +
+              '<p class="task-text' + (t.status === 'completed' ? ' done' : '') + '">' + escapeHtml(t.task_text) + '</p>' +
+              (t.status === 'failed' ? '<p class="task-reason">' + escapeHtml(t.fail_reason_display || 'sababi yozilmadi') + '</p>' : '') +
+            '</div>' +
+          '</div>'
+        );
+      });
+    }
+
+    html += insightMarkup(data.top_fail_reason, data.motivation);
+    contentEl.innerHTML = html;
+  }
+
+  function renderWeekly(data) {
+    const s = data.stats;
+    let html = '<div class="hero">' +
+      ringMarkup(s.percent) +
+      '<div class="hero-info">' +
+        '<p class="hero-count"><strong>' + s.completed + '</strong> / ' + s.total + ' vazifa bajarildi</p>' +
+        '<p class="hero-period">' + escapeHtml(data.start_date) + ' — ' + escapeHtml(data.end_date) + '</p>' +
+      '</div>' +
+    '</div>';
+
+    html += '<p class="section-title">HAFTA KUNLARI</p><div class="grid-list">';
+    data.days.forEach(function (d) {
+      const empty = d.total === 0;
+      html += (
+        '<div class="grid-row' + (empty ? ' empty' : '') + '">' +
+          '<div class="row-label">' + escapeHtml(d.name) + '</div>' +
+          '<div class="bar-wrap"><div class="bar-fill" style="width:' + d.percent + '%"></div></div>' +
+          '<div class="row-pct">' + (empty ? '—' : d.percent + '%') + '</div>' +
+        '</div>'
+      );
+    });
+    html += '</div>';
+
+    html += insightMarkup(data.top_fail_reason, data.motivation);
+    contentEl.innerHTML = html;
+  }
+
+  function renderMonthly(data) {
+    const s = data.stats;
+    let html = '<div class="hero">' +
+      ringMarkup(s.percent) +
+      '<div class="hero-info">' +
+        '<p class="hero-count"><strong>' + s.completed + '</strong> / ' + s.total + ' vazifa bajarildi</p>' +
+        '<p class="hero-period">' + escapeHtml(data.start_date) + ' — ' + escapeHtml(data.end_date) + '</p>' +
+      '</div>' +
+    '</div>';
+
+    html += '<p class="section-title">KUNLAR BO‘YICHA</p><div class="grid-list">';
+    if (!data.days.length) {
+      html += '<div class="state-msg">Bu oy uchun ma\'lumot yo‘q</div>';
+    } else {
+      data.days.forEach(function (d) {
+        html += (
+          '<div class="grid-row">' +
+            '<div class="row-label">' + escapeHtml(d.date.slice(5)) + '</div>' +
+            '<div class="bar-wrap"><div class="bar-fill" style="width:' + d.percent + '%"></div></div>' +
+            '<div class="row-pct">' + d.percent + '%</div>' +
+          '</div>'
+        );
+      });
+    }
+    html += '</div>';
+
+    html += insightMarkup(data.top_fail_reason, data.motivation);
+    contentEl.innerHTML = html;
+  }
+
+  function renderYearly(data) {
+    const s = data.stats;
+    let html = '<div class="hero">' +
+      ringMarkup(s.percent) +
+      '<div class="hero-info">' +
+        '<p class="hero-count"><strong>' + s.completed + '</strong> / ' + s.total + ' vazifa bajarildi</p>' +
+        '<p class="hero-period">' + data.year + '-yil</p>' +
+      '</div>' +
+    '</div>';
+
+    html += '<p class="section-title">OYLAR BO‘YICHA</p><div class="grid-list">';
+    if (!data.months.length) {
+      html += '<div class="state-msg">Bu yil uchun ma\'lumot yo‘q</div>';
+    } else {
+      data.months.forEach(function (m) {
+        html += (
+          '<div class="grid-row">' +
+            '<div class="row-label">' + escapeHtml(m.month_name) + '</div>' +
+            '<div class="bar-wrap"><div class="bar-fill" style="width:' + m.percent + '%"></div></div>' +
+            '<div class="row-pct">' + m.percent + '%</div>' +
+          '</div>'
+        );
+      });
+    }
+    html += '</div>';
+
+    html += insightMarkup(data.top_fail_reason, data.motivation);
+    contentEl.innerHTML = html;
+  }
+
+  const renderers = {
+    daily: renderDaily,
+    weekly: renderWeekly,
+    monthly: renderMonthly,
+    yearly: renderYearly
+  };
+
+  function showSkeleton() {
+    contentEl.innerHTML = '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>';
+  }
+
+  function showError(message) {
+    contentEl.innerHTML = '<div class="state-msg">⚠️ ' + escapeHtml(message) + '</div>';
+  }
+
+  function loadPeriod(period) {
+    currentPeriod = period;
+
+    if (cache[period]) {
+      renderers[period](cache[period]);
+      return;
+    }
+
+    showSkeleton();
+
+    apiFetch('/' + period)
+      .then(function (data) {
+        cache[period] = data;
+        if (currentPeriod === period) {
+          renderers[period](data);
+        }
+      })
+      .catch(function (err) {
+        if (currentPeriod === period) {
+          showError(err.message || 'Ma\'lumotni yuklab bo\'lmadi');
+        }
+      });
+  }
+
+  document.querySelectorAll('.tab').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('.tab').forEach(function (b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      loadPeriod(btn.dataset.period);
+    });
+  });
+
+  apiFetch('/me')
+    .then(function (data) {
+      setHeaderName(data.first_name);
+    })
+    .catch(function () {
+      /* profil olinmasa ham dashboard davom etadi */
+    });
+
+  loadPeriod('daily');
+})();
+</script>
+
+</body>
+</html>
