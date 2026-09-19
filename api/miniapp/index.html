@@ -370,6 +370,9 @@
     justify-content: flex-end;
   }
 
+  .week-column[data-day-date] { cursor: pointer; }
+  .week-column[data-day-date]:active { transform: scale(0.97); }
+
   .week-value {
     min-height: 18px;
     margin-bottom: 6px;
@@ -440,6 +443,13 @@
     justify-content: center;
     cursor: default;
   }
+
+  .calendar-day.has-tasks {
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .calendar-day.has-tasks:active { transform: scale(0.92); }
 
   .calendar-day.blank { visibility: hidden; }
   .calendar-day.low { color: #FFE9E2; background: rgba(217,119,87,0.72); }
@@ -519,6 +529,82 @@
     opacity: 0.75;
   }
 
+  /* ---------- Day details bottom sheet ---------- */
+
+  .sheet-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding-top: env(safe-area-inset-top, 0px);
+    background: rgba(3, 16, 14, 0.62);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s ease, visibility 0.2s ease;
+  }
+
+  .sheet-overlay.open { opacity: 1; visibility: visible; }
+
+  .day-sheet {
+    width: min(560px, 100%);
+    max-height: 82vh;
+    padding: 10px 18px calc(22px + env(safe-area-inset-bottom, 0px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border: 1px solid var(--border);
+    border-bottom: 0;
+    border-radius: 24px 24px 0 0;
+    background: var(--bg-elevated);
+    box-shadow: 0 -18px 50px rgba(0,0,0,0.3);
+    transform: translateY(24px);
+    transition: transform 0.24s cubic-bezier(.2,.8,.2,1);
+  }
+
+  .sheet-overlay.open .day-sheet { transform: translateY(0); }
+  .sheet-handle { width: 42px; height: 4px; margin: 0 auto 14px; border-radius: 999px; background: var(--border); }
+
+  .sheet-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    margin-bottom: 16px;
+  }
+
+  .sheet-title { margin: 0; font-size: 20px; font-weight: 800; }
+  .sheet-subtitle { margin: 4px 0 0; color: var(--text-dim); font-size: 12.5px; }
+
+  .sheet-close {
+    width: 40px;
+    height: 40px;
+    flex: 0 0 auto;
+    border: 0;
+    border-radius: 50%;
+    background: var(--bg-card);
+    color: var(--text);
+    font: inherit;
+    font-size: 19px;
+    cursor: pointer;
+  }
+
+  .sheet-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--bg-card);
+  }
+
+  .sheet-summary strong { font-size: 18px; }
+  .sheet-summary span { font-size: 12px; color: var(--text-dim); }
+  body.sheet-open { overflow: hidden; }
+
   .skeleton {
     background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-elevated) 37%, var(--bg-card) 63%);
     background-size: 400% 100%;
@@ -574,6 +660,20 @@
   </div>
 </div>
 
+<div class="sheet-overlay" id="daySheetOverlay" aria-hidden="true">
+  <section class="day-sheet" id="daySheet" role="dialog" aria-modal="true" aria-labelledby="daySheetTitle">
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <div>
+        <h2 class="sheet-title" id="daySheetTitle">Kun tafsilotlari</h2>
+        <p class="sheet-subtitle" id="daySheetSubtitle"></p>
+      </div>
+      <button class="sheet-close" id="daySheetClose" type="button" aria-label="Yopish">✕</button>
+    </div>
+    <div id="daySheetContent"></div>
+  </section>
+</div>
+
 <script>
 (function () {
   const tg = window.Telegram && window.Telegram.WebApp;
@@ -595,6 +695,11 @@
   const greetingEl = document.getElementById('greeting');
   const avatarEl = document.getElementById('avatarInitial');
   const refreshBtn = document.getElementById('refreshBtn');
+  const daySheetOverlay = document.getElementById('daySheetOverlay');
+  const daySheetClose = document.getElementById('daySheetClose');
+  const daySheetTitle = document.getElementById('daySheetTitle');
+  const daySheetSubtitle = document.getElementById('daySheetSubtitle');
+  const daySheetContent = document.getElementById('daySheetContent');
 
   const cache = {};
   let currentPeriod = 'daily';
@@ -762,7 +867,9 @@
     data.days.forEach(function (d) {
       const empty = d.total === 0;
       html += (
-        '<div class="week-column' + (empty ? ' empty' : '') + '" title="' + escapeHtml(d.name) + ': ' + (empty ? 'ma’lumot yo‘q' : d.completed + '/' + d.total) + '">' +
+        '<div class="week-column' + (empty ? ' empty' : '') + '"' +
+          (empty ? '' : ' data-day-date="' + escapeHtml(d.date) + '" role="button" tabindex="0"') +
+          ' title="' + escapeHtml(d.name) + ': ' + (empty ? 'ma’lumot yo‘q' : d.completed + '/' + d.total) + '">' +
           '<div class="week-value">' + (empty ? '—' : d.percent + '%') + '</div>' +
           '<div class="week-track"><div class="week-fill" style="height:' + (empty ? 0 : d.percent) + '%"></div></div>' +
           '<div class="week-label">' + escapeHtml(d.name.slice(0, 2)) + '</div>' +
@@ -815,7 +922,9 @@
       const iso = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
       const isToday = iso === data.end_date;
       const title = d ? (d.completed + '/' + d.total + ' — ' + d.percent + '%') : 'Vazifa yo‘q';
-      html += '<div class="calendar-day' + level + (isToday ? ' today' : '') + '" title="' + title + '">' + day + '</div>';
+      html += '<div class="calendar-day' + level + (d ? ' has-tasks' : '') + (isToday ? ' today' : '') + '"' +
+        (d ? ' data-day-date="' + iso + '" role="button" tabindex="0"' : '') +
+        ' title="' + title + '">' + day + '</div>';
     }
 
     html += '</div><div class="calendar-legend">' +
@@ -875,6 +984,75 @@
     const retryBtn = document.getElementById('retryBtn');
     if (retryBtn) retryBtn.addEventListener('click', function () { loadPeriod(currentPeriod, true); });
   }
+
+  function openDaySheet(selectedDate) {
+    haptic('light');
+    daySheetTitle.textContent = shortDate(selectedDate);
+    daySheetSubtitle.textContent = 'Vazifalar yuklanmoqda…';
+    daySheetContent.innerHTML = '<div class="skeleton"></div><div class="skeleton"></div>';
+    daySheetOverlay.classList.add('open');
+    daySheetOverlay.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('sheet-open');
+
+    apiFetch('/day?date=' + encodeURIComponent(selectedDate))
+      .then(function (data) {
+        renderDaySheet(data);
+      })
+      .catch(function (err) {
+        daySheetSubtitle.textContent = '';
+        daySheetContent.innerHTML = '<div class="state-msg"><span class="state-icon">⚠️</span>' +
+          escapeHtml(err.message || 'Vazifalarni yuklab bo‘lmadi') + '</div>';
+      });
+  }
+
+  function renderDaySheet(data) {
+    const s = data.stats;
+    daySheetTitle.textContent = shortDate(data.date);
+    daySheetSubtitle.textContent = s.total ? (s.completed + ' / ' + s.total + ' vazifa bajarildi') : 'Vazifa yo‘q';
+
+    let html = '<div class="sheet-summary"><div><strong>' + s.percent + '%</strong><br><span>Kun natijasi</span></div>' +
+      '<span>' + s.completed + ' bajarildi · ' + s.failed + ' bajarilmadi · ' + s.pending + ' kutilmoqda</span></div>';
+
+    if (!data.tasks.length) {
+      html += '<div class="state-msg"><span class="state-icon">📝</span>Bu kunda vazifalar bo‘lmagan</div>';
+    } else {
+      data.tasks.forEach(function (t) {
+        const iconClass = t.status === 'completed' ? 'completed' : (t.status === 'failed' ? 'failed' : 'pending');
+        const icon = t.status === 'completed' ? '✓' : (t.status === 'failed' ? '✕' : '⏳');
+        html += '<div class="task-card">' +
+          '<div class="task-icon ' + iconClass + '">' + icon + '</div>' +
+          '<div class="task-body"><p class="task-text' + (t.status === 'completed' ? ' done' : '') + '">' + escapeHtml(t.task_text) + '</p>' +
+          (t.status === 'failed' ? '<p class="task-reason">Sabab: ' + escapeHtml(t.fail_reason_display || 'yozilmagan') + '</p>' : '') +
+          '</div></div>';
+      });
+    }
+
+    daySheetContent.innerHTML = html;
+  }
+
+  function closeDaySheet() {
+    daySheetOverlay.classList.remove('open');
+    daySheetOverlay.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('sheet-open');
+  }
+
+  daySheetClose.addEventListener('click', closeDaySheet);
+  daySheetOverlay.addEventListener('click', function (event) {
+    if (event.target === daySheetOverlay) closeDaySheet();
+  });
+
+  contentEl.addEventListener('click', function (event) {
+    const target = event.target.closest('[data-day-date]');
+    if (target) openDaySheet(target.dataset.dayDate);
+  });
+
+  contentEl.addEventListener('keydown', function (event) {
+    const target = event.target.closest('[data-day-date]');
+    if (target && (event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault();
+      openDaySheet(target.dataset.dayDate);
+    }
+  });
 
   function loadPeriod(period, force) {
     currentPeriod = period;
