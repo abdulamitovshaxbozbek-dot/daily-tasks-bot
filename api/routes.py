@@ -1453,12 +1453,25 @@ def handle_create_tasks(
 
     if user["state"] == "completed":
 
-        telegram_send_message(
+        telegram_send_message_with_keyboard(
             chat_id,
 
-            """🏁 Bugungi kuningiz allaqachon yakunlangan.
+            "🏁 Bugungi kuningiz allaqachon yakunlangan.\n\n"
+            "📊 Natijangizni pastdagi tugma orqali ko‘rishingiz "
+            "mumkin.",
 
-📊 Natijani ko‘rish uchun /hisobot buyrug‘ini yuboring."""
+            {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "📊 Hisobotni ko‘rish",
+                            "web_app": {
+                                "url": MINIAPP_URL
+                            }
+                        }
+                    ]
+                ]
+            }
         )
 
         return {
@@ -1706,12 +1719,25 @@ def handle_finish_day(
 
     if user["state"] == "completed":
 
-        telegram_send_message(
+        telegram_send_message_with_keyboard(
             chat_id,
 
-            """🏁 Bugungi kuningiz allaqachon yakunlangan.
+            "🏁 Bugungi kuningiz allaqachon yakunlangan.\n\n"
+            "📊 Hisobotingizni pastdagi tugma orqali ko‘rishingiz "
+            "mumkin.",
 
-📊 Hisobot uchun /hisobot buyrug‘ini yuboring."""
+            {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "📊 Hisobotni ko‘rish",
+                            "web_app": {
+                                "url": MINIAPP_URL
+                            }
+                        }
+                    ]
+                ]
+            }
         )
 
         return {
