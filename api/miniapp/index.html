@@ -58,6 +58,34 @@
     margin-bottom: 22px;
   }
 
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .icon-btn {
+    width: 44px;
+    height: 44px;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: var(--bg-elevated);
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font: inherit;
+    font-size: 19px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .icon-btn:active { transform: scale(0.94); }
+
+  .icon-btn.loading { animation: spin 0.8s linear infinite; }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
   .header .greeting {
     font-size: 14px;
     color: var(--text-dim);
@@ -93,6 +121,10 @@
     border-radius: 14px;
     padding: 4px;
     margin-bottom: 20px;
+    position: sticky;
+    top: calc(env(safe-area-inset-top, 0px) + 6px);
+    z-index: 10;
+    box-shadow: 0 8px 22px rgba(8, 31, 28, 0.22);
   }
 
   .tab {
@@ -177,6 +209,41 @@
     color: var(--text-dim);
     margin: 0;
   }
+
+  .comparison {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 9px;
+    padding: 5px 9px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-weight: 700;
+    background: rgba(159,184,179,0.12);
+    color: var(--text-dim);
+  }
+
+  .comparison.up { color: var(--success); background: rgba(111,191,140,0.12); }
+  .comparison.down { color: var(--danger); background: rgba(217,119,87,0.12); }
+
+  .metric-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+
+  .metric-card {
+    min-width: 0;
+    padding: 13px 10px;
+    text-align: center;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+  }
+
+  .metric-value { display: block; font-size: 18px; font-weight: 800; }
+  .metric-label { display: block; margin-top: 3px; font-size: 10.5px; color: var(--text-dim); }
 
   /* ---------- Section title ---------- */
 
@@ -280,6 +347,121 @@
   .grid-row.empty .row-pct,
   .grid-row.empty .row-label { color: var(--text-dim); opacity: 0.55; }
 
+  /* ---------- Weekly chart ---------- */
+
+  .week-chart {
+    height: 232px;
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    align-items: end;
+    gap: 8px;
+    padding: 18px 12px 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+
+  .week-column {
+    height: 100%;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-end;
+  }
+
+  .week-value {
+    min-height: 18px;
+    margin-bottom: 6px;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: var(--text-dim);
+  }
+
+  .week-track {
+    width: 100%;
+    max-width: 34px;
+    height: 155px;
+    display: flex;
+    align-items: flex-end;
+    border-radius: 9px;
+    background: var(--bg-elevated);
+    overflow: hidden;
+  }
+
+  .week-fill {
+    width: 100%;
+    min-height: 3px;
+    border-radius: 9px 9px 0 0;
+    background: linear-gradient(180deg, #F2C874, var(--accent));
+    transition: height 0.45s ease;
+  }
+
+  .week-column.empty .week-fill { background: var(--border); }
+  .week-label { margin-top: 8px; font-size: 11px; font-weight: 700; color: var(--text-dim); }
+
+  /* ---------- Monthly calendar ---------- */
+
+  .calendar {
+    padding: 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+
+  .calendar-head,
+  .calendar-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 6px;
+  }
+
+  .calendar-head { margin-bottom: 7px; }
+
+  .calendar-weekday {
+    text-align: center;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-dim);
+  }
+
+  .calendar-day {
+    aspect-ratio: 1;
+    min-width: 0;
+    border: 0;
+    border-radius: 10px;
+    background: var(--bg-elevated);
+    color: var(--text-dim);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: default;
+  }
+
+  .calendar-day.blank { visibility: hidden; }
+  .calendar-day.low { color: #FFE9E2; background: rgba(217,119,87,0.72); }
+  .calendar-day.medium { color: #2E2815; background: rgba(232,176,75,0.82); }
+  .calendar-day.high { color: #102E24; background: rgba(111,191,140,0.9); }
+  .calendar-day.today { outline: 2px solid var(--text); outline-offset: 2px; }
+
+  .calendar-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 9px 14px;
+    margin-top: 14px;
+    font-size: 10.5px;
+    color: var(--text-dim);
+  }
+
+  .legend-item { display: inline-flex; align-items: center; gap: 5px; }
+  .legend-dot { width: 9px; height: 9px; border-radius: 3px; background: var(--bg-elevated); }
+  .legend-dot.low { background: rgba(217,119,87,0.72); }
+  .legend-dot.medium { background: rgba(232,176,75,0.82); }
+  .legend-dot.high { background: rgba(111,191,140,0.9); }
+
   /* ---------- Insight card ---------- */
 
   .insight {
@@ -313,6 +495,30 @@
     padding: 40px 20px;
   }
 
+  .state-icon { display: block; margin-bottom: 10px; font-size: 34px; }
+
+  .retry-btn {
+    min-height: 44px;
+    margin-top: 15px;
+    padding: 10px 18px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--accent);
+    color: #1A2E1A;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 800;
+    cursor: pointer;
+  }
+
+  .updated-at {
+    margin: 18px 0 0;
+    text-align: center;
+    font-size: 10.5px;
+    color: var(--text-dim);
+    opacity: 0.75;
+  }
+
   .skeleton {
     background: linear-gradient(90deg, var(--bg-card) 25%, var(--bg-elevated) 37%, var(--bg-card) 63%);
     background-size: 400% 100%;
@@ -331,6 +537,13 @@
     .ring-fg { transition: none; }
     .skeleton { animation: none; }
   }
+
+  @media (max-width: 370px) {
+    .app { padding-left: 12px; padding-right: 12px; }
+    .hero { padding: 20px 16px; gap: 14px; }
+    .ring-wrap, .ring-wrap svg { width: 84px; height: 84px; }
+    .week-chart { gap: 5px; padding-left: 8px; padding-right: 8px; }
+  }
 </style>
 </head>
 <body>
@@ -341,14 +554,17 @@
       <p class="greeting" id="greeting">Xush kelibsiz</p>
       <p class="name" id="userName">&nbsp;</p>
     </div>
-    <div class="avatar" id="avatarInitial">?</div>
+    <div class="header-actions">
+      <button class="icon-btn" id="refreshBtn" type="button" aria-label="Ma’lumotlarni yangilash">↻</button>
+      <div class="avatar" id="avatarInitial">?</div>
+    </div>
   </div>
 
   <div class="tabs" role="tablist">
-    <button class="tab active" data-period="daily">Kunlik</button>
-    <button class="tab" data-period="weekly">Haftalik</button>
-    <button class="tab" data-period="monthly">Oylik</button>
-    <button class="tab" data-period="yearly">Yillik</button>
+    <button class="tab active" data-period="daily" role="tab" aria-selected="true">Kunlik</button>
+    <button class="tab" data-period="weekly" role="tab" aria-selected="false">Haftalik</button>
+    <button class="tab" data-period="monthly" role="tab" aria-selected="false">Oylik</button>
+    <button class="tab" data-period="yearly" role="tab" aria-selected="false">Yillik</button>
   </div>
 
   <div id="content">
@@ -378,9 +594,46 @@
   const userNameEl = document.getElementById('userName');
   const greetingEl = document.getElementById('greeting');
   const avatarEl = document.getElementById('avatarInitial');
+  const refreshBtn = document.getElementById('refreshBtn');
 
   const cache = {};
   let currentPeriod = 'daily';
+  let lastUpdatedAt = null;
+
+  function haptic(style) {
+    if (tg && tg.HapticFeedback) {
+      try { tg.HapticFeedback.impactOccurred(style || 'light'); } catch (e) {}
+    }
+  }
+
+  function shortDate(iso) {
+    if (!iso) return '';
+    const parts = iso.split('-');
+    return parts.length === 3 ? parts[2] + '.' + parts[1] + '.' + parts[0] : iso;
+  }
+
+  function updatedMarkup() {
+    if (!lastUpdatedAt) return '';
+    return '<p class="updated-at">Yangilandi: ' +
+      String(lastUpdatedAt.getHours()).padStart(2, '0') + ':' +
+      String(lastUpdatedAt.getMinutes()).padStart(2, '0') + '</p>';
+  }
+
+  function metricMarkup(completed, failed, pending) {
+    return '<div class="metric-grid">' +
+      '<div class="metric-card"><span class="metric-value">' + completed + '</span><span class="metric-label">Bajarildi</span></div>' +
+      '<div class="metric-card"><span class="metric-value">' + failed + '</span><span class="metric-label">Bajarilmadi</span></div>' +
+      '<div class="metric-card"><span class="metric-value">' + pending + '</span><span class="metric-label">Kutilmoqda</span></div>' +
+    '</div>';
+  }
+
+  function comparisonMarkup(current, previous) {
+    if (!previous || !previous.total) return '<span class="comparison">Kecha ma’lumot yo‘q</span>';
+    const difference = current.percent - previous.percent;
+    if (difference > 0) return '<span class="comparison up">↑ Kechagidan ' + difference + '% yaxshi</span>';
+    if (difference < 0) return '<span class="comparison down">↓ Kechagidan ' + Math.abs(difference) + '% past</span>';
+    return '<span class="comparison">＝ Kechagi natija bilan teng</span>';
+  }
 
   function greetingForHour() {
     const h = new Date().getHours();
@@ -463,14 +716,17 @@
       ringMarkup(s.percent) +
       '<div class="hero-info">' +
         '<p class="hero-count"><strong>' + s.completed + '</strong> / ' + s.total + ' vazifa bajarildi</p>' +
-        '<p class="hero-period">' + escapeHtml(data.date) + '</p>' +
+        '<p class="hero-period">' + escapeHtml(shortDate(data.date)) + '</p>' +
+        comparisonMarkup(s, data.yesterday && data.yesterday.stats) +
       '</div>' +
     '</div>';
+
+    html += metricMarkup(s.completed, s.failed || 0, s.pending || 0);
 
     html += '<p class="section-title">VAZIFALAR</p>';
 
     if (!data.tasks.length) {
-      html += '<div class="state-msg">Bugun uchun vazifalar topilmadi</div>';
+      html += '<div class="state-msg"><span class="state-icon">📝</span>Bugun uchun vazifalar hali qo‘shilmagan</div>';
     } else {
       data.tasks.forEach(function (t) {
         const iconClass = t.status === 'completed' ? 'completed' : (t.status === 'failed' ? 'failed' : 'pending');
@@ -487,7 +743,7 @@
       });
     }
 
-    html += insightMarkup(data.top_fail_reason, data.motivation);
+    html += insightMarkup(data.top_fail_reason, data.motivation) + updatedMarkup();
     contentEl.innerHTML = html;
   }
 
@@ -497,24 +753,25 @@
       ringMarkup(s.percent) +
       '<div class="hero-info">' +
         '<p class="hero-count"><strong>' + s.completed + '</strong> / ' + s.total + ' vazifa bajarildi</p>' +
-        '<p class="hero-period">' + escapeHtml(data.start_date) + ' — ' + escapeHtml(data.end_date) + '</p>' +
+        '<p class="hero-period">' + escapeHtml(shortDate(data.start_date)) + ' — ' + escapeHtml(shortDate(data.end_date)) + '</p>' +
       '</div>' +
     '</div>';
 
-    html += '<p class="section-title">HAFTA KUNLARI</p><div class="grid-list">';
+    html += metricMarkup(s.completed, s.failed || 0, s.pending || 0);
+    html += '<p class="section-title">HAFTA KUNLARI</p><div class="week-chart">';
     data.days.forEach(function (d) {
       const empty = d.total === 0;
       html += (
-        '<div class="grid-row' + (empty ? ' empty' : '') + '">' +
-          '<div class="row-label">' + escapeHtml(d.name) + '</div>' +
-          '<div class="bar-wrap"><div class="bar-fill" style="width:' + d.percent + '%"></div></div>' +
-          '<div class="row-pct">' + (empty ? '—' : d.percent + '%') + '</div>' +
+        '<div class="week-column' + (empty ? ' empty' : '') + '" title="' + escapeHtml(d.name) + ': ' + (empty ? 'ma’lumot yo‘q' : d.completed + '/' + d.total) + '">' +
+          '<div class="week-value">' + (empty ? '—' : d.percent + '%') + '</div>' +
+          '<div class="week-track"><div class="week-fill" style="height:' + (empty ? 0 : d.percent) + '%"></div></div>' +
+          '<div class="week-label">' + escapeHtml(d.name.slice(0, 2)) + '</div>' +
         '</div>'
       );
     });
     html += '</div>';
 
-    html += insightMarkup(data.top_fail_reason, data.motivation);
+    html += insightMarkup(data.top_fail_reason, data.motivation) + updatedMarkup();
     contentEl.innerHTML = html;
   }
 
@@ -524,28 +781,50 @@
       ringMarkup(s.percent) +
       '<div class="hero-info">' +
         '<p class="hero-count"><strong>' + s.completed + '</strong> / ' + s.total + ' vazifa bajarildi</p>' +
-        '<p class="hero-period">' + escapeHtml(data.start_date) + ' — ' + escapeHtml(data.end_date) + '</p>' +
+        '<p class="hero-period">' + escapeHtml(shortDate(data.start_date)) + ' — ' + escapeHtml(shortDate(data.end_date)) + '</p>' +
       '</div>' +
     '</div>';
 
-    html += '<p class="section-title">KUNLAR BO‘YICHA</p><div class="grid-list">';
-    if (!data.days.length) {
-      html += '<div class="state-msg">Bu oy uchun ma\'lumot yo‘q</div>';
-    } else {
-      data.days.forEach(function (d) {
-        html += (
-          '<div class="grid-row">' +
-            '<div class="row-label">' + escapeHtml(d.date.slice(5)) + '</div>' +
-            '<div class="bar-wrap"><div class="bar-fill" style="width:' + d.percent + '%"></div></div>' +
-            '<div class="row-pct">' + d.percent + '%</div>' +
-          '</div>'
-        );
-      });
-    }
-    html += '</div>';
+    html += metricMarkup(s.completed, s.failed || 0, s.pending || 0);
+    html += '<p class="section-title">OYLIK FAOLLIK</p>' + calendarMarkup(data);
 
-    html += insightMarkup(data.top_fail_reason, data.motivation);
+    html += insightMarkup(data.top_fail_reason, data.motivation) + updatedMarkup();
     contentEl.innerHTML = html;
+  }
+
+  function calendarMarkup(data) {
+    const start = new Date(data.start_date + 'T00:00:00');
+    const year = start.getFullYear();
+    const month = start.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const mondayOffset = (start.getDay() + 6) % 7;
+    const byDay = {};
+    data.days.forEach(function (d) { byDay[Number(d.date.slice(-2))] = d; });
+
+    let html = '<div class="calendar"><div class="calendar-head">';
+    ['Du', 'Se', 'Cho', 'Pa', 'Ju', 'Sha', 'Ya'].forEach(function (name) {
+      html += '<div class="calendar-weekday">' + name + '</div>';
+    });
+    html += '</div><div class="calendar-grid">';
+
+    for (let i = 0; i < mondayOffset; i++) html += '<div class="calendar-day blank"></div>';
+    for (let day = 1; day <= daysInMonth; day++) {
+      const d = byDay[day];
+      let level = '';
+      if (d) level = d.percent >= 80 ? ' high' : (d.percent >= 50 ? ' medium' : ' low');
+      const iso = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+      const isToday = iso === data.end_date;
+      const title = d ? (d.completed + '/' + d.total + ' — ' + d.percent + '%') : 'Vazifa yo‘q';
+      html += '<div class="calendar-day' + level + (isToday ? ' today' : '') + '" title="' + title + '">' + day + '</div>';
+    }
+
+    html += '</div><div class="calendar-legend">' +
+      '<span class="legend-item"><i class="legend-dot"></i>Vazifa yo‘q</span>' +
+      '<span class="legend-item"><i class="legend-dot low"></i>1–49%</span>' +
+      '<span class="legend-item"><i class="legend-dot medium"></i>50–79%</span>' +
+      '<span class="legend-item"><i class="legend-dot high"></i>80–100%</span>' +
+    '</div></div>';
+    return html;
   }
 
   function renderYearly(data) {
@@ -558,9 +837,10 @@
       '</div>' +
     '</div>';
 
+    html += metricMarkup(s.completed, s.failed || 0, s.pending || 0);
     html += '<p class="section-title">OYLAR BO‘YICHA</p><div class="grid-list">';
     if (!data.months.length) {
-      html += '<div class="state-msg">Bu yil uchun ma\'lumot yo‘q</div>';
+      html += '<div class="state-msg"><span class="state-icon">📊</span>Bu yil uchun ma’lumot yo‘q</div>';
     } else {
       data.months.forEach(function (m) {
         html += (
@@ -574,7 +854,7 @@
     }
     html += '</div>';
 
-    html += insightMarkup(data.top_fail_reason, data.motivation);
+    html += insightMarkup(data.top_fail_reason, data.motivation) + updatedMarkup();
     contentEl.innerHTML = html;
   }
 
@@ -590,27 +870,34 @@
   }
 
   function showError(message) {
-    contentEl.innerHTML = '<div class="state-msg">⚠️ ' + escapeHtml(message) + '</div>';
+    contentEl.innerHTML = '<div class="state-msg"><span class="state-icon">⚠️</span>' +
+      escapeHtml(message) + '<br><button class="retry-btn" id="retryBtn" type="button">Qayta urinish</button></div>';
+    const retryBtn = document.getElementById('retryBtn');
+    if (retryBtn) retryBtn.addEventListener('click', function () { loadPeriod(currentPeriod, true); });
   }
 
-  function loadPeriod(period) {
+  function loadPeriod(period, force) {
     currentPeriod = period;
 
-    if (cache[period]) {
+    if (!force && cache[period]) {
       renderers[period](cache[period]);
       return;
     }
 
+    refreshBtn.classList.add('loading');
     showSkeleton();
 
     apiFetch('/' + period)
       .then(function (data) {
         cache[period] = data;
+        lastUpdatedAt = new Date();
+        refreshBtn.classList.remove('loading');
         if (currentPeriod === period) {
           renderers[period](data);
         }
       })
       .catch(function (err) {
+        refreshBtn.classList.remove('loading');
         if (currentPeriod === period) {
           showError(err.message || 'Ma\'lumotni yuklab bo\'lmadi');
         }
@@ -619,10 +906,21 @@
 
   document.querySelectorAll('.tab').forEach(function (btn) {
     btn.addEventListener('click', function () {
-      document.querySelectorAll('.tab').forEach(function (b) { b.classList.remove('active'); });
+      haptic('light');
+      document.querySelectorAll('.tab').forEach(function (b) {
+        b.classList.remove('active');
+        b.setAttribute('aria-selected', 'false');
+      });
       btn.classList.add('active');
+      btn.setAttribute('aria-selected', 'true');
       loadPeriod(btn.dataset.period);
     });
+  });
+
+  refreshBtn.addEventListener('click', function () {
+    haptic('medium');
+    delete cache[currentPeriod];
+    loadPeriod(currentPeriod, true);
   });
 
   apiFetch('/me')
