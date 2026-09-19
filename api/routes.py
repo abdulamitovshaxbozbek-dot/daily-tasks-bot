@@ -181,17 +181,7 @@ def add_pending_fail_reason(
     message_id: Optional[int]
 ):
 
-    print(
-        "FAIL_REASON: add_pending_fail_reason chaqirildi,",
-        "task_id:", task_id,
-        "message_id:", message_id
-    )
-
     if message_id is None:
-
-        print(
-            "FAIL_REASON: message_id None, saqlanmadi"
-        )
 
         return
 
@@ -204,7 +194,6 @@ def add_pending_fail_reason(
                 UPDATE public.tasks
                 SET reason_message_id = %s
                 WHERE id = %s
-                RETURNING id
                 """,
                 (
                     message_id,
@@ -212,76 +201,7 @@ def add_pending_fail_reason(
                 )
             )
 
-            updated = cur.fetchone()
-
         conn.commit()
-
-    print(
-        "FAIL_REASON: reason_message_id yozildi, natija:",
-        updated
-    )
-
-
-def flush_pending_fail_reasons(chat_id: int):
-    """
-    Chat uchun barcha ochiq sabab-so'rov xabarlarini o'chiradi
-    (Telegram xabari sifatida) va reason_message_id'ni
-    tozalaydi. fail_reason bazada shunchaki NULL bo'lib qoladi.
-
-    /hisobot chaqirilganda ishlatiladi.
-    """
-
-    print(
-        "FAIL_REASON: flush_pending_fail_reasons chaqirildi,",
-        "chat_id:", chat_id
-    )
-
-    with get_connection() as conn:
-
-        with conn.cursor(
-            cursor_factory=RealDictCursor
-        ) as cur:
-
-            cur.execute(
-                """
-                UPDATE public.tasks t
-                SET reason_message_id = NULL
-                FROM public.users u
-                WHERE t.user_id = u.id
-                  AND u.telegram_chat_id = %s
-                  AND t.status = 'failed'
-                  AND t.fail_reason IS NULL
-                  AND t.reason_message_id IS NOT NULL
-                RETURNING t.reason_message_id
-                """,
-                (chat_id,)
-            )
-
-            rows = cur.fetchall()
-
-        conn.commit()
-
-    print(
-        "FAIL_REASON: flush topilgan xabarlar soni:",
-        len(rows),
-        "rows:", rows
-    )
-
-    for row in rows:
-
-        try:
-
-            telegram_delete_message(
-                chat_id,
-                row["reason_message_id"]
-            )
-
-        except Exception as error:
-
-            print(
-                "flush_pending_fail_reasons delete error:",
-                error
-            )
 
 
 # =========================================================
@@ -1898,20 +1818,10 @@ def handle_task_status(
             )
         )
 
-        print(
-            "FAIL_REASON: telegram_send_message_with_keyboard javobi:",
-            reason_message
-        )
-
         reason_message_id = (
             reason_message
             .get("result", {})
             .get("message_id")
-        )
-
-        print(
-            "FAIL_REASON: chiqarilgan reason_message_id:",
-            reason_message_id
         )
 
         add_pending_fail_reason(
@@ -2145,12 +2055,12 @@ def handle_daily_report(
             "ok": False
         }
 
-    # /hisobot — "hozirgi holat"ning suratini oladi. Shu payt
-    # hali javob berilmagan sabab-so'rov xabarlarini yopamiz,
-    # fail_reason bazada NULL ("sababi yozilmadi") holida qoladi.
-    flush_pending_fail_reasons(
-        chat_id
-    )
+    # Eslatma: /hisobot chaqirilganda sabab-so'rov xabarlariga
+    # ataylab tegilmaydi — ular Telegram'da qolib turadi va
+    # foydalanuvchi istalgan vaqtda tugmani bosib sababni
+    # belgilashi mumkin. Hisobotda bunday tasklar "sababi
+    # yozilmadi" deb ko'rsatiladi, sabab keyin belgilansa
+    # keyingi hisobotda yangilanadi.
 
     today = get_today()
 
