@@ -6145,6 +6145,7 @@ def miniapp_daily(
 
 @router.get("/miniapp/weekly")
 def miniapp_weekly(
+    start: Optional[date] = Query(None),
     chat_id: int = Depends(get_miniapp_chat_id)
 ):
 
@@ -6159,9 +6160,27 @@ def miniapp_weekly(
 
     today = get_today()
 
-    monday = today - timedelta(days=today.weekday())
-    start_date = monday - timedelta(days=7)
-    end_date = monday - timedelta(days=1)
+    current_monday = today - timedelta(days=today.weekday())
+    start_date = start or current_monday
+
+    if start_date.weekday() != 0:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Hafta boshlanish sanasi dushanba bo‘lishi kerak"
+        )
+
+    if start_date > current_monday:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Kelajakdagi haftani ko‘rib bo‘lmaydi"
+        )
+
+    end_date = min(
+        start_date + timedelta(days=6),
+        today
+    )
 
     with get_connection() as conn:
 
@@ -6244,6 +6263,7 @@ def miniapp_weekly(
         "ok": True,
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
+        "can_go_next": start_date < current_monday,
         "stats": stats,
         "days": list(daily.values()),
         "top_fail_reason": {
@@ -6257,6 +6277,8 @@ def miniapp_weekly(
 
 @router.get("/miniapp/monthly")
 def miniapp_monthly(
+    year: Optional[int] = Query(None, ge=2000, le=2100),
+    month: Optional[int] = Query(None, ge=1, le=12),
     chat_id: int = Depends(get_miniapp_chat_id)
 ):
 
@@ -6270,7 +6292,49 @@ def miniapp_monthly(
         )
 
     today = get_today()
-    start_date = today.replace(day=1)
+
+    if (year is None) != (month is None):
+
+        raise HTTPException(
+            status_code=400,
+            detail="Yil va oy birga yuborilishi kerak"
+        )
+
+    start_date = (
+        date(year, month, 1)
+        if year is not None and month is not None
+        else today.replace(day=1)
+    )
+
+    current_month_start = today.replace(day=1)
+
+    if start_date > current_month_start:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Kelajakdagi oyni ko‘rib bo‘lmaydi"
+        )
+
+    if start_date.month == 12:
+
+        next_month_start = date(
+            start_date.year + 1,
+            1,
+            1
+        )
+
+    else:
+
+        next_month_start = date(
+            start_date.year,
+            start_date.month + 1,
+            1
+        )
+
+    end_date = min(
+        next_month_start - timedelta(days=1),
+        today
+    )
 
     with get_connection() as conn:
 
@@ -6286,7 +6350,7 @@ def miniapp_monthly(
                   AND task_date BETWEEN %s AND %s
                 ORDER BY task_date ASC, created_at ASC
                 """,
-                (user["id"], start_date, today)
+                (user["id"], start_date, end_date)
             )
 
             tasks = cur.fetchall()
@@ -6338,7 +6402,8 @@ def miniapp_monthly(
     return {
         "ok": True,
         "start_date": start_date.isoformat(),
-        "end_date": today.isoformat(),
+        "end_date": end_date.isoformat(),
+        "can_go_next": start_date < current_month_start,
         "stats": stats,
         "days": sorted(
             daily.values(),
