@@ -1115,6 +1115,359 @@ def telegram_delete_message(
     )
 
 
+def telegram_edit_message_with_keyboard(
+    chat_id: int,
+    message_id: int,
+    text: str,
+    reply_markup: dict
+):
+    """Mavjud Telegram xabari va inline tugmalarini yangilaydi."""
+
+    if not TELEGRAM_TOKEN:
+
+        raise HTTPException(
+            status_code=500,
+            detail="TELEGRAM_TOKEN is not configured"
+        )
+
+    response = requests.post(
+        f"https://api.telegram.org/"
+        f"bot{TELEGRAM_TOKEN}/editMessageText",
+        json={
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "reply_markup": reply_markup
+        },
+        timeout=15
+    )
+
+    if response.ok:
+
+        return response.json()
+
+    try:
+
+        telegram_error = response.json()
+
+    except Exception:
+
+        telegram_error = response.text
+
+    # Matn va tugmalar o'zgarmagan bo'lsa Telegram 400 qaytaradi.
+    # Bu haqiqiy xato emas: checklist allaqachon aktual.
+    description = (
+        telegram_error.get("description", "")
+        if isinstance(telegram_error, dict)
+        else str(telegram_error)
+    )
+
+    if "message is not modified" in description.lower():
+
+        return {
+            "ok": True,
+            "not_modified": True
+        }
+
+    raise HTTPException(
+        status_code=500,
+        detail=(
+            "Telegram editMessageText failed: "
+            f"{telegram_error}"
+        )
+    )
+
+
+# =========================================================
+# LIVE CHECKLIST
+# =========================================================
+
+def get_live_checklist_message_id(
+    user_id: str,
+    task_date: date
+) -> Optional[int]:
+
+    with get_connection() as conn:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT live_checklist_message_id
+                FROM public.users
+                WHERE id = %s
+                  AND live_checklist_date = %s
+                """,
+                (
+                    user_id,
+                    task_date
+                )
+            )
+
+            row = cur.fetchone()
+
+    return row[0] if row else None
+
+
+def save_live_checklist_message_id(
+    user_id: str,
+    task_date: date,
+    message_id: int
+):
+
+    with get_connection() as conn:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                UPDATE public.users
+                SET
+                    live_checklist_message_id = %s,
+                    live_checklist_date = %s
+                WHERE id = %s
+                """,
+                (
+                    message_id,
+                    task_date,
+                    user_id
+                )
+            )
+
+        conn.commit()
+
+
+def clear_live_checklist_message_id(
+    user_id: str,
+    task_date: date
+):
+
+    with get_connection() as conn:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                UPDATE public.users
+                SET
+                    live_checklist_message_id = NULL,
+                    live_checklist_date = NULL
+                WHERE id = %s
+                  AND live_checklist_date = %s
+                """,
+                (
+                    user_id,
+                    task_date
+                )
+            )
+
+        conn.commit()
+
+
+def get_today_task_summary(user_id: str, task_date: date) -> dict:
+    """Bugungi jami va pending vazifalarni bitta snapshotda oladi."""
+
+    with get_connection() as conn:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    task_text,
+                    status,
+                    created_at
+                FROM public.tasks
+                WHERE user_id = %s
+                  AND task_date = %s
+                ORDER BY created_at ASC, id ASC
+                """,
+                (
+                    user_id,
+                    task_date
+                )
+            )
+
+            tasks = cur.fetchall()
+
+    return {
+        "total": len(tasks),
+        "completed": sum(
+            1 for task in tasks
+            if task["status"] == "completed"
+        ),
+        "failed": sum(
+            1 for task in tasks
+            if task["status"] == "failed"
+        ),
+        "pending": [
+            task for task in tasks
+            if task["status"] == "pending"
+        ]
+    }
+
+
+def build_live_checklist(summary: dict, heading: str) -> tuple[str, dict]:
+
+    pending_tasks = summary["pending"]
+
+    lines = [
+        heading,
+        "",
+        (
+            f"📊 Jami: {summary['total']}  |  "
+            f"✅ {summary['completed']}  |  "
+            f"❌ {summary['failed']}  |  "
+            f"⏳ {len(pending_tasks)}"
+        ),
+        "",
+        "Vazifani bajarganingizdan keyingina belgilang.",
+        "Hozir hech narsani bosishingiz shart emas. 🔔",
+        ""
+    ]
+
+    keyboard = []
+
+    for index, task in enumerate(pending_tasks, start=1):
+
+        lines.append(
+            f"{index}. ⏳ {task['task_text']}"
+        )
+
+        keyboard.append(
+            [
+                {
+                    "text": f"✅ {index}",
+                    "callback_data": (
+                        f"task_status|{task['id']}|completed"
+                    )
+                },
+                {
+                    "text": f"❌ {index}",
+                    "callback_data": (
+                        f"task_status|{task['id']}|failed"
+                    )
+                }
+            ]
+        )
+
+    return (
+        "\n".join(lines).rstrip(),
+        {
+            "inline_keyboard": keyboard
+        }
+    )
+
+
+def refresh_live_checklist(
+    chat_id: int,
+    user: dict,
+    heading: str = "📋 Bugungi vazifalar",
+    force_new: bool = False
+) -> dict:
+    """
+    DB holatidan checklistni qayta quradi.
+
+    force_new=True bo'lsa eski checklist o'chirilib, chatning eng
+    pastiga yangi xabar yuboriladi. Oddiy status o'zgarishida esa
+    mavjud xabar joyida tahrirlanadi.
+    """
+
+    today = get_today()
+    summary = get_today_task_summary(
+        user["id"],
+        today
+    )
+    old_message_id = get_live_checklist_message_id(
+        user["id"],
+        today
+    )
+
+    if not summary["pending"]:
+
+        if old_message_id:
+
+            telegram_delete_message(
+                chat_id,
+                old_message_id
+            )
+
+        clear_live_checklist_message_id(
+            user["id"],
+            today
+        )
+
+        return {
+            "ok": True,
+            "pending": 0,
+            "summary": summary
+        }
+
+    text, keyboard = build_live_checklist(
+        summary,
+        heading
+    )
+
+    if old_message_id and not force_new:
+
+        try:
+
+            telegram_edit_message_with_keyboard(
+                chat_id,
+                old_message_id,
+                text,
+                keyboard
+            )
+
+            return {
+                "ok": True,
+                "pending": len(summary["pending"]),
+                "message_id": old_message_id,
+                "summary": summary
+            }
+
+        except HTTPException:
+
+            # Xabar foydalanuvchi tomonidan o'chirilgan yoki juda
+            # eski bo'lsa, quyida yangisini yuboramiz.
+            pass
+
+    if old_message_id:
+
+        telegram_delete_message(
+            chat_id,
+            old_message_id
+        )
+
+    sent = telegram_send_message_with_keyboard(
+        chat_id,
+        text,
+        keyboard
+    )
+
+    new_message_id = (
+        sent.get("result", {}).get("message_id")
+    )
+
+    if new_message_id:
+
+        save_live_checklist_message_id(
+            user["id"],
+            today,
+            new_message_id
+        )
+
+    return {
+        "ok": True,
+        "pending": len(summary["pending"]),
+        "message_id": new_message_id,
+        "summary": summary
+    }
+
+
 # =========================================================
 # MORNING KEYBOARD
 # =========================================================
@@ -1608,6 +1961,20 @@ def handle_create_tasks(
 
                 added_count += 1
 
+            # Bugun barcha vazifalar belgilangandan keyin yana task
+            # qo'shilsa, yangi task ham tugagach completion xabari qayta
+            # yuborilishi uchun bir martalik flagni ochamiz.
+            if added_count > 0:
+
+                cur.execute(
+                    """
+                    UPDATE public.users
+                    SET last_completion_notified_date = NULL
+                    WHERE id = %s
+                    """,
+                    (user["id"],)
+                )
+
         conn.commit()
 
     response_parts = []
@@ -1684,6 +2051,21 @@ def handle_create_tasks(
         telegram_send_message(
             chat_id,
             "\n\n".join(response_parts)
+        )
+
+    # Yangi vazifa qo'shilganda eski checklistni pastga ko'chiramiz:
+    # eski xabar o'chadi, DB'dagi barcha pending vazifalar bilan yangi
+    # checklist tasdiq xabaridan keyin yuboriladi.
+    if added_count > 0:
+
+        refresh_live_checklist(
+            chat_id,
+            user,
+            heading=(
+                f"📋 Bugungi reja — "
+                f"{added_count} ta yangi vazifa qo‘shildi"
+            ),
+            force_new=True
         )
 
     return {
@@ -1863,35 +2245,17 @@ def handle_finish_day(
 
         conn.commit()
 
-    for index, task in enumerate(
-        pending_tasks,
-        start=1
-    ):
-
-        keyboard = {
-            "inline_keyboard": [
-                [
-                    {
-                        "text": "✅ Bajarildi",
-                        "callback_data":
-                            f"task_status|{task['id']}|completed"
-                    },
-                    {
-                        "text": "❌ Bajarilmadi",
-                        "callback_data":
-                            f"task_status|{task['id']}|failed"
-                    }
-                ]
-            ]
-        }
-
-        telegram_send_message_with_keyboard(
-            chat_id,
-
-            f"{index}. {task['task_text']}",
-
-            keyboard
-        )
+    # Har bir task uchun alohida xabar yubormaymiz. Eski checklist
+    # o'chadi va barcha pending vazifalar bitta yangi xabarda chiqadi.
+    refresh_live_checklist(
+        chat_id,
+        user,
+        heading=(
+            f"🌙 Kunni yakunlaymiz — "
+            f"{len(pending_tasks)} ta vazifa qoldi"
+        ),
+        force_new=True
+    )
 
     return {
         "ok": True,
@@ -2001,6 +2365,20 @@ def handle_task_status(
                 "Bajarilmadi ❌"
             )
 
+    today = get_today()
+    live_message_id = get_live_checklist_message_id(
+        user["id"],
+        today
+    )
+
+    # Task statusi DB'ga yozilgach, bitta yashovchi checklistni
+    # darhol yangilaymiz. Bajarilgan/bajarilmagan task ro'yxatdan
+    # chiqadi va qolgan son avtomatik kamayadi.
+    refresh_live_checklist(
+        chat_id,
+        user
+    )
+
     # ---------------------------------------------------
     # "Bajarilmadi" bosilganda: eski tugmali xabarni o'chirib,
     # sabab tanlash uchun yangi xabar yuboramiz. Status
@@ -2014,7 +2392,7 @@ def handle_task_status(
 
     if status == "failed":
 
-        if message_id:
+        if message_id and message_id != live_message_id:
 
             try:
 
@@ -2053,7 +2431,7 @@ def handle_task_status(
             reason_message_id
         )
 
-    elif message_id:
+    elif message_id and message_id != live_message_id:
 
         try:
 
@@ -2068,8 +2446,6 @@ def handle_task_status(
                 "Delete message error:",
                 error
             )
-
-    today = get_today()
 
     # "Barcha vazifalar belgilandi" xabari endi faqat barcha
     # tasklar TO'LIQ yakunlanganda yuboriladi: ya'ni na
@@ -3792,6 +4168,96 @@ def handle_broadcast(
 # REMINDERS
 # =========================================================
 
+def handle_live_checklist_reminders(period: str):
+    """
+    Mavjud 14:00 va 23:00 schedule uchun smart checklist yuboradi.
+    Yangi reminder vaqti yaratmaydi; faqat eski umumiy xabar o'rniga
+    real pending vazifalarni chiqaradi.
+    """
+
+    headings = {
+        "midday": "☀️ Kunning yarmi — davom etamiz",
+        "evening": "🌙 Kunni yakunlaymiz"
+    }
+
+    if period not in headings:
+
+        raise HTTPException(
+            status_code=400,
+            detail="period must be midday or evening"
+        )
+
+    today = get_today()
+
+    with get_connection() as conn:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
+            cur.execute(
+                """
+                SELECT DISTINCT
+                    u.*
+                FROM public.users u
+                JOIN public.tasks t
+                  ON t.user_id = u.id
+                 AND t.task_date = %s
+                 AND t.status = 'pending'
+                WHERE u.telegram_chat_id IS NOT NULL
+                  AND u.state != 'blocked'
+                """,
+                (today,)
+            )
+
+            users = cur.fetchall()
+
+    results = []
+
+    for user in users:
+
+        chat_id = user["telegram_chat_id"]
+
+        try:
+
+            result = refresh_live_checklist(
+                chat_id,
+                user,
+                heading=headings[period],
+                force_new=True
+            )
+
+            results.append(
+                {
+                    "chat_id": chat_id,
+                    "sent": True,
+                    "pending": result["pending"]
+                }
+            )
+
+        except Exception as error:
+
+            print(
+                "Live checklist reminder error:",
+                chat_id,
+                repr(error)
+            )
+
+            results.append(
+                {
+                    "chat_id": chat_id,
+                    "sent": False,
+                    "error": str(error)
+                }
+            )
+
+    return {
+        "ok": True,
+        "period": period,
+        "processed": len(results),
+        "results": results
+    }
+
 def handle_reminders():
 
     today = get_today()
@@ -5274,6 +5740,18 @@ def run_reminders(
 ):
 
     return handle_reminders()
+
+
+@router.post("/checklist-reminders/run")
+def run_live_checklist_reminders(
+    period: str = Query(..., pattern="^(midday|evening)$"),
+    _: None = Depends(verify_api_key)
+):
+    """14:00: midday, 23:00: evening parametrida chaqiriladi."""
+
+    return handle_live_checklist_reminders(
+        period
+    )
 
 
 # =========================================================
