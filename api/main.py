@@ -1,4 +1,6 @@
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+import os
 
 from database import get_connection
 
@@ -10,6 +12,12 @@ app = FastAPI(
 
     version="1.0.0"
 
+)
+
+MINIAPP_HTML_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "miniapp",
+    "index.html"
 )
 
 @app.get("/health")
@@ -42,7 +50,13 @@ def health_db():
 
     }
 
+@app.get("/miniapp")
+
+def miniapp_page():
+
+    return FileResponse(
+        MINIAPP_HTML_PATH,
+        media_type="text/html"
+    )
+
 app.include_router(router)
-
-
-
