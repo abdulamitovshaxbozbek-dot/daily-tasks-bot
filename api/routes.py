@@ -181,7 +181,17 @@ def add_pending_fail_reason(
     message_id: Optional[int]
 ):
 
+    print(
+        "FAIL_REASON: add_pending_fail_reason chaqirildi,",
+        "task_id:", task_id,
+        "message_id:", message_id
+    )
+
     if message_id is None:
+
+        print(
+            "FAIL_REASON: message_id None, saqlanmadi"
+        )
 
         return
 
@@ -194,6 +204,7 @@ def add_pending_fail_reason(
                 UPDATE public.tasks
                 SET reason_message_id = %s
                 WHERE id = %s
+                RETURNING id
                 """,
                 (
                     message_id,
@@ -201,7 +212,14 @@ def add_pending_fail_reason(
                 )
             )
 
+            updated = cur.fetchone()
+
         conn.commit()
+
+    print(
+        "FAIL_REASON: reason_message_id yozildi, natija:",
+        updated
+    )
 
 
 def flush_pending_fail_reasons(chat_id: int):
@@ -212,6 +230,11 @@ def flush_pending_fail_reasons(chat_id: int):
 
     /hisobot chaqirilganda ishlatiladi.
     """
+
+    print(
+        "FAIL_REASON: flush_pending_fail_reasons chaqirildi,",
+        "chat_id:", chat_id
+    )
 
     with get_connection() as conn:
 
@@ -237,6 +260,12 @@ def flush_pending_fail_reasons(chat_id: int):
             rows = cur.fetchall()
 
         conn.commit()
+
+    print(
+        "FAIL_REASON: flush topilgan xabarlar soni:",
+        len(rows),
+        "rows:", rows
+    )
 
     for row in rows:
 
@@ -1869,10 +1898,20 @@ def handle_task_status(
             )
         )
 
+        print(
+            "FAIL_REASON: telegram_send_message_with_keyboard javobi:",
+            reason_message
+        )
+
         reason_message_id = (
             reason_message
             .get("result", {})
             .get("message_id")
+        )
+
+        print(
+            "FAIL_REASON: chiqarilgan reason_message_id:",
+            reason_message_id
         )
 
         add_pending_fail_reason(
