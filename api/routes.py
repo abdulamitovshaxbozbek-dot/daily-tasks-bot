@@ -9,6 +9,7 @@ import requests
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     Header,
     HTTPException
@@ -53,9 +54,12 @@ WHISPER_PROMPT_UZ = (
     "bir soat kitob o'qiyman, soat to'qqizda uyg'onaman."
 )
 
-PENDING_VOICE_TASKS: dict[int, dict] = {}
-
-PENDING_VOICE_TTL_SECONDS = 15 * 60
+# Ovozli tasdiq so'rovlari uchun amal qilish muddati.
+# pop_pending_voice_tasks funksiyasidagi SQL so'rovda
+# "interval '15 minutes'" sifatida qo'llaniladi — shu yerda
+# o'zgartirilsa, pastdagi SQL ham mos ravishda yangilanishi
+# kerak.
+PENDING_VOICE_TTL_MINUTES = 15
 
 
 # =========================================================
@@ -153,15 +157,14 @@ def build_fail_reason_keyboard(task_id: str) -> dict:
 
 
 # =========================================================
-# PENDING FAIL REASON TASKS (in-memory)
+# PENDING FAIL REASON (bazada, worker'lar orasida umumiy)
 # =========================================================
 #
 # Task "bajarilmadi" deb belgilangandan keyin, sabab hali
-# tanlanmagan bo'lsa, shu yerda kuzatiladi:
-#   PENDING_FAIL_REASON[chat_id] = {
-#       task_id: message_id,
-#       ...
-#   }
+# tanlanmagan bo'lsa, shu holat public.tasks.reason_message_id
+# ustunida saqlanadi (Telegram xabar ID'si). Bu, xotirada
+# saqlashdan farqli o'laroq, barcha worker process'lar uchun
+# umumiy bo'lgani sababli tanlandi.
 #
 # Foydalanuvchi istalgan vaqtda eski tugmani bosishi mumkin
 # (status allaqachon 'failed', faqat fail_reason to'ldiriladi,
@@ -171,9 +174,6 @@ def build_fail_reason_keyboard(task_id: str) -> dict:
 # barcha so'rov xabarlari o'chiriladi va fail_reason NULL
 # ("sababi yozilmadi") holida qoladi — chunki hisobot "hozirgi
 # holat"ning suratini oladi.
-
-PENDING_FAIL_REASON: dict[int, dict[str, int]] = {}
-
 
 def add_pending_fail_reason(
     chat_id: int,
@@ -185,53 +185,66 @@ def add_pending_fail_reason(
 
         return
 
-    if chat_id not in PENDING_FAIL_REASON:
+    with get_connection() as conn:
 
-        PENDING_FAIL_REASON[chat_id] = {}
+        with conn.cursor() as cur:
 
-    PENDING_FAIL_REASON[chat_id][task_id] = message_id
+            cur.execute(
+                """
+                UPDATE public.tasks
+                SET reason_message_id = %s
+                WHERE id = %s
+                """,
+                (
+                    message_id,
+                    task_id
+                )
+            )
 
-
-def remove_pending_fail_reason(
-    chat_id: int,
-    task_id: str
-):
-
-    entry = PENDING_FAIL_REASON.get(chat_id)
-
-    if not entry:
-
-        return
-
-    entry.pop(task_id, None)
-
-    if not entry:
-
-        PENDING_FAIL_REASON.pop(chat_id, None)
+        conn.commit()
 
 
 def flush_pending_fail_reasons(chat_id: int):
     """
     Chat uchun barcha ochiq sabab-so'rov xabarlarini o'chiradi
-    (Telegram xabari sifatida) va kuzatuvdan chiqaradi.
-    fail_reason bazada shunchaki NULL bo'lib qoladi.
+    (Telegram xabari sifatida) va reason_message_id'ni
+    tozalaydi. fail_reason bazada shunchaki NULL bo'lib qoladi.
 
     /hisobot chaqirilganda ishlatiladi.
     """
 
-    entry = PENDING_FAIL_REASON.pop(chat_id, None)
+    with get_connection() as conn:
 
-    if not entry:
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
 
-        return
+            cur.execute(
+                """
+                UPDATE public.tasks t
+                SET reason_message_id = NULL
+                FROM public.users u
+                WHERE t.user_id = u.id
+                  AND u.telegram_chat_id = %s
+                  AND t.status = 'failed'
+                  AND t.fail_reason IS NULL
+                  AND t.reason_message_id IS NOT NULL
+                RETURNING t.reason_message_id
+                """,
+                (chat_id,)
+            )
 
-    for task_id, message_id in entry.items():
+            rows = cur.fetchall()
+
+        conn.commit()
+
+    for row in rows:
 
         try:
 
             telegram_delete_message(
                 chat_id,
-                message_id
+                row["reason_message_id"]
             )
 
         except Exception as error:
@@ -385,6 +398,103 @@ def get_user_by_chat_id(chat_id: int):
 def is_admin(chat_id: int) -> bool:
 
     return str(chat_id) == str(ADMIN_CHAT_ID)
+
+
+# =========================================================
+# KUN TO'LIQ YAKUNLANGANMI? (status + fail_reason)
+# =========================================================
+#
+# "Kun to'liq yakunlandi" endi ikki shartni talab qiladi:
+#   1) 'pending' statusidagi task qolmagan bo'lishi
+#   2) 'failed' statusidagi hech bir task sababi yozilmagan
+#      (fail_reason IS NULL) bo'lmasligi kerak
+# Ikkalasi ham bajarilgandagina "Barcha vazifalar belgilandi"
+# xabari yuboriladi.
+
+def check_unfinished_tasks_count(
+    user_id: str,
+    task_date: date
+) -> int:
+
+    with get_connection() as conn:
+
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT COUNT(*)::int
+                FROM public.tasks
+                WHERE user_id = %s
+                  AND task_date = %s
+                  AND (
+                      status = 'pending'
+                      OR (
+                          status = 'failed'
+                          AND fail_reason IS NULL
+                      )
+                  )
+                """,
+                (
+                    user_id,
+                    task_date
+                )
+            )
+
+            return cur.fetchone()[0]
+
+
+def maybe_notify_day_fully_completed(
+    chat_id: int,
+    user_id: str,
+    task_date: date
+):
+    """
+    Agar kun to'liq yakunlangan bo'lsa (barcha status va
+    fail_reason to'ldirilgan bo'lsa), va bu haqda hali
+    xabar berilmagan bo'lsa, foydalanuvchiga "Barcha
+    vazifalar belgilandi" xabarini yuboradi.
+
+    last_completion_notified_date orqali bir marta
+    yuborilishini kafolatlaydi (IS DISTINCT FROM %s sharti
+    tufayli, race condition holatida ham faqat bitta worker
+    xabar yuboradi).
+    """
+
+    with get_connection() as conn:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
+            cur.execute(
+                """
+                UPDATE public.users
+                SET last_completion_notified_date = %s
+                WHERE id = %s
+                  AND last_completion_notified_date
+                      IS DISTINCT FROM %s
+                RETURNING id
+                """,
+                (
+                    task_date,
+                    user_id,
+                    task_date
+                )
+            )
+
+            claimant = cur.fetchone()
+
+        conn.commit()
+
+    if claimant:
+
+        telegram_send_message(
+            chat_id,
+
+            """🎉 Barcha vazifalar belgilandi!
+
+📊 Endi /hisobot buyrug‘ini bersangiz, bugungi hisobotingizni yuboraman."""
+        )
 
 
 # =========================================================
@@ -1544,13 +1654,22 @@ def handle_finish_day(
 
             conn.commit()
 
-        telegram_send_message(
-            chat_id,
-
-            """🎉 Barcha vazifalar belgilandi!
-
-📊 Endi /hisobot buyrug‘ini bersangiz, bugungi hisobotingizni yuboraman."""
+        # Izchillik uchun: "hammasi belgilandi" xabarini ham
+        # faqat status VA fail_reason to'liq bo'lganda
+        # yuboramiz (xuddi handle_task_status/handle_fail_reason
+        # dagi kabi).
+        unfinished_count = check_unfinished_tasks_count(
+            user["id"],
+            today
         )
+
+        if unfinished_count == 0:
+
+            maybe_notify_day_fully_completed(
+                chat_id,
+                user["id"],
+                today
+            )
 
         return {
             "ok": True,
@@ -1713,9 +1832,12 @@ def handle_task_status(
     # ---------------------------------------------------
     # "Bajarilmadi" bosilganda: eski tugmali xabarni o'chirib,
     # sabab tanlash uchun yangi xabar yuboramiz. Status
-    # allaqachon 'failed' deb yozilgan (yuqorida), shuning
-    # uchun pending_count hisobiga darhol ta'sir qiladi va
-    # kun "yakunlandi" jarayoni bloklanmaydi.
+    # allaqachon 'failed' deb yozilgan (yuqorida), lekin
+    # fail_reason hali NULL bo'lgani uchun bu task hamon
+    # "tugallanmagan" hisoblanadi (pastdagi
+    # check_unfinished_tasks_count shuni hisobga oladi) —
+    # ya'ni "Barcha vazifalar belgilandi" xabari sabab
+    # tanlanmaguncha kelmaydi.
     # ---------------------------------------------------
 
     if status == "failed":
@@ -1777,68 +1899,27 @@ def handle_task_status(
 
     today = get_today()
 
-    with get_connection() as conn:
+    # "Barcha vazifalar belgilandi" xabari endi faqat barcha
+    # tasklar TO'LIQ yakunlanganda yuboriladi: ya'ni na
+    # 'pending' status qolgan, na sababi hali yozilmagan
+    # 'failed' task qolgan bo'lishi kerak.
+    unfinished_count = check_unfinished_tasks_count(
+        user["id"],
+        today
+    )
 
-        with conn.cursor() as cur:
-
-            cur.execute(
-                """
-                SELECT COUNT(*)::int
-                FROM public.tasks
-                WHERE user_id = %s
-                  AND task_date = %s
-                  AND status = 'pending'
-                """,
-                (
-                    user["id"],
-                    today
-                )
-            )
-
-            pending_count = cur.fetchone()[0]
-
-    if pending_count > 0:
+    if unfinished_count > 0:
 
         return {
             "ok": True,
-            "pending": pending_count
+            "pending": unfinished_count
         }
 
-    with get_connection() as conn:
-
-        with conn.cursor(
-            cursor_factory=RealDictCursor
-        ) as cur:
-
-            cur.execute(
-                """
-                UPDATE public.users
-                SET last_completion_notified_date = %s
-                WHERE id = %s
-                  AND last_completion_notified_date
-                      IS DISTINCT FROM %s
-                RETURNING id
-                """,
-                (
-                    today,
-                    user["id"],
-                    today
-                )
-            )
-
-            claimant = cur.fetchone()
-
-        conn.commit()
-
-    if claimant:
-
-        telegram_send_message(
-            chat_id,
-
-            """🎉 Barcha vazifalar belgilandi!
-
-📊 Endi /hisobot buyrug‘ini bersangiz, bugungi hisobotingizni yuboraman."""
-        )
+    maybe_notify_day_fully_completed(
+        chat_id,
+        user["id"],
+        today
+    )
 
     return {
         "ok": True,
@@ -1898,7 +1979,9 @@ def handle_fail_reason(
             cur.execute(
                 """
                 UPDATE public.tasks
-                SET fail_reason = %s
+                SET
+                    fail_reason = %s,
+                    reason_message_id = NULL
                 WHERE id = %s
                   AND user_id = %s
                   AND status = 'failed'
@@ -1914,11 +1997,6 @@ def handle_fail_reason(
             task = cur.fetchone()
 
         conn.commit()
-
-    remove_pending_fail_reason(
-        chat_id,
-        task_id
-    )
 
     if not task:
 
@@ -1972,6 +2050,30 @@ def handle_fail_reason(
                 "Delete message error:",
                 error
             )
+
+    # Sabab tanlanishi bilan kun to'liq yakunlangan bo'lishi
+    # mumkin (masalan, oxirgi ochiq bo'lgan task shu edi).
+    # Shuni tekshirib, kerak bo'lsa "Barcha vazifalar
+    # belgilandi" xabarini shu yerdan yuboramiz.
+
+    task_date = task["task_date"]
+
+    if isinstance(task_date, str):
+
+        task_date = date.fromisoformat(task_date)
+
+    unfinished_count = check_unfinished_tasks_count(
+        user["id"],
+        task_date
+    )
+
+    if unfinished_count == 0:
+
+        maybe_notify_day_fully_completed(
+            chat_id,
+            user["id"],
+            task_date
+        )
 
     return {
         "ok": True,
@@ -3341,6 +3443,179 @@ def handle_admin(
         "route": "admin"
     }
 
+
+# =========================================================
+# BROADCAST
+# =========================================================
+
+def handle_broadcast(
+    chat_id: int,
+    message_text: str
+):
+
+    if not is_admin(chat_id):
+
+        telegram_send_message(
+            chat_id,
+            "⛔ Sizda admin huquqi yo‘q."
+        )
+
+        return {
+            "ok": False
+        }
+
+    text = re.sub(
+        r"^/xabar\s*",
+        "",
+        message_text,
+        flags=re.IGNORECASE
+    ).strip()
+
+    if not text:
+
+        telegram_send_message(
+            chat_id,
+
+            """📢 Xabar yuborish formati:
+
+/xabar Sizning xabaringiz"""
+        )
+
+        return {
+            "ok": False
+        }
+
+    # Bu funksiya fon vazifasi (background task) sifatida
+    # ishga tushiriladi — agar shu yerda kutilmagan xato yuz
+    # bersa, FastAPI uni jim yutib yuboradi va admin hech
+    # qanday xabar olmay qoladi. Shuning uchun butun asosiy
+    # jarayonni try/except bilan o'raymiz, xato bo'lsa ham
+    # adminga xabar beramiz.
+    try:
+
+        with get_connection() as conn:
+
+            with conn.cursor(
+                cursor_factory=RealDictCursor
+            ) as cur:
+
+                cur.execute(
+                    """
+                    SELECT telegram_chat_id
+                    FROM public.users
+                    WHERE telegram_chat_id IS NOT NULL
+                      AND state != 'blocked'
+                    """
+                )
+
+                users = cur.fetchall()
+
+        sent = 0
+        failed = 0
+
+        for user in users:
+
+            try:
+
+                telegram_send_message(
+                    user["telegram_chat_id"],
+                    text
+                )
+
+                sent += 1
+
+            except Exception as error:
+
+                failed += 1
+
+                error_text = str(error)
+
+                print(
+                    "Broadcast error:",
+                    error_text
+                )
+
+                is_blocked = (
+                    "error_code': 403"
+                    in error_text
+                    and
+                    "bot was blocked by the user"
+                    in error_text
+                )
+
+                if is_blocked:
+
+                    try:
+
+                        with get_connection() as block_conn:
+
+                            with block_conn.cursor() as block_cur:
+
+                                block_cur.execute(
+                                    """
+                                    UPDATE public.users
+                                    SET state = 'blocked'
+                                    WHERE telegram_chat_id = %s
+                                    """,
+                                    (user["telegram_chat_id"],)
+                                )
+
+                            block_conn.commit()
+
+                    except Exception as db_error:
+
+                        print(
+                            "Broadcast blocked-state update error:",
+                            db_error
+                        )
+
+        telegram_send_message(
+            chat_id,
+
+            f"""📢 Broadcast yakunlandi.
+
+✅ Yuborildi: {sent} ta
+
+❌ Xatolik: {failed} ta
+
+👥 Jami: {len(users)} ta"""
+        )
+
+        return {
+            "ok": True,
+            "sent": sent,
+            "failed": failed
+        }
+
+    except Exception as error:
+
+        print(
+            "Broadcast fatal error:",
+            repr(error)
+        )
+
+        try:
+
+            telegram_send_message(
+                chat_id,
+
+                "⚠️ Broadcast yuborishda kutilmagan xatolik "
+                "yuz berdi. Loglarni tekshiring."
+            )
+
+        except Exception as notify_error:
+
+            print(
+                "Broadcast fatal error notify failed:",
+                repr(notify_error)
+            )
+
+        return {
+            "ok": False,
+            "error": str(error)
+        }
+
+
 # =========================================================
 # REMINDERS
 # =========================================================
@@ -3579,53 +3854,109 @@ Masalan:
 
 
 # =========================================================
-# PENDING VOICE TASKS (in-memory)
+# PENDING VOICE TASKS (bazada, worker'lar orasida umumiy)
 # =========================================================
-
-def _cleanup_expired_pending_voice_tasks():
-
-    now = time.time()
-
-    expired_chat_ids = [
-        cid
-        for cid, entry in PENDING_VOICE_TASKS.items()
-        if now - entry["created_at"] > PENDING_VOICE_TTL_SECONDS
-    ]
-
-    for cid in expired_chat_ids:
-
-        PENDING_VOICE_TASKS.pop(cid, None)
-
+#
+# Bir nechta worker process bir vaqtda ishlagani uchun (ko'p
+# foydalanuvchini qo'llab-quvvatlash maqsadida), xotirada
+# saqlangan holat worker'lar orasida bo'linib qolar edi —
+# bitta worker saqlagan ma'lumotni boshqa worker ko'rmasdi.
+# Shuning uchun bu holat public.pending_voice_tasks jadvalida
+# saqlanadi, u barcha worker'lar uchun umumiy.
 
 def set_pending_voice_tasks(
     chat_id: int,
     tasks: list[str]
 ):
 
-    _cleanup_expired_pending_voice_tasks()
+    with get_connection() as conn:
 
-    PENDING_VOICE_TASKS[chat_id] = {
-        "tasks": tasks,
-        "created_at": time.time()
-    }
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                INSERT INTO public.pending_voice_tasks (
+                    chat_id,
+                    tasks,
+                    created_at
+                )
+                VALUES (
+                    %s,
+                    %s,
+                    now()
+                )
+                ON CONFLICT (chat_id) DO UPDATE
+                SET
+                    tasks = EXCLUDED.tasks,
+                    created_at = EXCLUDED.created_at
+                """,
+                (
+                    chat_id,
+                    json.dumps(tasks)
+                )
+            )
+
+        conn.commit()
 
 
 def pop_pending_voice_tasks(
     chat_id: int
 ) -> Optional[list[str]]:
 
-    _cleanup_expired_pending_voice_tasks()
+    with get_connection() as conn:
 
-    entry = PENDING_VOICE_TASKS.pop(
-        chat_id,
-        None
-    )
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
 
-    if not entry:
+            cur.execute(
+                """
+                DELETE FROM public.pending_voice_tasks
+                WHERE chat_id = %s
+                  AND created_at > now() - (%s || ' minutes')::interval
+                RETURNING tasks
+                """,
+                (
+                    chat_id,
+                    PENDING_VOICE_TTL_MINUTES
+                )
+            )
+
+            row = cur.fetchone()
+
+            # Eskirgan (TTL o'tgan) yozuvni ham tozalab qo'yamiz,
+            # bo'lmasa u DELETE shartiga tushmay abadiy qolib
+            # ketishi mumkin.
+            cur.execute(
+                """
+                DELETE FROM public.pending_voice_tasks
+                WHERE chat_id = %s
+                """,
+                (chat_id,)
+            )
+
+        conn.commit()
+
+    if not row:
 
         return None
 
-    return entry["tasks"]
+    tasks_value = row["tasks"]
+
+    # psycopg2 odatda JSONB ustunini avtomatik list/dict'ga
+    # aylantiradi, lekin ehtiyot chorasi sifatida string kelgan
+    # holatni ham qo'llab-quvvatlaymiz.
+    if isinstance(tasks_value, str):
+
+        try:
+
+            tasks_value = json.loads(tasks_value)
+
+        except (TypeError, json.JSONDecodeError):
+
+            return None
+
+    return tasks_value
 
 
 # =========================================================
@@ -4411,7 +4742,8 @@ def handle_voice_confirm(
 
 @router.post("/telegram")
 def telegram_webhook(
-    update: dict
+    update: dict,
+    background_tasks: BackgroundTasks
 ):
 
     print("========================================")
@@ -4633,7 +4965,72 @@ def telegram_webhook(
             return handle_admin(
                 chat_id
             )
-    
+
+        if message_text.startswith(
+            "/xabar"
+        ):
+
+            # Admin huquqi va matn borligini DARHOL (webhook
+            # ichida) tekshiramiz — faqat haqiqiy broadcast
+            # ishini fon vazifasiga yuboramiz. Bu bekorga fon
+            # vazifasi yaratilishining oldini oladi (masalan,
+            # admin bo'lmagan kimdir yoki bo'sh matn bilan
+            # /xabar yuborilsa).
+            #
+            # Broadcast o'zi ko'p userga ketma-ket xabar
+            # yuboradi va uzoq davom etishi mumkin (100+ user).
+            # Agar bu webhook javobini kechiktirsa, Telegram
+            # update'ni qayta yuborishi mumkin va butun
+            # broadcast yana boshidan ishga tushadi. Shuning
+            # uchun buni fon vazifasiga o'tkazamiz — webhook
+            # darhol javob qaytaradi, broadcast esa orqada
+            # davom etadi.
+
+            if not is_admin(chat_id):
+
+                telegram_send_message(
+                    chat_id,
+                    "⛔ Sizda admin huquqi yo‘q."
+                )
+
+                return {
+                    "ok": False,
+                    "route": "broadcast_denied"
+                }
+
+            broadcast_text = re.sub(
+                r"^/xabar\s*",
+                "",
+                message_text,
+                flags=re.IGNORECASE
+            ).strip()
+
+            if not broadcast_text:
+
+                telegram_send_message(
+                    chat_id,
+
+                    """📢 Xabar yuborish formati:
+
+/xabar Sizning xabaringiz"""
+                )
+
+                return {
+                    "ok": False,
+                    "route": "broadcast_empty"
+                }
+
+            background_tasks.add_task(
+                handle_broadcast,
+                chat_id,
+                message_text
+            )
+
+            return {
+                "ok": True,
+                "route": "broadcast_started"
+            }
+
         if message_text.startswith("/"):
 
             telegram_send_message(
@@ -4687,37 +5084,30 @@ def telegram_webhook(
             update
         )
 
-    except HTTPException as error:
+    except HTTPException:
 
-        print("========================================")
-        print(
-            "TELEGRAM WEBHOOK HTTP ERROR:",
-            repr(error)
-        )
-        print("========================================")
-
-        return {
-            "ok": False,
-            "error": str(error.detail)
-        }
+        raise
 
     except Exception as error:
 
         print("========================================")
+
         print(
             "TELEGRAM WEBHOOK ERROR:",
             repr(error)
         )
+
         print(
             "TELEGRAM WEBHOOK ERROR TYPE:",
             type(error).__name__
         )
+
         print("========================================")
 
-        return {
-            "ok": False,
-            "error": str(error)
-        }
+        raise HTTPException(
+            status_code=500,
+            detail=str(error)
+        )
 
 
 # =========================================================
