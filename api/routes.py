@@ -2039,13 +2039,6 @@ def handle_create_tasks(
             "🤲 Kuningiz barakali o‘tsin!"
         )
 
-    if added_count > 0:
-
-        response_parts.append(
-            "🏁 Kuningizni yakunlaganingizda "
-            "/yakunladim buyrug‘ini yuboring."
-        )
-
     if response_parts:
 
         telegram_send_message(
@@ -2073,194 +2066,6 @@ def handle_create_tasks(
         "route": "create_tasks",
         "added": added_count,
         "duplicates": duplicate_count
-    }
-
-
-# =========================================================
-# FINISH DAY
-# =========================================================
-
-def handle_finish_day(
-    chat_id: int
-):
-
-    user = get_user_by_chat_id(
-        chat_id
-    )
-
-    if not user:
-
-        telegram_send_message(
-            chat_id,
-            "⚠️ Avval /start buyrug‘ini bosing."
-        )
-
-        return {
-            "ok": False
-        }
-
-    if user["state"] == "completed":
-
-        telegram_send_message_with_keyboard(
-            chat_id,
-
-            "🏁 Bugungi kuningiz allaqachon yakunlangan.\n\n"
-            "📊 Hisobotingizni pastdagi tugma orqali ko‘rishingiz "
-            "mumkin.",
-
-            {
-                "inline_keyboard": [
-                    [
-                        {
-                            "text": "📊 Hisobotni ko‘rish",
-                            "web_app": {
-                                "url": MINIAPP_URL
-                            }
-                        }
-                    ]
-                ]
-            }
-        )
-
-        return {
-            "ok": True,
-            "already_completed": True
-        }
-
-    today = get_today()
-
-    # Bugun umuman vazifa bormi?
-    # MU HIM: oddiy cursor — RealDictCursor bo‘lsa KeyError(0) chiqadi
-    with get_connection() as conn:
-
-        with conn.cursor() as cur:
-
-            cur.execute(
-                """
-                SELECT COUNT(*)::int
-                FROM public.tasks
-                WHERE user_id = %s
-                  AND task_date = %s
-                """,
-                (
-                    user["id"],
-                    today
-                )
-            )
-
-            total_tasks_today = cur.fetchone()[0]
-
-    if total_tasks_today == 0:
-
-        telegram_send_message(
-            chat_id,
-
-            """📭 Bugun hali vazifa yozmagansiz.
-
-✍️ Avval bugungi 1-3 ta vazifangizni yozib yoki ovozli xabar orqali yuboring, keyin /yakunladim buyrug'ini bering."""
-        )
-
-        return {
-            "ok": True,
-            "no_tasks_today": True
-        }
-
-    with get_connection() as conn:
-
-        with conn.cursor(
-            cursor_factory=RealDictCursor
-        ) as cur:
-
-            cur.execute(
-                """
-                SELECT
-                    id,
-                    task_text,
-                    status
-                FROM public.tasks
-                WHERE user_id = %s
-                  AND task_date = %s
-                  AND status = 'pending'
-                ORDER BY created_at ASC
-                """,
-                (
-                    user["id"],
-                    today
-                )
-            )
-
-            pending_tasks = cur.fetchall()
-
-    if not pending_tasks:
-
-        with get_connection() as conn:
-
-            with conn.cursor() as cur:
-
-                cur.execute(
-                    """
-                    UPDATE public.users
-                    SET state = 'completed'
-                    WHERE id = %s
-                    """,
-                    (user["id"],)
-                )
-
-            conn.commit()
-
-        # Izchillik uchun: "hammasi belgilandi" xabarini ham
-        # faqat status VA fail_reason to'liq bo'lganda
-        # yuboramiz (xuddi handle_task_status/handle_fail_reason
-        # dagi kabi).
-        unfinished_count = check_unfinished_tasks_count(
-            user["id"],
-            today
-        )
-
-        if unfinished_count == 0:
-
-            maybe_notify_day_fully_completed(
-                chat_id,
-                user["id"],
-                today
-            )
-
-        return {
-            "ok": True,
-            "all_completed": True
-        }
-
-    with get_connection() as conn:
-
-        with conn.cursor() as cur:
-
-            cur.execute(
-                """
-                UPDATE public.users
-                SET state = 'completed'
-                WHERE id = %s
-                """,
-                (user["id"],)
-            )
-
-        conn.commit()
-
-    # Har bir task uchun alohida xabar yubormaymiz. Eski checklist
-    # o'chadi va barcha pending vazifalar bitta yangi xabarda chiqadi.
-    refresh_live_checklist(
-        chat_id,
-        user,
-        heading=(
-            f"🌙 Kunni yakunlaymiz — "
-            f"{len(pending_tasks)} ta vazifa qoldi"
-        ),
-        force_new=True
-    )
-
-    return {
-        "ok": True,
-        "route": "finish_day",
-        "pending": len(pending_tasks)
     }
 
 
@@ -5568,12 +5373,6 @@ def telegram_webhook(
                 "route": "callback_ignored"
             }
 
-        if message_text == "/yakunladim":
-
-            return handle_finish_day(
-                chat_id
-            )
-
         # Eslatma: /hisobot, /haftalik, /oylik, /yillik matnli
         # buyruqlar endi mavjud emas — hisobotlar faqat Mini App
         # (Dashboard) orqali ko'riladi. Foydalanuvchi "Barcha
@@ -5859,20 +5658,6 @@ def task_status_api(
         data.chat_id,
         data.task_id,
         data.status
-    )
-
-
-# =========================================================
-# FINISH API
-# =========================================================
-
-@router.post("/finish")
-def finish_api(
-    chat_id: int
-):
-
-    return handle_finish_day(
-        chat_id
     )
 
 
