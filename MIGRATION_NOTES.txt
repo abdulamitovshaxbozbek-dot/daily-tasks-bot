@@ -1,0 +1,20 @@
+Qadam / Railway migration
+
+Schedule: Asia/Tashkent. day-cycle every minute; reminders hourly 02:00–11:00 inclusive; checklist at 14:00 and 23:00.
+
+Feature switches default off:
+SCHEDULER_ENABLED=true activates the PostgreSQL-locked scheduler.
+REQUIRE_BOT_START=true filters scheduled messages and broadcasts to users who have interacted with the current bot.
+TELEGRAM_WEBHOOK_SECRET must match Telegram setWebhook.secret_token when REQUIRE_BOT_START is enabled.
+LEGACY_TELEGRAM_TOKEN and LEGACY_WEBHOOK_SECRET configure /api/telegram/legacy.
+MIGRATION_NOTICE_ENABLED=true enables the old bot's redirect message, only after the new bot is tested.
+
+New bot registration preserves task history and archives the previous user row before clearing the old live checklist message pointer. Repeated updates do not clear new bot message pointers.
+
+Deployment adds users.active_bot_id and the qadam_bot_migrations table. Scheduler activation creates qadam_schedule_runs. No existing task records are deleted.
+
+Scheduler uses one PostgreSQL advisory-lock leader across all workers, with persistent per-minute claims. Failed/partial/interrupted runs need operator review and are not automatically replayed. A full outage across an entire scheduled minute can miss that run. Existing day-cycle timing semantics are retained. External reminder endpoints return 409 while the integrated scheduler is enabled, preventing old n8n from triggering the same jobs.
+
+Rollout: deploy with all switches off, verify health and DB, validate new bot identity, preserve old token, configure new token/secret and REQUIRE_BOT_START, deploy, set new webhook and menu button, test owner Start and Mini App, then enable scheduler and old-bot redirect. Do not broadcast before verification.
+
+Validation: full-day schedule and UTC boundaries; temporary PostgreSQL tables verify recipient filtering, one-time message pointer reset and persistent job claims. Tests never send Telegram messages.
