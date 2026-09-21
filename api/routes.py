@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from psycopg2.extras import RealDictCursor
 
 from database import get_connection
+from bot_identity import register_chat, require_joined, bot_id, verify_webhook
 
 
 # =========================================================
@@ -1514,7 +1515,7 @@ def telegram_send_morning_keyboard(
 
         f"""🌅 Assalomu alaykum, {first_name}!
 
-📋 Kunlik vazifalar botiga xush kelibsiz.
+📋 Qadam botiga xush kelibsiz.
 
 Tizim ishga tushishi uchun savolga javob bering:
 
@@ -1633,6 +1634,7 @@ Siz allaqachon ro‘yxatdan o‘tgansiz. ✅
 
         conn.commit()
 
+    register_chat(chat_id)
     telegram_send_morning_keyboard(
         chat_id,
         first_name
@@ -1759,7 +1761,7 @@ Masalan:
 
 Har bir kichik reja — tartibli kun sari bir qadam 💪
 
-📢 Yangiliklar: @kunlikvazifalar_news"""
+📢 Yangiliklar: @birqadam_news"""
     )
 
     return {
@@ -3870,7 +3872,8 @@ def handle_broadcast(
                     FROM public.users
                     WHERE telegram_chat_id IS NOT NULL
                       AND state != 'blocked'
-                    """
+                      AND (%s = false OR active_bot_id = %s)
+                    """, (require_joined(), bot_id())
                 )
 
                 users = cur.fetchall()
@@ -4041,13 +4044,15 @@ def handle_day_cycle():
                             live_checklist_message_id
                         FROM public.users
                         WHERE state = 'active'
+                          AND (%s = false OR active_bot_id = %s)
                         FOR UPDATE
                     ) AS old
                     WHERE u.id = old.id
                     RETURNING
                         old.telegram_chat_id,
                         old.live_checklist_message_id
-                    """
+                    """,
+                    (require_joined(), bot_id())
                 )
 
                 closed_users = cur.fetchall()
@@ -4110,12 +4115,13 @@ def handle_day_cycle():
                 WHERE state = 'completed'
                   AND morning_time IS NOT NULL
                   AND LEFT(morning_time::text, 5) = %s
+                  AND (%s = false OR active_bot_id = %s)
                 RETURNING
                     id,
                     telegram_chat_id,
                     first_name
                 """,
-                (current_time,)
+                (current_time, require_joined(), bot_id())
             )
 
             activated_users = cur.fetchall()
@@ -4230,8 +4236,9 @@ def handle_live_checklist_reminders(period: str):
                  AND t.status = 'pending'
                 WHERE u.telegram_chat_id IS NOT NULL
                   AND u.state != 'blocked'
+                  AND (%s = false OR u.active_bot_id = %s)
                 """,
-                (today,)
+                (today, require_joined(), bot_id())
             )
 
             users = cur.fetchall()
@@ -4313,6 +4320,7 @@ def handle_reminders():
                 WHERE
                     u.telegram_chat_id IS NOT NULL
                     AND u.state != 'blocked'
+                    AND (%s = false OR u.active_bot_id = %s)
 
                 GROUP BY
                     u.id
@@ -4337,7 +4345,7 @@ def handle_reminders():
                         )
                     )
                 """,
-                (today,)
+                (require_joined(), bot_id(), today)
             )
 
             candidates = cur.fetchall()
@@ -5405,9 +5413,11 @@ def handle_voice_confirm(
 @router.post("/telegram")
 def telegram_webhook(
     update: dict,
-    background_tasks: BackgroundTasks
+    background_tasks: BackgroundTasks,
+    x_telegram_bot_api_secret_token: Optional[str] = Header(default=None)
 ):
 
+    verify_webhook(x_telegram_bot_api_secret_token)
     print("========================================")
     print("TELEGRAM WEBHOOK RECEIVED")
     print("========================================")
@@ -5448,6 +5458,10 @@ def telegram_webhook(
                 "ignored": True
             }
 
+        if chat.get("type") != "private":
+            return {"ok": True, "ignored": True}
+        register_chat(chat_id)
+
         message_text = (
             message.get("text")
             or ""
@@ -5482,7 +5496,7 @@ def telegram_webhook(
             "WEBHOOK: ACTIVITY UPDATE DONE"
         )
 
-        if message_text == "/start":
+        if message_text.split(maxsplit=1)[0:1] == ["/start"]:
 
             return handle_telegram_start(
                 chat_id,
@@ -5757,6 +5771,7 @@ def run_reminders(
     _: None = Depends(verify_api_key)
 ):
 
+    reject_external_scheduler()
     return handle_reminders()
 
 
@@ -5766,6 +5781,7 @@ def run_day_cycle(
 ):
     """Har daqiqalik cron: 00:00 yopish va morning_time aktivatsiyasi."""
 
+    reject_external_scheduler()
     return handle_day_cycle()
 
 
@@ -5776,9 +5792,15 @@ def run_live_checklist_reminders(
 ):
     """14:00: midday, 23:00: evening parametrida chaqiriladi."""
 
+    reject_external_scheduler()
     return handle_live_checklist_reminders(
         period
     )
+
+
+def reject_external_scheduler():
+    if os.getenv("SCHEDULER_ENABLED", "false").lower() == "true":
+        raise HTTPException(status_code=409, detail="Railway scheduler manages these jobs")
 
 
 # =========================================================

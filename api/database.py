@@ -47,7 +47,7 @@ def get_connection():
     try:
         yield conn
 
-    except psycopg2.OperationalError:
+    except (psycopg2.OperationalError, psycopg2.InterfaceError):
         # Connection so'rov davomida uzilib qolgan bo'lishi mumkin.
         # Uni pool'ga qaytarmasdan yopamiz, keyingi so'rov yangi
         # connection oladi.
@@ -58,5 +58,15 @@ def get_connection():
 
         raise
 
+    except Exception:
+        try:
+            conn.rollback()
+        finally:
+            pool.putconn(conn, close=bool(conn.closed))
+        raise
+
     else:
+        # SELECT also starts a transaction. Never return an idle transaction
+        # (or a row lock from an early return) to another request.
+        conn.rollback()
         pool.putconn(conn)

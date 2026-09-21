@@ -1,16 +1,29 @@
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 import os
+from contextlib import asynccontextmanager
+from scheduler import start_scheduler
+from bot_identity import initialize_identity
 
 from database import get_connection
 
 from routes import router
+from migration import router as migration_router
+
+@asynccontextmanager
+async def lifespan(app):
+    initialize_identity()
+    stop, thread = start_scheduler()
+    yield
+    stop.set()
+
 
 app = FastAPI(
 
-    title="Vazifalarim API",
+    title="Qadam API",
 
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 
 )
 
@@ -60,3 +73,4 @@ def miniapp_page():
     )
 
 app.include_router(router)
+app.include_router(migration_router)
