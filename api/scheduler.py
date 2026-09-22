@@ -17,7 +17,7 @@ def due_jobs(now):
     local = now.astimezone(ZONE)
     jobs = ["day_cycle"]
     if local.minute == 0:
-        if 2 <= local.hour <= 11:
+        if local.hour == 11:
             jobs.append("reminders")
         if local.hour == 14:
             jobs.append("midday")
