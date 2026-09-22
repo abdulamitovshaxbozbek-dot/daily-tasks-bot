@@ -5729,12 +5729,13 @@ def telegram_webhook(
             )
 
         print(
-            "WEBHOOK: LEGACY ROUTE"
+            "WEBHOOK: UNSUPPORTED UPDATE IGNORED"
         )
 
-        return proxy_to_legacy(
-            update
-        )
+        return {
+            "ok": True,
+            "ignored": True
+        }
 
     except HTTPException:
 
@@ -5743,7 +5744,6 @@ def telegram_webhook(
     except Exception as error:
 
         print("========================================")
-
         print(
             "TELEGRAM WEBHOOK ERROR:",
             repr(error)
