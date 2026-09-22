@@ -4141,14 +4141,16 @@ def handle_day_cycle():
                 chat_id,
                 f"""🌅 Assalomu alaykum, {first_name}!
 
-Yangi kun boshlandi. Bugungi vazifalaringizni yozib yoki 🎙️ ovozli xabar orqali yuboring.
+Yangi kun boshlandi.
+1 kun — 24 soat, 1440 daqiqa.
 
-Har bir vazifani alohida qatorda yozing.
+Har kuni maqsad sari bir qadam.
+Bugun hech bo‘lmaganda 1 ta vazifa yuboring.
 
 Masalan:
-• Farmakologiyadan 20 bet o‘qish
-• Ingliz tilidan 20 ta so‘z yodlash
-• 30 daqiqa sport qilish"""
+• 20 bet kitob o‘qish
+• 30 daqiqa sport
+• 15 ta so‘z yodlash"""
             )
 
             results.append(
