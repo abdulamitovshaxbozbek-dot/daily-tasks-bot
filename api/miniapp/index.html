@@ -1023,7 +1023,7 @@
       ringMarkup(s.percent) +
       '<div class="hero-info">' +
         '<p class="hero-count"><strong>' + s.completed + '</strong> / ' + s.total + ' vazifa bajarildi</p>' +
-        '<p class="hero-period">' + data.year + '-yil</p>' +
+        '<p class="hero-period">' + escapeHtml(data.year + '-yil') + '</p>' +
       '</div>' +
     '</div>';
 
