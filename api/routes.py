@@ -5832,58 +5832,45 @@ def telegram_webhook(
 
         if message_text == "/admin":
 
-           return handle_admin(
-    chat_id
-)
+            return handle_admin(
+                chat_id
+            )
 
-if message_text == "/eski_xabar":
+        if message_text == "/eski_xabar":
 
-    if not is_admin(chat_id):
+            if not is_admin(chat_id):
 
-        telegram_send_message(
-            chat_id,
-            "⛔ Sizda admin huquqi yo‘q."
-        )
+                telegram_send_message(
+                    chat_id,
+                    "⛔ Sizda admin huquqi yo‘q."
+                )
 
-        return {
-            "ok": False,
-            "route": "old_users_broadcast_denied"
-        }
+                return {
+                    "ok": False,
+                    "route": "old_users_broadcast_denied"
+                }
 
-    background_tasks.add_task(
-        handle_old_users_migration,
-        chat_id
-    )
+            background_tasks.add_task(
+                handle_old_users_migration,
+                chat_id
+            )
 
-    telegram_send_message(
-        chat_id,
-        "🚀 Eski userlarga migratsiya xabari yuborish boshlandi."
-    )
+            telegram_send_message(
+                chat_id,
+                "🚀 Eski userlarga migratsiya xabari yuborish boshlandi."
+            )
 
-    return {
-        "ok": True,
-        "route": "old_users_broadcast_started"
-    }
+            return {
+                "ok": True,
+                "route": "old_users_broadcast_started"
+            }
 
-
-if message_text.startswith(
-    "/xabar"
-):
+        if message_text.startswith(
+            "/xabar"
+        ):
             # Admin huquqi va matn borligini DARHOL (webhook
             # ichida) tekshiramiz — faqat haqiqiy broadcast
-            # ishini fon vazifasiga yuboramiz. Bu bekorga fon
-            # vazifasi yaratilishining oldini oladi (masalan,
-            # admin bo'lmagan kimdir yoki bo'sh matn bilan
-            # /xabar yuborilsa).
-            #
-            # Broadcast o'zi ko'p userga ketma-ket xabar
-            # yuboradi va uzoq davom etishi mumkin (100+ user).
-            # Agar bu webhook javobini kechiktirsa, Telegram
-            # update'ni qayta yuborishi mumkin va butun
-            # broadcast yana boshidan ishga tushadi. Shuning
-            # uchun buni fon vazifasiga o'tkazamiz — webhook
-            # darhol javob qaytaradi, broadcast esa orqada
-            # davom etadi.
+            # ishini fon vazifasiga yuboramiz.
 
             if not is_admin(chat_id):
 
@@ -5908,9 +5895,7 @@ if message_text.startswith(
 
                 telegram_send_message(
                     chat_id,
-
                     """📢 Xabar yuborish formati:
-
 /xabar Sizning xabaringiz"""
                 )
 
@@ -6007,7 +5992,6 @@ if message_text.startswith(
             status_code=500,
             detail=str(error)
         )
-
 
 # =========================================================
 # REMINDER API
