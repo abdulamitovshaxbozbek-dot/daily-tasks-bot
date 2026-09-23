@@ -53,6 +53,11 @@ MINIAPP_URL = os.getenv(
     "https://daily-tasks-bot-production.up.railway.app/miniapp"
 )
 
+ADMIN_MINIAPP_URL = os.getenv(
+    "ADMIN_MINIAPP_URL",
+    "https://daily-tasks-bot-production.up.railway.app/admin-miniapp"
+)
+
 ADMIN_CHAT_ID = "8908985083"
 
 TIMEZONE = "Asia/Tashkent"
@@ -663,9 +668,38 @@ def update_user_activity(chat_id: int):
                         AT TIME ZONE 'Asia/Tashkent'
                     )::date
                 WHERE telegram_chat_id = %s
+                RETURNING id, last_active_date
                 """,
                 (chat_id,)
             )
+
+            row = cur.fetchone()
+
+            # Retention hisob-kitobi uchun kunlik faollikni yozib
+            # boramiz. Faqat shu jadval yaratilgan kundan keyingi
+            # kunlar to'g'ri hisoblanadi. ON CONFLICT DO NOTHING:
+            # bir kunda bir necha marta chaqirilsa ham bitta qator.
+            if row:
+
+                user_id, today = row
+
+                cur.execute(
+                    """
+                    INSERT INTO public.user_activity_daily (
+                        user_id,
+                        activity_date
+                    )
+                    VALUES (
+                        %s,
+                        %s
+                    )
+                    ON CONFLICT (user_id, activity_date) DO NOTHING
+                    """,
+                    (
+                        user_id,
+                        today
+                    )
+                )
 
         conn.commit()
 
@@ -3800,9 +3834,21 @@ def handle_admin(
 
 /xabar <matn>"""
 
-    telegram_send_message(
+    telegram_send_message_with_keyboard(
         chat_id,
-        text
+        text,
+        {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "📊 Admin Dashboard",
+                        "web_app": {
+                            "url": ADMIN_MINIAPP_URL
+                        }
+                    }
+                ]
+            ]
+        }
     )
 
     return {
