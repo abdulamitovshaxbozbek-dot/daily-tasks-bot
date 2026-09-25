@@ -1345,7 +1345,11 @@ def get_today_task_summary(user_id: str, task_date: date) -> dict:
     }
 
 
-def build_live_checklist(summary: dict, heading: str) -> tuple[str, dict]:
+def build_live_checklist(
+    summary: dict,
+    heading: str,
+    instructions: Optional[str] = None
+) -> tuple[str, dict]:
 
     pending_tasks = summary["pending"]
 
@@ -1359,8 +1363,10 @@ def build_live_checklist(summary: dict, heading: str) -> tuple[str, dict]:
             f"⏳ {len(pending_tasks)}"
         ),
         "",
-        "Vazifani bajarganingizdan keyingina belgilang.",
-        "Hozir hech narsani bosishingiz shart emas. 🔔",
+        instructions if instructions is not None else (
+            "Vazifani bajarganingizdan keyingina belgilang.\n"
+            "Hozir hech narsani bosishingiz shart emas. 🔔"
+        ),
         ""
     ]
 
@@ -1401,7 +1407,8 @@ def refresh_live_checklist(
     chat_id: int,
     user: dict,
     heading: str = "📋 Bugungi vazifalar",
-    force_new: bool = False
+    force_new: bool = False,
+    instructions: Optional[str] = None
 ) -> dict:
     """
     DB holatidan checklistni qayta quradi.
@@ -1443,7 +1450,8 @@ def refresh_live_checklist(
 
     text, keyboard = build_live_checklist(
         summary,
-        heading
+        heading,
+        instructions=instructions
     )
 
     if old_message_id and not force_new:
@@ -4181,23 +4189,20 @@ def handle_day_cycle():
 
         chat_id = user["telegram_chat_id"]
         first_name = user["first_name"] or "Do‘st"
-
         try:
 
             telegram_send_message(
                 chat_id,
                 f"""🌅 Assalomu alaykum, {first_name}!
 
-Yangi kun boshlandi.
-1 kun — 24 soat, 1440 daqiqa.
+Bugun maqsadingiz sari qanday qadam tashlaysiz?
 
-Har kuni maqsad sari bir qadam.
-Bugun hech bo‘lmaganda 1 ta vazifa yuboring.
+Bajarishni istagan kamida 1 ta vazifangizni hozir yozib yuboring. 👣
 
 Masalan:
-• 20 bet kitob o‘qish
-• 30 daqiqa sport
-• 15 ta so‘z yodlash"""
+• Kitobdan 20 bet o‘qish
+• 30 daqiqa piyoda yurish
+• Ingliz tilidan 5 ta so‘z yodlash"""
             )
 
             results.append(
@@ -4383,8 +4388,20 @@ def handle_live_checklist_reminders(period: str):
     """
 
     headings = {
-        "midday": "☀️ Kunning yarmi — davom etamiz",
-        "evening": "🌙 Kunni yakunlaymiz"
+        "midday": "☀️ Kunning yarmi — davom etamiz!",
+        "evening": "🌙 Kunni yakunlaymiz!"
+    }
+    reminder_instructions = {
+        "midday": (
+            "Quyida hali belgilanmagan vazifalaringiz bor. "
+            "Bajarganlaringizni belgilang, qolganlaridan bittasini "
+            "davom ettiring. 👣"
+        ),
+        "evening": (
+            "Bugungi vazifalaringiz qanday ketdi?\n"
+            "Bajarganlaringizni ✅, bajara olmaganlaringizni ❌ "
+            "bilan belgilang."
+        )
     }
 
     if period not in headings:
@@ -4432,7 +4449,8 @@ def handle_live_checklist_reminders(period: str):
                 chat_id,
                 user,
                 heading=headings[period],
-                force_new=True
+                force_new=True,
+                instructions=reminder_instructions[period]
             )
 
             results.append(
@@ -4596,16 +4614,11 @@ Quyidagi vaqtlardan birini tanlang:"""
 
             text = f"""👋 Salom, {first_name}!
 
-📋 Oxirgi paytlarda yangi vazifalaringiz qo‘shilmagan.
+Bugun kichik bir qadamdan boshlaymizmi? 👣
 
-✍️ Bugungi 1–3 ta vazifangizni yozib yoki 🎙️ ovozli xabar orqali yuboring (aniq va sekin gapiring).
+Bajarishni istagan 1 ta vazifangizni yozib yoki 🎙️ ovozli xabar orqali yuboring.
 
-Masalan:
-- Ingliz tilidan 20 ta so‘z yodlash
-- 10 bet kitob o‘qish
-- 30 daqiqa sport qilish
-
-✨ Har bir reja — tartibli hayot sari bir qadam!"""
+Masalan: Kitobdan 10 bet o‘qish."""
 
             reply_markup = None
 
