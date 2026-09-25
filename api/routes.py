@@ -4040,6 +4040,8 @@ def handle_day_cycle():
     - 00:00 da active -> completed va kechagi checklist yopiladi.
     - Har userning morning_time vaqti kelganda completed -> active
       bo'ladi va yangi kunni rejalashtirish xabari yuboriladi.
+    - morning_time'dan 3 soat o'tib, hali umuman task yozmagan
+      active userlarga eslatma yuboriladi (bir martalik, kuniga bir marta).
 
     Endpoint har daqiqada chaqirilishi mumkin: state shartlari sababli
     bir xil o'tish va xabar takroran bajarilmaydi.
@@ -4237,12 +4239,140 @@ Masalan:
                 }
             )
 
+    # -----------------------------------------------------
+    # Morning_time'dan 3 soat o'tgan, lekin bugun hali umuman
+    # task yozmagan active userlarga eslatma yuboramiz.
+    # Bir martalik: no_task_reminder_sent_date bugungi sanaga
+    # tenglashtiriladi, shuning uchun bir kunda faqat bir marta
+    # yuboriladi, day_cycle har daqiqa chaqirilsa ham.
+    # -----------------------------------------------------
+
+    with get_connection() as conn:
+
+        with conn.cursor(
+            cursor_factory=RealDictCursor
+        ) as cur:
+
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    telegram_chat_id,
+                    first_name
+                FROM public.users
+                WHERE state = 'active'
+                  AND morning_time IS NOT NULL
+                  AND LEFT(
+                      (morning_time + interval '3 hours')::text,
+                      5
+                  ) = %s
+                  AND no_task_reminder_sent_date IS DISTINCT FROM (
+                      CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Tashkent'
+                  )::date
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM public.tasks t
+                      WHERE t.user_id = public.users.id
+                        AND t.task_date = (
+                            CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Tashkent'
+                        )::date
+                  )
+                  AND (%s = false OR active_bot_id = %s)
+                """,
+                (current_time, require_joined(), bot_id())
+            )
+
+            no_task_users = cur.fetchall()
+
+    no_task_results = []
+
+    for user in no_task_users:
+
+        chat_id = user["telegram_chat_id"]
+        first_name = user["first_name"] or "Do‘st"
+
+        try:
+
+            telegram_send_message(
+                chat_id,
+                f"""⏰ {first_name}, hali bugungi vazifangizni kiritmadingiz.
+
+Kunni rejasiz o‘tkazib yubormang. Hali ham kuningizni rejalashtirmadingiz!
+
+Bugun hech bo‘lmasa 1 ta vazifa yozing va bajaring.
+
+Har kuni maqsad sari bir qadam. 👣
+
+Masalan: Ingliz tilidan 5 ta so‘z yodlash"""
+            )
+
+            with get_connection() as update_conn:
+
+                with update_conn.cursor() as update_cur:
+
+                    update_cur.execute(
+                        """
+                        UPDATE public.users
+                        SET no_task_reminder_sent_date = (
+                            CURRENT_TIMESTAMP
+                            AT TIME ZONE 'Asia/Tashkent'
+                        )::date
+                        WHERE id = %s
+                        """,
+                        (user["id"],)
+                    )
+
+                update_conn.commit()
+
+            no_task_results.append(
+                {
+                    "chat_id": chat_id,
+                    "sent": True
+                }
+            )
+
+        except Exception as error:
+
+            error_text = str(error)
+
+            if (
+                "403" in error_text
+                or "bot was blocked" in error_text.lower()
+            ):
+
+                with get_connection() as block_conn:
+
+                    with block_conn.cursor() as block_cur:
+
+                        block_cur.execute(
+                            """
+                            UPDATE public.users
+                            SET state = 'blocked'
+                            WHERE id = %s
+                            """,
+                            (user["id"],)
+                        )
+
+                    block_conn.commit()
+
+            no_task_results.append(
+                {
+                    "chat_id": chat_id,
+                    "sent": False,
+                    "error": error_text
+                }
+            )
+
     return {
         "ok": True,
         "action": "morning_activation",
         "time": current_time,
         "activated": len(activated_users),
-        "results": results
+        "results": results,
+        "no_task_reminders_sent": len(
+            [r for r in no_task_results if r["sent"]]
+        ),
+        "no_task_results": no_task_results
     }
 
 def handle_live_checklist_reminders(period: str):
