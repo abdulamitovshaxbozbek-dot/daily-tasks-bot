@@ -1,5 +1,4 @@
 """Tashkent schedules; persistent claims prevent duplicate worker execution.
-
 Claims are committed before side effects. Interrupted/failed jobs need operator
 review rather than automatic replay, since Telegram sends cannot be rolled back.
 """
@@ -55,7 +54,9 @@ def run_tick(conn, now, handlers):
         try:
             result = handlers[job]()
             if isinstance(result, dict) and any(
-                item.get('sent') is False for item in result.get('results', [])
+                item.get('sent') is False
+                for key in ('results', 'no_task_results')
+                for item in result.get(key, [])
             ):
                 status = 'partial_failure'
         except Exception as error:
@@ -73,6 +74,7 @@ def run_tick(conn, now, handlers):
 def worker(stop):
     import psycopg2
     from routes import handle_day_cycle, handle_reminders, handle_live_checklist_reminders
+
     handlers = {
         'day_cycle': handle_day_cycle,
         'reminders': handle_reminders,
