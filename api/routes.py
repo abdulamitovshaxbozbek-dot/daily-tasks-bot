@@ -4161,12 +4161,7 @@ def handle_day_cycle():
             cur.execute(
                 """
                 UPDATE public.users
-                SET
-                    state = 'active',
-                    last_active_date = (
-                        CURRENT_TIMESTAMP
-                        AT TIME ZONE 'Asia/Tashkent'
-                    )::date
+                SET state = 'active'
                 WHERE state = 'completed'
                   AND morning_time IS NOT NULL
                   AND LEFT(morning_time::text, 5) = %s
@@ -4247,9 +4242,9 @@ Masalan:
     # -----------------------------------------------------
     # Morning_time'dan 3 soat o'tgan, lekin bugun hali umuman
     # task yozmagan active userlarga eslatma yuboramiz.
-    # Bir martalik: no_task_reminder_sent_date bugungi sanaga
-    # tenglashtiriladi, shuning uchun bir kunda faqat bir marta
-    # yuboriladi, day_cycle har daqiqa chaqirilsa ham.
+    # Yuborishdan oldin atomar claim qilinadi va commit saqlanadi.
+    # Vaqti o'tgan eslatmalar keyingi chaqiruvda ham olinadi.
+    # Yuborish xatosida claim bekor qilinmaydi: avtomatik qayta yuborilmaydi.
     # -----------------------------------------------------
 
     with get_connection() as conn:
@@ -4260,17 +4255,15 @@ Masalan:
 
             cur.execute(
                 """
-                SELECT
-                    id,
-                    telegram_chat_id,
-                    first_name
-                FROM public.users
+                UPDATE public.users
+                SET no_task_reminder_sent_date = (
+                    CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Tashkent'
+                )::date
                 WHERE state = 'active'
                   AND morning_time IS NOT NULL
-                  AND LEFT(
-                      (morning_time + interval '3 hours')::text,
-                      5
-                  ) = %s
+                  AND (
+                      CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Tashkent'
+                  )::time >= morning_time + interval '3 hours'
                   AND no_task_reminder_sent_date IS DISTINCT FROM (
                       CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Tashkent'
                   )::date
@@ -4283,11 +4276,14 @@ Masalan:
                         )::date
                   )
                   AND (%s = false OR active_bot_id = %s)
+                RETURNING id, telegram_chat_id, first_name
                 """,
-                (current_time, require_joined(), bot_id())
+                (require_joined(), bot_id())
             )
 
             no_task_users = cur.fetchall()
+
+        conn.commit()
 
     no_task_results = []
 
@@ -4300,34 +4296,15 @@ Masalan:
 
             telegram_send_message(
                 chat_id,
-                f"""⏰ {first_name}, hali bugungi vazifangizni kiritmadingiz.
+                f"""⏰ {first_name}, bugungi rejangiz hali bo‘sh.
 
-Kunni rejasiz o‘tkazib yubormang. Hali ham kuningizni rejalashtirmadingiz!
+Atigi 1 ta kichik vazifa yozib boshlang. 👣
 
-Bugun hech bo‘lmasa 1 ta vazifa yozing va bajaring.
+Masalan:
+• Ingliz tilidan 5 ta so‘z yodlash
 
-Har kuni maqsad sari bir qadam. 👣
-
-Masalan: Ingliz tilidan 5 ta so‘z yodlash"""
+Har kuni maqsad sari bir qadam."""
             )
-
-            with get_connection() as update_conn:
-
-                with update_conn.cursor() as update_cur:
-
-                    update_cur.execute(
-                        """
-                        UPDATE public.users
-                        SET no_task_reminder_sent_date = (
-                            CURRENT_TIMESTAMP
-                            AT TIME ZONE 'Asia/Tashkent'
-                        )::date
-                        WHERE id = %s
-                        """,
-                        (user["id"],)
-                    )
-
-                update_conn.commit()
 
             no_task_results.append(
                 {
