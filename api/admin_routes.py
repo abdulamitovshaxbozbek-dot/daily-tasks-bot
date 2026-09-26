@@ -1,686 +1,300 @@
-"""Admin-only analytics endpoints for the Qadam Mini App dashboard.
-
-Every endpoint here requires a verified Telegram initData whose user id
-matches ADMIN_CHAT_ID (imported from routes.py, single source of truth).
-No endpoint here sends Telegram messages or mutates user-facing state;
-they are read-only aggregation queries for the admin dashboard.
-"""
+"""Admin paneli: faqat joriy botga tegishli, bazada mavjud ma'lumotlar statistikasi."""
 from datetime import date, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from psycopg2.extras import RealDictCursor
-
 from database import get_connection
 from bot_identity import bot_id
-from routes import (
-    ADMIN_CHAT_ID,
-    get_miniapp_chat_id,
-    get_today,
-)
+from routes import ADMIN_CHAT_ID, get_miniapp_chat_id, fail_reason_display, FAIL_REASONS
 
 router = APIRouter(prefix="/api/admin")
 
 
-# =========================================================
-# AUTH
-# =========================================================
-#
-# Reuses the same initData verification as the user Mini App
-# (get_miniapp_chat_id), then additionally requires the chat_id
-# to match ADMIN_CHAT_ID. Frontend has no way to bypass this:
-# every endpoint below depends on verify_admin, not on any
-# client-supplied flag.
-
-def verify_admin(
-    chat_id: int = Depends(get_miniapp_chat_id)
-) -> int:
-
+def verify_admin(chat_id: int = Depends(get_miniapp_chat_id)) -> int:
+    """Telegram imzosidan olingan shaxsni tekshiradi; mijoz yuborgan rolga ishonmaydi."""
     if str(chat_id) != str(ADMIN_CHAT_ID):
-
-        raise HTTPException(
-            status_code=403,
-            detail="Admin huquqi yo'q"
-        )
-
+        raise HTTPException(status_code=403, detail="Admin huquqi yo‘q")
     return chat_id
 
 
-# Every query filters to the current bot identity so users migrated
-# from a legacy bot instance aren't double-counted or misattributed.
-def _bot_filter() -> tuple:
-    return (bot_id(),)
+def _context(cur):
+    """Hisoblarni bir xil baza snapshoti va Toshkent sanasida o'qish uchun tayyorlaydi."""
+    cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+    cur.execute("SELECT CURRENT_TIMESTAMP AS generated_at, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Tashkent')::date AS today")
+    clock = cur.fetchone()
+    current_bot = bot_id()
+    if current_bot is None or str(current_bot).strip() == "":
+        raise HTTPException(status_code=503, detail="Bot identifikatori hali tayyor emas.")
+    # users.created_at turi PostgreSQL'da timestamptz ekanligi tekshirilgan.
+    created_date = "(u.created_at AT TIME ZONE 'Asia/Tashkent')::date"
+    today = clock["today"]
+    params = {"bot": current_bot, "today": today, "yesterday": today - timedelta(days=1),
+              "tomorrow": today + timedelta(days=1), "week_start": today - timedelta(days=6)}
+    # Faqat joriy bot userlari. Faollik dublikatlari UNION orqali yo'qotiladi.
+    cte = f"""WITH scoped_users AS (
+        SELECT u.*, {created_date} AS joined_date
+        FROM public.users u WHERE u.active_bot_id = %(bot)s
+    ), recorded_activity AS (
+        SELECT a.user_id, a.activity_date
+        FROM public.user_activity_daily a JOIN scoped_users u ON u.id = a.user_id
+        WHERE a.activity_date <= %(today)s
+        UNION
+        SELECT id, last_active_date FROM scoped_users
+        WHERE last_active_date <= %(today)s
+    ), scoped_tasks AS (
+        SELECT t.* FROM public.tasks t JOIN scoped_users u ON u.id = t.user_id
+    ) """
+    meta = {"date": today.isoformat(), "timezone": "Asia/Tashkent",
+            "generated_at": clock["generated_at"].isoformat(),
+            "signup_dates_available": True,
+            "signup_date_note": None,
+            "scope_note": "Joriy botga biriktirilgan foydalanuvchilar. Faollik — botda qayd etilgan harakat; Mini Appni shunchaki ochish hisoblanmaydi. Qo‘shilgan sana — bazadagi ro‘yxatdan o‘tish sanasi, yangi botga ko‘chgan sana emas.",
+            "task_note": "Vazifalar belgilangan sanasi bo‘yicha hisoblanadi. Faqat hozir bazada mavjud yozuvlar: o‘chirilgan vazifalar va tahrirlash tarixi hisoblanmaydi."}
+    return params, cte, meta
 
 
-# =========================================================
-# ME (frontend uses this to confirm admin access before
-# rendering anything sensitive)
-# =========================================================
+def _percent(part, whole):
+    """Maxraj nol bo'lsa mavjud bo'lmagan foiz o'rniga None qaytaradi."""
+    return round(100 * part / whole, 1) if whole else None
+
 
 @router.get("/me")
-def admin_me(
-    chat_id: int = Depends(verify_admin)
-):
+def admin_me(chat_id: int = Depends(verify_admin)):
+    """Admin kirish huquqini tasdiqlaydi."""
+    return {"ok": True, "chat_id": chat_id}
 
-    return {
-        "ok": True,
-        "chat_id": chat_id
-    }
-
-
-# =========================================================
-# OVERVIEW
-# =========================================================
 
 @router.get("/overview")
-def admin_overview(
-    _: int = Depends(verify_admin)
-):
-
-    today = get_today()
-    yesterday = today - timedelta(days=1)
-    week_ago = today - timedelta(days=7)
-
+def admin_overview(_: int = Depends(verify_admin)):
+    """Bugungi va ertangi rejalarni ajratadi; kun yopilishiga bog'liq hisob ishlatmaydi."""
     with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            p, cte, meta = _context(cur)
+            cur.execute(cte + """
+                SELECT COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE joined_date = %(today)s) AS today_new,
+                    COUNT(*) FILTER (WHERE joined_date = %(yesterday)s) AS yesterday_new,
+                    COUNT(*) FILTER (WHERE joined_date BETWEEN %(week_start)s AND %(today)s) AS week_new,
+                    COUNT(*) FILTER (WHERE state = 'blocked') AS blocked,
+                    COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM recorded_activity a
+                        WHERE a.user_id = u.id AND a.activity_date = %(today)s)) AS today_active,
+                    COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM recorded_activity a
+                        WHERE a.user_id = u.id AND a.activity_date BETWEEN %(week_start)s AND %(today)s)) AS week_active
+                FROM scoped_users u
+            """, p)
+            users = dict(cur.fetchone())
+            if not meta["signup_dates_available"]:
+                for key in ("today_new", "yesterday_new", "week_new"):
+                    users[key] = None
+            cur.execute(cte + """
+                SELECT COUNT(*) FILTER (WHERE task_date = %(today)s) AS today_total,
+                    COUNT(DISTINCT user_id) FILTER (WHERE task_date = %(today)s) AS today_users_with_tasks,
+                    COUNT(*) FILTER (WHERE task_date = %(tomorrow)s) AS tomorrow_total,
+                    COUNT(DISTINCT user_id) FILTER (WHERE task_date = %(tomorrow)s) AS tomorrow_users_with_tasks
+                FROM scoped_tasks
+            """, p)
+            tasks = dict(cur.fetchone())
+            cur.execute(cte + """
+                SELECT COUNT(*) AS all_marked_users,
+                    COUNT(*) FILTER (WHERE all_completed) AS all_completed_users
+                FROM (
+                    SELECT user_id, BOOL_AND(status = 'completed') AS all_completed
+                    FROM scoped_tasks WHERE task_date = %(today)s GROUP BY user_id
+                    HAVING BOOL_AND(COALESCE(status IN ('completed', 'failed'), false))
+                ) marked
+            """, p)
+            users.update(dict(cur.fetchone()))
+            cur.execute(cte + """
+                SELECT COUNT(*) AS pending_date_choices FROM public.pending_late_tasks p
+                JOIN scoped_users u ON u.telegram_chat_id = p.chat_id
+            """, p)
+            tasks.update(dict(cur.fetchone()))
+            # Kartalar va grafik bitta snapshotdan olinadi.
+            p["start"] = p["week_start"]
+            cur.execute(cte + """
+                SELECT d::date AS day,
+                    (SELECT COUNT(*) FROM scoped_users u WHERE u.joined_date = d::date) AS new_users,
+                    (SELECT COUNT(*) FROM recorded_activity a WHERE a.activity_date = d::date) AS active_users
+                FROM generate_series(%(start)s::date, %(today)s::date, interval '1 day') d ORDER BY d
+            """, p)
+            trends = {"days": [{"date": r["day"].isoformat(), "new_users": r["new_users"],
+                                "active_users": r["active_users"]} for r in cur.fetchall()]}
+    return {"ok": True, **meta, "users": users, "tasks": tasks, "trends": trends}
 
-        with conn.cursor(
-            cursor_factory=RealDictCursor
-        ) as cur:
-
-            cur.execute(
-                """
-                SELECT
-                    COUNT(*) AS total,
-
-                    COUNT(*) FILTER (
-                        WHERE created_at::date = %s
-                    ) AS today_new,
-
-                    COUNT(*) FILTER (
-                        WHERE created_at::date = %s
-                    ) AS yesterday_new,
-
-                    COUNT(*) FILTER (
-                        WHERE created_at::date >= %s
-                    ) AS week_new,
-
-                    COUNT(*) FILTER (
-                        WHERE last_active_date = %s
-                    ) AS today_active,
-
-                    COUNT(*) FILTER (
-                        WHERE last_active_date >= %s
-                    ) AS week_active,
-
-                    COUNT(*) FILTER (
-                        WHERE state = 'completed'
-                        AND last_active_date = %s
-                    ) AS today_completed_day
-
-                FROM public.users
-                WHERE active_bot_id = %s
-                """,
-                (
-                    today,
-                    yesterday,
-                    week_ago,
-                    today,
-                    week_ago,
-                    today,
-                    bot_id()
-                )
-            )
-
-            users = cur.fetchone()
-
-            cur.execute(
-                """
-                SELECT
-                    COUNT(*) AS today_tasks,
-                    COUNT(DISTINCT user_id) AS today_task_users
-                FROM public.tasks
-                WHERE task_date = %s
-                """,
-                (today,)
-            )
-
-            tasks = cur.fetchone()
-
-    return {
-        "ok": True,
-        "date": today.isoformat(),
-        "users": {
-            "total": users["total"],
-            "today_new": users["today_new"],
-            "yesterday_new": users["yesterday_new"],
-            "week_new": users["week_new"],
-            "today_active": users["today_active"],
-            "week_active": users["week_active"],
-            "today_completed_day": users["today_completed_day"],
-        },
-        "tasks": {
-            "today_total": tasks["today_tasks"],
-            "today_users_with_tasks": tasks["today_task_users"],
-        }
-    }
-
-
-# =========================================================
-# TRENDS (chart data for overview)
-# =========================================================
 
 @router.get("/trends")
-def admin_trends(
-    days: int = Query(7, ge=1, le=90),
-    _: int = Depends(verify_admin)
-):
-
-    today = get_today()
-    start_date = today - timedelta(days=days - 1)
-
+def admin_trends(days: int = Query(7, ge=1, le=90), _: int = Depends(verify_admin)):
+    """Joriy botning kunlik ro'yxatdan o'tish va qayd etilgan faollik dinamikasini beradi."""
     with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            p, cte, meta = _context(cur)
+            p["start"] = p["today"] - timedelta(days=days - 1)
+            cur.execute(cte + """
+                SELECT d::date AS day,
+                    (SELECT COUNT(*) FROM scoped_users u WHERE u.joined_date = d::date) AS new_users,
+                    (SELECT COUNT(*) FROM recorded_activity a WHERE a.activity_date = d::date) AS active_users
+                FROM generate_series(%(start)s::date, %(today)s::date, interval '1 day') d ORDER BY d
+            """, p)
+            rows = [{"date": r["day"].isoformat(), "new_users": r["new_users"] if meta["signup_dates_available"] else None,
+                     "active_users": r["active_users"]} for r in cur.fetchall()]
+    return {"ok": True, **meta, "days": rows}
 
-        with conn.cursor(
-            cursor_factory=RealDictCursor
-        ) as cur:
-
-            # New users per day, generated as a series so days with
-            # zero signups still appear (no gaps in the chart).
-            cur.execute(
-                """
-                SELECT
-                    d::date AS day,
-                    COUNT(u.id) AS new_users
-                FROM generate_series(%s, %s, interval '1 day') AS d
-                LEFT JOIN public.users u
-                    ON u.created_at::date = d::date
-                    AND u.active_bot_id = %s
-                GROUP BY d
-                ORDER BY d
-                """,
-                (start_date, today, bot_id())
-            )
-
-            new_users_by_day = {
-                row["day"].isoformat(): row["new_users"]
-                for row in cur.fetchall()
-            }
-
-            cur.execute(
-                """
-                SELECT
-                    d::date AS day,
-                    COUNT(a.user_id) AS active_users
-                FROM generate_series(%s, %s, interval '1 day') AS d
-                LEFT JOIN public.user_activity_daily a
-                    ON a.activity_date = d::date
-                GROUP BY d
-                ORDER BY d
-                """,
-                (start_date, today)
-            )
-
-            active_users_by_day = {
-                row["day"].isoformat(): row["active_users"]
-                for row in cur.fetchall()
-            }
-
-    days_list = []
-
-    cursor_date = start_date
-
-    while cursor_date <= today:
-
-        key = cursor_date.isoformat()
-
-        days_list.append(
-            {
-                "date": key,
-                "new_users": new_users_by_day.get(key, 0),
-                "active_users": active_users_by_day.get(key, 0),
-            }
-        )
-
-        cursor_date += timedelta(days=1)
-
-    return {
-        "ok": True,
-        "days": days_list
-    }
-
-
-# =========================================================
-# ACTIVITY (funnel + today's task breakdown)
-# =========================================================
 
 @router.get("/activity")
-def admin_activity(
-    _: int = Depends(verify_admin)
-):
-
-    today = get_today()
-
+def admin_activity(_: int = Depends(verify_admin)):
+    """Mustaqil guruhlarni funnel deb ko'rsatmaydi; sabablar va pending vazifalarni ajratadi."""
     with get_connection() as conn:
-
-        with conn.cursor(
-            cursor_factory=RealDictCursor
-        ) as cur:
-
-            # Funnel: total -> active today -> entered a task today
-            # -> gave at least one status today -> fully completed
-            # the day. Each computed independently via EXISTS/JOIN
-            # so counts are exact, not derived from each other.
-            cur.execute(
-                """
-                SELECT
-                    COUNT(*) AS total,
-
-                    COUNT(*) FILTER (
-                        WHERE last_active_date = %(today)s
-                    ) AS active_today,
-
-                    COUNT(*) FILTER (
-                        WHERE EXISTS (
-                            SELECT 1 FROM public.tasks t
-                            WHERE t.user_id = u.id
-                              AND t.task_date = %(today)s
-                        )
-                    ) AS entered_task_today,
-
-                    COUNT(*) FILTER (
-                        WHERE EXISTS (
-                            SELECT 1 FROM public.tasks t
-                            WHERE t.user_id = u.id
-                              AND t.task_date = %(today)s
-                              AND t.status IN ('completed', 'failed')
-                        )
-                    ) AS gave_status_today,
-
-                    COUNT(*) FILTER (
-                        WHERE state = 'completed'
-                          AND last_active_date = %(today)s
-                    ) AS finished_day
-
-                FROM public.users u
-                WHERE active_bot_id = %(bot)s
-                """,
-                {
-                    "today": today,
-                    "bot": bot_id()
-                }
-            )
-
-            funnel = cur.fetchone()
-
-            # Task status breakdown for today. Pending is genuinely
-            # pending (not yet marked) — never counted as failed.
-            cur.execute(
-                """
-                SELECT
-                    COUNT(*) AS total,
-                    COUNT(*) FILTER (WHERE status = 'completed') AS completed,
-                    COUNT(*) FILTER (WHERE status = 'failed') AS failed,
-                    COUNT(*) FILTER (WHERE status = 'pending') AS pending
-                FROM public.tasks
-                WHERE task_date = %s
-                """,
-                (today,)
-            )
-
-            tasks = cur.fetchone()
-
-    def pct(part, whole):
-        return round(part / whole * 100) if whole else 0
-
-    funnel_steps = [
-        {
-            "label": "Jami foydalanuvchi",
-            "count": funnel["total"],
-            "percent_of_previous": 100
-        },
-        {
-            "label": "Bugun faol",
-            "count": funnel["active_today"],
-            "percent_of_previous": pct(funnel["active_today"], funnel["total"])
-        },
-        {
-            "label": "Bugun vazifa kiritgan",
-            "count": funnel["entered_task_today"],
-            "percent_of_previous": pct(
-                funnel["entered_task_today"], funnel["active_today"]
-            )
-        },
-        {
-            "label": "Kamida bitta statusga belgi qo'ygan",
-            "count": funnel["gave_status_today"],
-            "percent_of_previous": pct(
-                funnel["gave_status_today"], funnel["entered_task_today"]
-            )
-        },
-        {
-            "label": "Kunini yakunlagan",
-            "count": funnel["finished_day"],
-            "percent_of_previous": pct(
-                funnel["finished_day"], funnel["gave_status_today"]
-            )
-        },
-    ]
-
-    total_tasks = tasks["total"] or 0
-
-    return {
-        "ok": True,
-        "date": today.isoformat(),
-        "funnel": funnel_steps,
-        "tasks": {
-            "total": total_tasks,
-            "completed": tasks["completed"],
-            "failed": tasks["failed"],
-            "pending": tasks["pending"],
-            "completed_percent": pct(tasks["completed"], total_tasks),
-            "failed_percent": pct(tasks["failed"], total_tasks),
-            "pending_percent": pct(tasks["pending"], total_tasks),
-        }
-    }
-
-
-# =========================================================
-# RETENTION
-# =========================================================
-#
-# Built entirely from user_activity_daily, populated going forward
-# from the migration date. Cohorts older than the migration, or too
-# recent for a given horizon to have elapsed, show "-" rather than
-# a misleading 0%.
-
-def _retention_for_cohort(cur, cohort_date: date, horizon_days: int, today: date):
-
-    target_date = cohort_date + timedelta(days=horizon_days)
-
-    if target_date > today:
-        return None  # horizon hasn't happened yet
-
-    cur.execute(
-        """
-        SELECT COUNT(DISTINCT u.id) AS cohort_size
-        FROM public.users u
-        WHERE u.created_at::date = %s
-          AND u.active_bot_id = %s
-        """,
-        (cohort_date, bot_id())
-    )
-
-    cohort_size = cur.fetchone()["cohort_size"]
-
-    if not cohort_size:
-        return None
-
-    cur.execute(
-        """
-        SELECT COUNT(DISTINCT a.user_id) AS retained
-        FROM public.user_activity_daily a
-        JOIN public.users u ON u.id = a.user_id
-        WHERE u.created_at::date = %s
-          AND u.active_bot_id = %s
-          AND a.activity_date = %s
-        """,
-        (cohort_date, bot_id(), target_date)
-    )
-
-    retained = cur.fetchone()["retained"]
-
-    return round(retained / cohort_size * 100)
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            p, cte, meta = _context(cur)
+            cur.execute(cte + """
+                SELECT COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM recorded_activity a WHERE a.user_id=u.id AND a.activity_date=%(today)s)) AS active_today,
+                    COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM scoped_tasks t WHERE t.user_id=u.id AND t.task_date=%(today)s)) AS has_plan,
+                    COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM scoped_tasks t WHERE t.user_id=u.id AND t.task_date=%(today)s AND t.status IN ('completed','failed'))) AS has_marked,
+                    COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM scoped_tasks t WHERE t.user_id=u.id AND t.task_date=%(today)s)
+                        AND NOT EXISTS (SELECT 1 FROM scoped_tasks t WHERE t.user_id=u.id AND t.task_date=%(today)s AND (t.status IS NULL OR t.status NOT IN ('completed','failed')))) AS all_marked,
+                    COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM scoped_tasks t WHERE t.user_id=u.id AND t.task_date=%(today)s)
+                        AND NOT EXISTS (SELECT 1 FROM scoped_tasks t WHERE t.user_id=u.id AND t.task_date=%(today)s AND t.status IS DISTINCT FROM 'completed')) AS all_completed
+                FROM scoped_users u
+            """, p)
+            groups = dict(cur.fetchone())
+            cur.execute(cte + """
+                SELECT COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE status='completed') AS completed,
+                    COUNT(*) FILTER (WHERE status='failed') AS failed,
+                    COUNT(*) FILTER (WHERE status='pending') AS pending,
+                    COUNT(*) FILTER (WHERE status IS NULL OR status NOT IN ('completed','failed','pending')) AS unknown,
+                    COUNT(*) FILTER (WHERE status='failed' AND fail_reason IS NULL) AS missing_reason,
+                    COUNT(*) FILTER (WHERE status='failed' AND fail_reason='other' AND NULLIF(BTRIM(fail_reason_text),'') IS NOT NULL) AS custom_reason,
+                    COUNT(*) FILTER (WHERE status='failed' AND fail_reason='other' AND NULLIF(BTRIM(fail_reason_text),'') IS NULL) AS other_without_text
+                FROM scoped_tasks WHERE task_date=%(today)s
+            """, p)
+            tasks = dict(cur.fetchone())
+            cur.execute(cte + """
+                SELECT fail_reason, COUNT(*) AS count FROM scoped_tasks
+                WHERE task_date=%(today)s AND status='failed'
+                GROUP BY fail_reason ORDER BY count DESC, fail_reason NULLS LAST
+            """, p)
+            reasons = [{"code": r["fail_reason"], "label": (fail_reason_display(r["fail_reason"]) if r["fail_reason"] is None or r["fail_reason"] in FAIL_REASONS else "Noma’lum sabab kodi: " + r["fail_reason"]), "count": r["count"]} for r in cur.fetchall()]
+            cur.execute(cte + """
+                SELECT t.id, t.task_text, t.fail_reason_text, u.first_name
+                FROM scoped_tasks t JOIN scoped_users u ON u.id=t.user_id
+                WHERE t.task_date=%(today)s AND t.status='failed' AND t.fail_reason='other'
+                  AND NULLIF(BTRIM(t.fail_reason_text),'') IS NOT NULL
+                ORDER BY t.created_at DESC, t.id DESC LIMIT 50
+            """, p)
+            custom = [{"task_id": str(r["id"]), "task_text": r["task_text"], "reason": r["fail_reason_text"],
+                       "first_name": r["first_name"]} for r in cur.fetchall()]
+    metrics = [{"label": label, "count": groups[key], "percent_of_total": _percent(groups[key], groups["total"])}
+               for key, label in (("active_today", "Bugun botda faol"), ("has_plan", "Bugunga vazifasi bor"),
+                                  ("has_marked", "Bugungi kamida 1 vazifasi belgilangan"),
+                                  ("all_marked", "Bugungi barcha vazifasi belgilangan"),
+                                  ("all_completed", "Bugungi barcha vazifasi bajarilgan"))]
+    for key in ("completed", "failed", "pending", "unknown"):
+        tasks[key + "_percent"] = _percent(tasks[key], tasks["total"])
+    return {"ok": True, **meta, "total_users": groups["total"], "metrics": metrics, "tasks": tasks,
+            "reasons": reasons, "custom_reasons": custom, "custom_reasons_limit": 50}
 
 
 @router.get("/retention")
-def admin_retention(
-    cohorts: int = Query(14, ge=1, le=60),
-    _: int = Depends(verify_admin)
-):
-
-    today = get_today()
-
+def admin_retention(cohorts: int = Query(60, ge=1, le=90), _: int = Depends(verify_admin)):
+    """Aniq D-kundagi qaytishni hisoblaydi; tugamagan kunni kutadi va guruh hajmi bo'yicha vaznlaydi."""
     with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            p, cte, meta = _context(cur)
+            p["start"] = p["today"] - timedelta(days=cohorts - 1)
+            cur.execute(cte + """
+                SELECT MIN(a.activity_date) AS first_observed FROM public.user_activity_daily a
+                JOIN scoped_users u ON u.id=a.user_id WHERE a.activity_date <= %(today)s
+            """, p)
+            first = cur.fetchone()["first_observed"]
+            cur.execute(cte + """
+                SELECT joined_date, COUNT(*) AS size FROM scoped_users
+                WHERE joined_date BETWEEN %(start)s AND %(today)s GROUP BY joined_date ORDER BY joined_date DESC
+            """, p)
+            sizes = cur.fetchall()
+            cur.execute(cte + """
+                SELECT u.joined_date, a.activity_date-u.joined_date AS horizon, COUNT(DISTINCT u.id) AS retained
+                FROM scoped_users u JOIN public.user_activity_daily a ON a.user_id=u.id
+                WHERE u.joined_date BETWEEN %(start)s AND %(today)s
+                  AND a.activity_date < %(today)s
+                  AND a.activity_date-u.joined_date IN (1,3,7,30)
+                GROUP BY u.joined_date, a.activity_date-u.joined_date
+            """, p)
+            returns = {(r["joined_date"], r["horizon"]): r["retained"] for r in cur.fetchall()}
+    totals = {f"d{h}": {"retained": 0, "eligible": 0} for h in (1, 3, 7, 30)}
+    rows = []
+    for group in sizes:
+        day, size = group["joined_date"], group["size"]
+        row = {"cohort_date": day.isoformat(), "new_users": size}
+        for h in (1, 3, 7, 30):
+            key = f"d{h}"
+            # Eng birinchi yozuv kuni to'liq kuzatilganiga kafolat yo'q.
+            eligible = first is not None and day > first and day + timedelta(days=h) < p["today"]
+            returned = returns.get((day, h), 0)
+            row[key] = _percent(returned, size) if eligible else None
+            if eligible:
+                totals[key]["retained"] += returned
+                totals[key]["eligible"] += size
+        rows.append(row)
+    headline = {key: _percent(value["retained"], value["eligible"]) for key, value in totals.items()}
+    return {"ok": True, **meta, "tracking_start": first.isoformat() if first else None,
+            "headline": headline, "headline_counts": totals, "cohorts": rows, "window_days": cohorts,
+            "retention_note": "D1/D3/D7/D30 — ro‘yxatdan o‘tgandan aniq shu kun o‘tib botda qayd etilgan faollik. Bugun hali tugamagan bo‘lsa hisoblanmaydi. Umumiy foiz foydalanuvchilar soni bilan vaznlangan. Tarixiy yozuvlar to‘liq yig‘ilgan davrlar uchungina ishonchli; ilk yozuv kuzatuv boshlanganining kafolati emas."}
 
-        with conn.cursor(
-            cursor_factory=RealDictCursor
-        ) as cur:
-
-            # Only cohorts from the activity-tracking start date onward
-            # can have any real retention number; earlier cohorts are
-            # still listed (so the table isn't empty) with every
-            # horizon as "-".
-            cur.execute(
-                """
-                SELECT MIN(activity_date) AS tracking_start
-                FROM public.user_activity_daily
-                """
-            )
-
-            tracking_start = cur.fetchone()["tracking_start"]
-
-            cohort_rows = []
-
-            for offset in range(cohorts):
-
-                cohort_date = today - timedelta(days=offset)
-
-                cur.execute(
-                    """
-                    SELECT COUNT(*) AS new_users
-                    FROM public.users
-                    WHERE created_at::date = %s
-                      AND active_bot_id = %s
-                    """,
-                    (cohort_date, bot_id())
-                )
-
-                new_users = cur.fetchone()["new_users"]
-
-                if new_users == 0:
-                    continue
-
-                row = {
-                    "cohort_date": cohort_date.isoformat(),
-                    "new_users": new_users,
-                }
-
-                for horizon, key in (
-                    (1, "d1"), (3, "d3"), (7, "d7"), (30, "d30")
-                ):
-
-                    if (
-                        tracking_start is None
-                        or cohort_date < tracking_start
-                    ):
-
-                        row[key] = None  # "-": before tracking existed
-
-                    else:
-
-                        row[key] = _retention_for_cohort(
-                            cur, cohort_date, horizon, today
-                        )
-
-                cohort_rows.append(row)
-
-            # Headline D1/D3/D7/D30: average across cohorts that have
-            # a real (non-null) value for that horizon, not a blend
-            # with "-" treated as zero.
-            headline = {}
-
-            for key in ("d1", "d3", "d7", "d30"):
-
-                values = [
-                    row[key] for row in cohort_rows
-                    if row[key] is not None
-                ]
-
-                headline[key] = (
-                    round(sum(values) / len(values))
-                    if values else None
-                )
-
-    return {
-        "ok": True,
-        "tracking_start": (
-            tracking_start.isoformat() if tracking_start else None
-        ),
-        "headline": headline,
-        "cohorts": cohort_rows
-    }
-
-
-# =========================================================
-# USERS (segments + paginated list + search)
-# =========================================================
 
 @router.get("/users")
-def admin_users(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(25, ge=1, le=100),
-    search: Optional[str] = Query(None, max_length=100),
-    _: int = Depends(verify_admin)
-):
-
-    today = get_today()
-
+def admin_users(page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100),
+                search: Optional[str] = Query(None, max_length=100), _: int = Depends(verify_admin)):
+    """Segmentlarni ustma-ust hisoblamaydi; bloklanganlar va kelajak vazifalari alohida ko'rsatiladi."""
     with get_connection() as conn:
-
-        with conn.cursor(
-            cursor_factory=RealDictCursor
-        ) as cur:
-
-            cur.execute(
-                """
-                SELECT
-                    COUNT(*) FILTER (
-                        WHERE last_active_date = %(today)s
-                    ) AS active_today,
-
-                    COUNT(*) FILTER (
-                        WHERE last_active_date >= %(today)s - 2
-                          AND last_active_date < %(today)s
-                    ) AS active_2d,
-
-                    COUNT(*) FILTER (
-                        WHERE last_active_date < %(today)s - 2
-                          AND last_active_date >= %(today)s - 7
-                    ) AS inactive_3_7,
-
-                    COUNT(*) FILTER (
-                        WHERE last_active_date < %(today)s - 7
-                          AND last_active_date >= %(today)s - 30
-                    ) AS inactive_8_30,
-
-                    COUNT(*) FILTER (
-                        WHERE last_active_date < %(today)s - 30
-                          OR last_active_date IS NULL
-                    ) AS inactive_30_plus,
-
-                    COUNT(*) FILTER (
-                        WHERE state = 'blocked'
-                    ) AS blocked
-
-                FROM public.users
-                WHERE active_bot_id = %(bot)s
-                """,
-                {
-                    "today": today,
-                    "bot": bot_id()
-                }
-            )
-
-            segments = cur.fetchone()
-
-            search_clause = ""
-            params: dict = {
-                "bot": bot_id(),
-                "limit": page_size,
-                "offset": (page - 1) * page_size
-            }
-
-            if search:
-                search_clause = (
-                    "AND (first_name ILIKE %(search)s "
-                    "OR telegram_username ILIKE %(search)s)"
-                )
-                params["search"] = f"%{search}%"
-
-            cur.execute(
-                f"""
-                SELECT COUNT(*) AS total
-                FROM public.users
-                WHERE active_bot_id = %(bot)s
-                {search_clause}
-                """,
-                params
-            )
-
-            total_matching = cur.fetchone()["total"]
-
-            cur.execute(
-                f"""
-                SELECT
-                    u.id,
-                    u.first_name,
-                    u.telegram_username,
-                    u.created_at,
-                    u.last_active_date,
-                    u.state,
-                    COUNT(t.id) AS total_tasks,
-                    COUNT(t.id) FILTER (
-                        WHERE t.status = 'completed'
-                    ) AS completed_tasks
-                FROM public.users u
-                LEFT JOIN public.tasks t ON t.user_id = u.id
-                WHERE u.active_bot_id = %(bot)s
-                {search_clause}
-                GROUP BY u.id
-                ORDER BY u.created_at DESC
-                LIMIT %(limit)s OFFSET %(offset)s
-                """,
-                params
-            )
-
-            user_rows = cur.fetchall()
-
-    users_out = []
-
-    for row in user_rows:
-
-        users_out.append(
-            {
-                "id": str(row["id"]),
-                "first_name": row["first_name"],
-                "username": row["telegram_username"],
-                "joined_at": row["created_at"].isoformat(),
-                "last_active_date": (
-                    row["last_active_date"].isoformat()
-                    if row["last_active_date"] else None
-                ),
-                "state": row["state"],
-                "total_tasks": row["total_tasks"],
-                "completed_tasks": row["completed_tasks"],
-            }
-        )
-
-    return {
-        "ok": True,
-        "segments": {
-            "active_today": segments["active_today"],
-            "active_2d": segments["active_2d"],
-            "inactive_3_7": segments["inactive_3_7"],
-            "inactive_8_30": segments["inactive_8_30"],
-            "inactive_30_plus": segments["inactive_30_plus"],
-            "blocked": segments["blocked"],
-        },
-        "page": page,
-        "page_size": page_size,
-        "total": total_matching,
-        "total_pages": (
-            (total_matching + page_size - 1) // page_size
-            if total_matching else 0
-        ),
-        "users": users_out
-    }
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            p, cte, meta = _context(cur)
+            cte = cte.rstrip() + """, user_seen AS (
+                SELECT u.*, (SELECT MAX(a.activity_date) FROM recorded_activity a WHERE a.user_id=u.id) AS seen
+                FROM scoped_users u
+            ) """
+            cur.execute(cte + """
+                SELECT COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE state='blocked') AS blocked,
+                    COUNT(*) FILTER (WHERE state IS DISTINCT FROM 'blocked' AND seen=%(today)s) AS active_today,
+                    COUNT(*) FILTER (WHERE state IS DISTINCT FROM 'blocked' AND %(today)s-seen BETWEEN 1 AND 2) AS active_2d,
+                    COUNT(*) FILTER (WHERE state IS DISTINCT FROM 'blocked' AND %(today)s-seen BETWEEN 3 AND 7) AS inactive_3_7,
+                    COUNT(*) FILTER (WHERE state IS DISTINCT FROM 'blocked' AND %(today)s-seen BETWEEN 8 AND 30) AS inactive_8_30,
+                    COUNT(*) FILTER (WHERE state IS DISTINCT FROM 'blocked' AND %(today)s-seen > 30) AS inactive_30_plus,
+                    COUNT(*) FILTER (WHERE state IS DISTINCT FROM 'blocked' AND seen IS NULL) AS never_active
+                FROM user_seen
+            """, p)
+            segments = dict(cur.fetchone())
+            clause = ""
+            if search and search.strip():
+                # % va _ qidiruvda oddiy belgi, yashirin wildcard emas.
+                p["search"] = '%' + search.strip().replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
+                clause = "AND (u.first_name ILIKE %(search)s OR u.telegram_username ILIKE %(search)s OR u.telegram_chat_id::text ILIKE %(search)s)"
+            cur.execute(cte + f"SELECT COUNT(*) AS total FROM user_seen u WHERE true {clause}", p)
+            total = cur.fetchone()["total"]
+            pages = (total + page_size - 1) // page_size
+            page = min(page, max(1, pages))
+            p.update(limit=page_size, offset=(page-1)*page_size)
+            cur.execute(cte + f"""
+                SELECT u.id, u.first_name, u.telegram_username, u.joined_date, u.seen, u.state,
+                    u.morning_time, u.last_morning_greeting_date,
+                    COUNT(t.id) FILTER (WHERE t.task_date <= %(today)s) AS total_tasks,
+                    COUNT(t.id) FILTER (WHERE t.task_date <= %(today)s AND t.status='completed') AS completed_tasks,
+                    COUNT(t.id) FILTER (WHERE t.task_date > %(today)s) AS future_tasks
+                FROM user_seen u LEFT JOIN scoped_tasks t ON t.user_id=u.id
+                WHERE true {clause}
+                GROUP BY u.id, u.first_name, u.telegram_username, u.joined_date, u.seen, u.state,
+                         u.morning_time, u.last_morning_greeting_date, u.created_at
+                ORDER BY u.created_at DESC NULLS LAST, u.id DESC LIMIT %(limit)s OFFSET %(offset)s
+            """, p)
+            rows = cur.fetchall()
+    users = [{"id": str(r["id"]), "first_name": r["first_name"], "username": r["telegram_username"],
+              "joined_at": r["joined_date"].isoformat() if r["joined_date"] else None,
+              "last_active_date": r["seen"].isoformat() if r["seen"] else None, "state": r["state"],
+              "morning_time": str(r["morning_time"])[:5] if r["morning_time"] else None,
+              "last_morning_greeting_date": r["last_morning_greeting_date"].isoformat() if r["last_morning_greeting_date"] else None,
+              "total_tasks": r["total_tasks"], "completed_tasks": r["completed_tasks"], "future_tasks": r["future_tasks"]} for r in rows]
+    return {"ok": True, **meta, "segments": segments, "page": page, "page_size": page_size,
+            "total": total, "total_pages": pages, "users": users}
