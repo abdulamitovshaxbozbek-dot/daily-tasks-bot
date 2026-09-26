@@ -123,12 +123,16 @@ FAIL_REASONS: dict[str, dict] = {
 FAIL_REASON_NOT_SET_LABEL = "sababi yozilmadi"
 
 
-def fail_reason_display(code: Optional[str]) -> str:
+def fail_reason_display(code: Optional[str], custom_text: Optional[str] = None) -> str:
     """
     fail_reason kodini foydalanuvchiga ko'rsatiladigan
     "emoji + matn" ko'rinishiga aylantiradi.
     Kod noma'lum yoki None bo'lsa, standart matnni qaytaradi.
     """
+
+    # Boshqa sababning erkin matni vazifa hisobotida aynan ko'rsatiladi.
+    if code == "other" and custom_text:
+        return f"🤷 {custom_text}"
 
     if not code:
 
@@ -709,9 +713,9 @@ def update_user_activity(chat_id: int):
 # =========================================================
 
 def clean_task_text(text: str) -> str:
-
+    """Ro'yxat raqamini tozalaydi; 17-unit kabi so'zdagi raqamni saqlaydi."""
     return re.sub(
-        r"^\s*\d+[\.\)\-]\s*",
+        r"^\s*\d+(?:[\.\)]\s*|-\s+)",
         "",
         text.strip()
     ).strip()
@@ -1350,7 +1354,7 @@ def build_live_checklist(
     heading: str,
     instructions: Optional[str] = None
 ) -> tuple[str, dict]:
-    """Checklistda belgilash, tahrirlash va o‘chirish tugmalarini ko‘rsatadi."""
+    """Checklistda faqat bajarilgan/bajarilmagan tugmalarini ko‘rsatadi; tahrir Mini Appda."""
 
     pending_tasks = summary["pending"]
 
@@ -1379,10 +1383,6 @@ def build_live_checklist(
             f"{index}. ⏳ {task['task_text']}"
         )
 
-        keyboard.append([
-            {"text": f"✏️ {index}", "callback_data": f"task_edit|{task['id']}"},
-            {"text": f"🗑 {index}", "callback_data": f"task_delete|{task['id']}"}
-        ])
         keyboard.append(
             [
                 {
@@ -2423,6 +2423,7 @@ def handle_fail_reason(
     callback_query_id: Optional[str] = None,
     message_id: Optional[int] = None
 ):
+    """Tayyor sababni saqlaydi; Boshqa tanlansa botda yozma javob so'raydi."""
 
     if reason_code not in FAIL_REASONS:
 
@@ -2441,7 +2442,7 @@ def handle_fail_reason(
         chat_id
     )
 
-    if not user:
+    if not user or user["state"] == "blocked":
 
         if callback_query_id:
 
@@ -2454,6 +2455,9 @@ def handle_fail_reason(
             "ok": False
         }
 
+    if reason_code == "other":
+        return start_custom_fail_reason(chat_id, user, task_id, callback_query_id, message_id)
+
     with get_connection() as conn:
 
         with conn.cursor(
@@ -2465,10 +2469,13 @@ def handle_fail_reason(
                 UPDATE public.tasks
                 SET
                     fail_reason = %s,
+                    fail_reason_text = NULL,
+                    reason_text_message_id = NULL,
                     reason_message_id = NULL
                 WHERE id = %s
                   AND user_id = %s
                   AND status = 'failed'
+                  AND fail_reason IS NULL
                 RETURNING *
                 """,
                 (
@@ -2574,6 +2581,7 @@ def handle_fail_reason(
 def handle_daily_report(
     chat_id: int
 ):
+    # Hisobotda Boshqa sabab uchun foydalanuvchi yozgan matn ham chiqadi.
 
     user = get_user_by_chat_id(
         chat_id
@@ -2705,7 +2713,7 @@ def handle_daily_report(
             elif task["status"] == "failed":
 
                 reason_text = fail_reason_display(
-                    task.get("fail_reason")
+                    task.get("fail_reason"), task.get("fail_reason_text")
                 )
 
                 lines.append(
@@ -5550,36 +5558,6 @@ def handle_voice_confirm(
 # TELEGRAM WEBHOOK
 # =========================================================
 
-def handle_manage_tasks(chat_id):
-    """Bugungi va ertangi bajarilmagan vazifalarni botda boshqarish uchun chiqaradi."""
-    user = get_user_by_chat_id(chat_id)
-    if not user or user["state"] == "blocked":
-        telegram_send_message(chat_id, "⚠️ Avval /start buyrug‘ini bosing.")
-        return {"ok": False}
-    today = get_today()
-    with get_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
-                SELECT id, task_text, task_date FROM public.tasks
-                WHERE user_id = %s AND status = 'pending'
-                  AND task_date IN (%s, %s)
-                ORDER BY task_date, created_at, id
-            """, (user["id"], today, today + timedelta(days=1)))
-            tasks = cur.fetchall()
-    if not tasks:
-        telegram_send_message(chat_id, "📋 Bugun va ertaga uchun bajarilmagan vazifalar yo‘q.")
-    for offset in range(0, len(tasks), 5):
-        lines = ["📋 Vazifalarni boshqarish", ""]
-        keyboard = []
-        for index, task in enumerate(tasks[offset:offset + 5], offset + 1):
-            label = "Bugun" if task["task_date"] == today else "Ertaga"
-            lines.append(f"{index}. {label}: {task['task_text'][:300]}")
-            keyboard.append([
-                {"text": f"✏️ {index}", "callback_data": f"task_edit|{task['id']}"},
-                {"text": f"🗑 {index}", "callback_data": f"task_delete|{task['id']}"}
-            ])
-        telegram_send_message_with_keyboard(chat_id, "\n".join(lines), {"inline_keyboard": keyboard})
-    return {"ok": True, "route": "manage_tasks", "count": len(tasks)}
 
 
 def _remove_task_prompt(chat_id, message_id):
@@ -5591,155 +5569,173 @@ def _remove_task_prompt(chat_id, message_id):
             print("Task prompt delete error:", type(error).__name__)
 
 
-def handle_task_management(chat_id, task_id, action, callback_query_id=None, message_id=None):
-    """Egasi va sanani tekshirib, tahrirlashni boshlaydi yoki tasdiqlangan vazifani o'chiradi."""
-    if action not in ("edit", "delete", "delete_yes", "delete_no"):
-        return {"ok": False}
-    if action == "delete_no":
-        if callback_query_id:
-            telegram_answer_callback(callback_query_id, "Bekor qilindi")
-        _remove_task_prompt(chat_id, message_id)
-        return {"ok": True, "cancelled": True}
-    user = get_user_by_chat_id(chat_id)
-    if not user or user["state"] == "blocked":
-        if callback_query_id:
-            telegram_answer_callback(callback_query_id, "Avval /start buyrug‘ini bosing.")
-        return {"ok": False}
-    today = get_today()
+
+
+
+
+
+
+class MiniappTaskEditRequest(BaseModel):
+    task_text: str = Field(min_length=1, max_length=1000)
+
+
+def send_task_management_link(chat_id):
+    """Botdagi eski tahrirlash tugmalari o'rniga Mini Appni ochishni taklif qiladi."""
+    telegram_send_message_with_keyboard(
+        chat_id, "✏️ Vazifalarni tahrirlash va o‘chirish Mini Appga ko‘chirildi.",
+        {"inline_keyboard": [[{"text": "📋 Vazifalarni ochish", "web_app": {"url": MINIAPP_URL}}]]}
+    )
+    return {"ok": True, "route": "manage_in_miniapp"}
+
+
+def start_custom_fail_reason(chat_id, user, task_id, callback_query_id=None, message_id=None):
+    """Boshqa sabab uchun yozma javob so'raydi va xabarni vazifaga bazada bog'laydi."""
     with get_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
-                SELECT id, task_text, task_date FROM public.tasks
-                WHERE id::text = %s AND user_id = %s AND status = 'pending'
-                  AND task_date IN (%s, %s)
+                SELECT id, task_text FROM public.tasks
+                WHERE id::text = %s AND user_id = %s AND status = 'failed'
+                  AND fail_reason IS NULL AND reason_text_message_id IS NULL
                 FOR UPDATE
-            """, (task_id, user["id"], today, today + timedelta(days=1)))
+            """, (task_id, user["id"]))
             task = cur.fetchone()
-            if task and action == "delete_yes":
-                cur.execute("DELETE FROM public.tasks WHERE id::text = %s AND user_id = %s",
-                            (task_id, user["id"]))
-                cur.execute("DELETE FROM public.pending_task_edits WHERE chat_id = %s AND task_id = %s",
-                            (chat_id, task_id))
-        conn.commit()
-    if not task:
-        if callback_query_id:
-            telegram_answer_callback(callback_query_id, "Vazifa topilmadi, belgilangan yoki sanasi o‘tgan.")
-        return {"ok": True, "unavailable": True}
-
-    if action == "edit":
-        sent = telegram_send_message_with_keyboard(
-            chat_id,
-            "✏️ Vazifani tahrirlash\n\n"
-            f"Hozirgi matn: {task['task_text'][:1000]}\n\n"
-            "Shu xabarga javob qilib yangi matnni bitta qatorda yuboring (1000 belgigacha).\n"
-            "Sana o‘zgarmaydi. Bekor qilish: /cancel",
-            {"force_reply": True, "selective": True, "input_field_placeholder": "Vazifaning yangi matni"}
-        )
-        prompt_id = sent["result"]["message_id"]
-        with get_connection() as conn:
-            with conn.cursor() as cur:
+            if task:
+                sent = telegram_send_message_with_keyboard(
+                    chat_id, "💬 Boshqa sabab\n\n"
+                    f"Vazifa: {task['task_text'][:1000]}\n\n"
+                    "Nima uchun bajara olmadingiz? Shu xabarga javob qilib sababni yozing "
+                    "(1000 belgigacha). Bekor qilish: /cancel",
+                    {"force_reply": True, "selective": True,
+                     "input_field_placeholder": "Bajarmaganlik sababini yozing"}
+                )
                 cur.execute("""
-                    INSERT INTO public.pending_task_edits (chat_id, task_id, prompt_message_id, created_at)
-                    VALUES (%s, %s, %s, now())
-                    ON CONFLICT (chat_id) DO UPDATE SET task_id = EXCLUDED.task_id,
-                        prompt_message_id = EXCLUDED.prompt_message_id, created_at = EXCLUDED.created_at
-                """, (chat_id, task_id, prompt_id))
-            conn.commit()
-    elif action == "delete":
-        telegram_send_message_with_keyboard(
-            chat_id, f"🗑 Ushbu vazifani o‘chirasizmi?\n\n{task['task_text'][:1000]}",
-            {"inline_keyboard": [[
-                {"text": "🗑 Ha, o‘chirish", "callback_data": f"task_delete_yes|{task_id}"},
-                {"text": "Bekor qilish", "callback_data": f"task_delete_no|{task_id}"}
-            ]]}
-        )
-    else:
-        _remove_task_prompt(chat_id, message_id)
-        telegram_send_message(chat_id, "🗑 Vazifa o‘chirildi.")
-        if task["task_date"] == today:
-            refresh_live_checklist(chat_id, user)
-    if callback_query_id:
-        telegram_answer_callback(callback_query_id, "O‘chirildi ✅" if action == "delete_yes" else "")
-    return {"ok": True, "route": f"task_{action}"}
-
-
-def handle_cancel_task_edit(chat_id):
-    """Kutilayotgan tahrirlashni bekor qiladi; vazifaning o'ziga tegmaydi."""
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM public.pending_task_edits WHERE chat_id = %s RETURNING prompt_message_id",
-                        (chat_id,))
-            row = cur.fetchone()
+                    UPDATE public.tasks SET reason_text_message_id = %s
+                    WHERE id::text = %s AND user_id = %s
+                """, (sent["result"]["message_id"], task_id, user["id"]))
         conn.commit()
-    if row:
-        _remove_task_prompt(chat_id, row[0])
-    telegram_send_message(chat_id, "Tahrirlash bekor qilindi." if row else "Kutilayotgan tahrirlash yo‘q.")
-    return {"ok": True, "cancelled": bool(row)}
+    if callback_query_id:
+        telegram_answer_callback(callback_query_id, "Sababni yozing ✍️" if task else "So‘rov eskirgan yoki javob kutilmoqda.")
+    if task:
+        _remove_task_prompt(chat_id, message_id)
+    return {"ok": True, "awaiting_reason": bool(task)}
 
 
-def handle_task_edit_reply(chat_id, message):
-    """Faqat tahrirlash xabariga javobni mavjud vazifaga yozadi; yangi vazifa yaratmaydi."""
+def handle_custom_fail_reason_reply(chat_id, message):
+    """Botdagi sabab so'roviga javobni saqlaydi; uni yangi vazifa deb qabul qilmaydi."""
     reply = message.get("reply_to_message") or {}
     if not (reply.get("from", {}).get("is_bot") and
-            (reply.get("text") or "").startswith("✏️ Vazifani tahrirlash\n")):
+            (reply.get("text") or "").startswith("💬 Boshqa sabab\n")):
         return None
     user = get_user_by_chat_id(chat_id)
     if not user or user["state"] == "blocked":
         telegram_send_message(chat_id, "⚠️ Avval /start buyrug‘ini bosing.")
         return {"ok": False}
-    text = (message.get("text") or "").strip()
-    cleaned = uzbek_to_latin(clean_task_text(text))
-    if not cleaned or len(cleaned) > 1000 or "\n" in text or "\r" in text:
-        telegram_send_message(chat_id, "⚠️ Shu tahrirlash xabariga javob qilib 1–1000 belgili matnni bitta qatorda yuboring.")
-        return {"ok": False, "invalid_text": True}
-    today = get_today()
-    error = None
-    task = None
-    # Vazifani oldin qulflash o'chirish handleri bilan qulf tartibini bir xil saqlaydi.
+    reason = (message.get("text") or "").strip()
+    if not reason or len(reason) > 1000:
+        telegram_send_message(chat_id, "⚠️ Sabab so‘ralgan xabarga javob qilib 1–1000 belgili matn yuboring.")
+        return {"ok": False, "invalid_reason": True}
     with get_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
-                SELECT t.id, t.task_date FROM public.tasks t
-                JOIN public.pending_task_edits p ON p.task_id = t.id::text
-                WHERE p.chat_id = %s AND p.prompt_message_id = %s
-                  AND p.created_at > now() - interval '15 minutes'
-                  AND t.user_id = %s AND t.status = 'pending'
-                  AND t.task_date IN (%s, %s)
-                FOR UPDATE OF t
-            """, (chat_id, reply.get("message_id"), user["id"], today, today + timedelta(days=1)))
+                UPDATE public.tasks
+                SET fail_reason = 'other', fail_reason_text = %s,
+                    reason_text_message_id = NULL, reason_message_id = NULL
+                WHERE user_id = %s AND status = 'failed' AND fail_reason IS NULL
+                  AND reason_text_message_id = %s
+                RETURNING id, task_date
+            """, (reason, user["id"], reply.get("message_id")))
             task = cur.fetchone()
-            if task:
-                cur.execute("""
-                    SELECT task_id FROM public.pending_task_edits
-                    WHERE chat_id = %s AND prompt_message_id = %s AND task_id = %s
-                      AND created_at > now() - interval '15 minutes'
-                    FOR UPDATE
-                """, (chat_id, reply.get("message_id"), str(task["id"])))
-                if not cur.fetchone():
-                    task = None
+        conn.commit()
+    if not task:
+        telegram_send_message(chat_id, "Bu sabab so‘rovi eskirgan yoki allaqachon saqlangan.")
+        return {"ok": True, "expired": True}
+    _remove_task_prompt(chat_id, reply.get("message_id"))
+    telegram_send_message(chat_id, f"✅ Sabab saqlandi:\n\n{reason}")
+    if check_unfinished_tasks_count(user["id"], task["task_date"]) == 0:
+        maybe_notify_day_fully_completed(chat_id, user["id"], task["task_date"])
+    return {"ok": True, "route": "custom_fail_reason"}
+
+
+def cancel_custom_fail_reason(chat_id):
+    """Yozma sabab kiritishni bekor qilib, sabab tanlash tugmalarini qaytaradi."""
+    user = get_user_by_chat_id(chat_id)
+    if not user or user["state"] == "blocked":
+        return {"ok": False}
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                UPDATE public.tasks SET reason_text_message_id = NULL
+                WHERE user_id = %s AND status = 'failed' AND fail_reason IS NULL
+                  AND reason_text_message_id IS NOT NULL
+                RETURNING id, task_text
+            """, (user["id"],))
+            tasks = cur.fetchall()
+        conn.commit()
+    for task in tasks:
+        sent = telegram_send_message_with_keyboard(
+            chat_id, f"❌ {task['task_text'][:1000]}\n\nBajarilmaganlik sababini tanlang:",
+            build_fail_reason_keyboard(str(task["id"]))
+        )
+        add_pending_fail_reason(chat_id, str(task["id"]), sent["result"]["message_id"])
+    if not tasks:
+        telegram_send_message(chat_id, "Kutilayotgan sabab so‘rovi yo‘q.")
+    return {"ok": True, "cancelled": len(tasks)}
+
+
+def _miniapp_change_task(chat_id, task_id, new_text=None):
+    """Faqat egasining bugungi/ertangi pending vazifasini tahrirlaydi yoki o'chiradi."""
+    user = get_user_by_chat_id(chat_id)
+    if not user or user["state"] == "blocked":
+        raise HTTPException(status_code=403, detail="Vazifalarni boshqarish uchun botda /start bosing.")
+    if new_text is not None:
+        new_text = uzbek_to_latin(clean_task_text(new_text))
+        if not new_text or len(new_text) > 1000 or "\n" in new_text or "\r" in new_text:
+            raise HTTPException(status_code=400, detail="Vazifani 1–1000 belgili bitta qatorda yozing.")
+    today = get_today()
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT id FROM public.users WHERE id = %s FOR UPDATE", (user["id"],))
+            cur.execute("""
+                SELECT id, task_date FROM public.tasks
+                WHERE id::text = %s AND user_id = %s AND status = 'pending'
+                  AND task_date IN (%s, %s) FOR UPDATE
+            """, (task_id, user["id"], today, today + timedelta(days=1)))
+            task = cur.fetchone()
             if not task:
-                error = "Bu tahrirlash so‘rovi eskirgan. /vazifalar orqali qayta tanlang."
+                raise HTTPException(status_code=404, detail="Vazifa topilmadi, belgilangan yoki sanasi o‘tgan. Ro‘yxatni yangilang.")
+            if new_text is None:
+                cur.execute("DELETE FROM public.tasks WHERE id::text = %s AND user_id = %s", (task_id, user["id"]))
             else:
                 cur.execute("""
                     SELECT task_text FROM public.tasks
                     WHERE user_id = %s AND task_date = %s AND id::text <> %s
-                """, (user["id"], task["task_date"], str(task["id"])))
-                if normalize_task(cleaned) in {normalize_task(row["task_text"]) for row in cur.fetchall()}:
-                    error = "🔄 Shu sanada bunday vazifa bor. Tahrirlash xabariga boshqa matn bilan javob bering."
-                else:
-                    cur.execute("UPDATE public.tasks SET task_text = %s WHERE id::text = %s AND user_id = %s",
-                                (cleaned, str(task["id"]), user["id"]))
-                    cur.execute("DELETE FROM public.pending_task_edits WHERE chat_id = %s AND prompt_message_id = %s",
-                                (chat_id, reply.get("message_id")))
+                """, (user["id"], task["task_date"], task_id))
+                if normalize_task(new_text) in {normalize_task(row["task_text"]) for row in cur.fetchall()}:
+                    raise HTTPException(status_code=409, detail="Shu sanada bunday vazifa allaqachon bor.")
+                cur.execute("UPDATE public.tasks SET task_text = %s WHERE id::text = %s AND user_id = %s",
+                            (new_text, task_id, user["id"]))
         conn.commit()
-    if error:
-        telegram_send_message(chat_id, error)
-        return {"ok": False, "edit_rejected": True}
-    _remove_task_prompt(chat_id, reply.get("message_id"))
-    telegram_send_message(chat_id, f"✏️ Vazifa yangilandi:\n\n{cleaned}")
+    checklist_updated = True
     if task["task_date"] == today:
-        refresh_live_checklist(chat_id, user)
-    return {"ok": True, "route": "task_edited"}
+        try:
+            refresh_live_checklist(chat_id, user)
+        except Exception as error:
+            # Baza saqlangan: Telegram xatosi amalni qayta bajarishga olib kelmasin.
+            checklist_updated = False
+            print("Miniapp checklist update error:", type(error).__name__)
+    return {"ok": True, "task_id": task_id, "checklist_updated": checklist_updated}
+
+
+@router.patch("/miniapp/tasks/{task_id}")
+def miniapp_edit_task(task_id: str, payload: MiniappTaskEditRequest, chat_id: int = Depends(get_miniapp_chat_id)):
+    """Telegram imzosi bilan tekshirilgan foydalanuvchining vazifa matnini yangilaydi."""
+    return _miniapp_change_task(chat_id, task_id, payload.task_text)
+
+
+@router.delete("/miniapp/tasks/{task_id}")
+def miniapp_delete_task(task_id: str, chat_id: int = Depends(get_miniapp_chat_id)):
+    """Mini Appda tasdiqlangan o'chirishni foydalanuvchi huquqlari bilan bajaradi."""
+    return _miniapp_change_task(chat_id, task_id)
 
 
 @router.post("/telegram")
@@ -5748,7 +5744,7 @@ def telegram_webhook(
     background_tasks: BackgroundTasks,
     x_telegram_bot_api_secret_token: Optional[str] = Header(default=None)
 ):
-    """Telegram so‘rovlarini, sana tanlovi va vazifa tahririni tegishli handlerga uzatadi."""
+    """Bot so‘rovlarini uzatadi: tahrir Mini Appda, Boshqa sabab esa yozma javob orqali."""
 
     verify_webhook(x_telegram_bot_api_secret_token)
     print("========================================")
@@ -5853,10 +5849,9 @@ def telegram_webhook(
             if separator and management_action in (
                 "task_edit", "task_delete", "task_delete_yes", "task_delete_no"
             ):
-                return handle_task_management(
-                    chat_id, task_id, management_action.removeprefix("task_"),
-                    callback_query_id, callback_message_id
-                )
+                if callback_query_id:
+                    telegram_answer_callback(callback_query_id, "Tahrirlash Mini Appga ko‘chirildi.")
+                return send_task_management_link(chat_id)
 
             if callback_data.startswith("late_task|"):
                 choice = callback_data.split("|", 1)[1]
@@ -6017,14 +6012,19 @@ def telegram_webhook(
             }
 
         if message_text == "/vazifalar":
-            return handle_manage_tasks(chat_id)
+            return send_task_management_link(chat_id)
 
         if message_text == "/cancel":
-            return handle_cancel_task_edit(chat_id)
+            return cancel_custom_fail_reason(chat_id)
 
-        edit_result = handle_task_edit_reply(chat_id, message)
-        if edit_result is not None:
-            return edit_result
+        reason_result = handle_custom_fail_reason_reply(chat_id, message)
+        if reason_result is not None:
+            return reason_result
+
+        # Eski bot tahrirlash xabariga javob yangi vazifaga aylanmasin.
+        old_reply = message.get("reply_to_message") or {}
+        if old_reply.get("from", {}).get("is_bot") and (old_reply.get("text") or "").startswith("✏️ Vazifani tahrirlash\n"):
+            return send_task_management_link(chat_id)
 
         if message_text.startswith("/"):
 
@@ -6348,6 +6348,8 @@ def _tasks_to_json(tasks) -> list[dict]:
     birga beradi, sana/vaqt maydonlarini string qiladi.
     """
 
+    # Yozma sabab va tahrirlash huquqi Mini Appga ham uzatiladi.
+    today = get_today()
     result = []
 
     for task in tasks:
@@ -6372,8 +6374,12 @@ def _tasks_to_json(tasks) -> list[dict]:
                 "task_date": task_date,
                 "created_at": created_at,
                 "fail_reason": task.get("fail_reason"),
+                "fail_reason_text": task.get("fail_reason_text"),
+                "can_manage": task["status"] == "pending" and task_date in (
+                    today.isoformat(), (today + timedelta(days=1)).isoformat()
+                ),
                 "fail_reason_display": (
-                    fail_reason_display(task.get("fail_reason"))
+                    fail_reason_display(task.get("fail_reason"), task.get("fail_reason_text"))
                     if task["status"] == "failed"
                     else None
                 ),
@@ -6388,6 +6394,7 @@ def miniapp_day(
     selected_date: date = Query(..., alias="date"),
     chat_id: int = Depends(get_miniapp_chat_id)
 ):
+    """Kun vazifalarini, jumladan ertangi reja va yozma sabablarni ko'rsatadi."""
 
     user = get_user_by_chat_id(chat_id)
 
@@ -6398,11 +6405,11 @@ def miniapp_day(
             detail="Foydalanuvchi topilmadi"
         )
 
-    if selected_date > get_today():
+    if selected_date > get_today() + timedelta(days=1):
 
         raise HTTPException(
             status_code=400,
-            detail="Kelajakdagi kunni ko‘rib bo‘lmaydi"
+            detail="Faqat ertagacha bo‘lgan kunlarni ko‘rish mumkin"
         )
 
     with get_connection() as conn:
@@ -6436,6 +6443,7 @@ def miniapp_day(
 def miniapp_daily(
     chat_id: int = Depends(get_miniapp_chat_id)
 ):
+    """Bugungi hisobotga ertangi vazifalarni ochish sanasini ham qo'shadi."""
 
     user = get_user_by_chat_id(chat_id)
 
@@ -6492,6 +6500,7 @@ def miniapp_daily(
     return {
         "ok": True,
         "date": today.isoformat(),
+        "tomorrow": (today + timedelta(days=1)).isoformat(),
         "stats": today_stats,
         "tasks": _tasks_to_json(today_tasks),
         "yesterday": {
