@@ -667,6 +667,35 @@
     .ring-wrap, .ring-wrap svg { width: 84px; height: 84px; }
     .week-chart { gap: 5px; padding-left: 8px; padding-right: 8px; }
   }
+
+  /* Tahrirlash va o'chirish boshqaruvlari mavjud dizayn ranglarida. */
+  .task-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .task-actions button, .tomorrow-btn, .task-dialog button {
+    font: inherit; font-size: 13px; border: 1px solid var(--border); border-radius: 12px;
+    background: rgba(159,184,179,.08); color: var(--text); padding: 10px 14px; cursor: pointer;
+    min-height: 44px;
+  }
+  .task-actions .task-delete { color: #f6a89e; }
+  .tomorrow-btn { width: 100%; margin-bottom: 16px; text-align: left; }
+  .task-dialog { width: calc(100% - 32px); max-width: 420px; box-sizing: border-box;
+    border: 1px solid var(--border); border-radius: 22px; padding: 24px;
+    background: #133b36; color: var(--text); max-height: 85vh; overflow: auto;
+  }
+  .task-dialog::backdrop { background: rgba(0,0,0,.65); }
+  .task-dialog h2 { font-size: 20px; margin: 0 0 12px; }
+  .task-dialog p { line-height: 1.5; overflow-wrap: anywhere; }
+  .task-dialog label { display: block; margin: 16px 0 8px; }
+  .task-dialog [hidden] { display: none; }
+  .task-dialog textarea { box-sizing: border-box; width: 100%; min-height: 100px; padding: 12px;
+    border: 1px solid var(--border); border-radius: 12px; background: #0f2e2b; color: var(--text); font: inherit; }
+  .task-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+  .task-dialog .primary { background: #c5e8bc; color: #0f2e2b; font-weight: 600; }
+  .task-dialog .danger { background: #ffb4a9; }
+  .task-dialog button:disabled { opacity: .5; cursor: wait; }
+  .task-error { color: #ffb4a9; font-size: 13px; }
+  .task-notice { margin: 0 0 12px; font-size: 13px; color: var(--text-dim); }
+  .task-notice:empty { display: none; }
+
 </style>
 </head>
 <body>
@@ -690,6 +719,7 @@
     <button class="tab" data-period="yearly" role="tab" aria-selected="false">Yillik</button>
   </div>
 
+  <p id="taskNotice" class="task-notice" role="status" aria-live="polite"></p>
   <div id="content">
     <div class="skeleton"></div>
     <div class="skeleton"></div>
@@ -710,6 +740,20 @@
     <div id="daySheetContent"></div>
   </section>
 </div>
+
+<dialog id="taskDialog" class="task-dialog" aria-labelledby="taskDialogTitle" aria-describedby="taskDialogText">
+  <form id="taskForm">
+    <h2 id="taskDialogTitle"></h2>
+    <p id="taskDialogText"></p>
+    <label id="taskInputLabel" for="taskInput">Vazifa matni</label>
+    <textarea id="taskInput" maxlength="1000" rows="3"></textarea>
+    <p id="taskError" class="task-error" role="alert"></p>
+    <div class="task-dialog-actions">
+      <button id="taskCancel" type="button">Bekor qilish</button>
+      <button id="taskSubmit" class="primary" type="submit">Saqlash</button>
+    </div>
+  </form>
+</dialog>
 
 <script>
 (function () {
@@ -744,6 +788,97 @@
   let selectedWeekStart = null;
   let selectedMonthYear = null;
   let selectedMonth = null;
+
+  // Vazifa amallari Mini Appda bajariladi; sana va status o'zgarmaydi.
+  const taskRegistry = new Map();
+  const taskDialog = document.getElementById('taskDialog');
+  const taskForm = document.getElementById('taskForm');
+  const taskInput = document.getElementById('taskInput');
+  const taskInputLabel = document.getElementById('taskInputLabel');
+  const taskDialogTitle = document.getElementById('taskDialogTitle');
+  const taskDialogText = document.getElementById('taskDialogText');
+  const taskError = document.getElementById('taskError');
+  const taskSubmit = document.getElementById('taskSubmit');
+  const taskCancel = document.getElementById('taskCancel');
+  let chosenTask = null;
+  let taskAction = null;
+  let taskBusy = false;
+  let openSheetDate = null;
+  let dayRequest = 0;
+  let periodRequest = 0;
+
+  function taskActionsMarkup(task) {
+    taskRegistry.set(String(task.id), task);
+    if (!task.can_manage) return '';
+    const id = encodeURIComponent(task.id);
+    return '<div class="task-actions">' +
+      '<button type="button" data-task-action="edit" data-task-id="' + id + '">✏️ Tahrirlash</button>' +
+      '<button type="button" class="task-delete" data-task-action="delete" data-task-id="' + id + '">🗑 O‘chirish</button></div>';
+  }
+
+  function openTaskDialog(event) {
+    const button = event.target.closest('[data-task-action]');
+    if (!button) return;
+    const task = taskRegistry.get(decodeURIComponent(button.dataset.taskId));
+    if (!task || !task.can_manage) return;
+    chosenTask = task;
+    taskAction = button.dataset.taskAction;
+    const editing = taskAction === 'edit';
+    taskDialogTitle.textContent = editing ? 'Vazifani tahrirlash' : 'Vazifani o‘chirish';
+    taskDialogText.textContent = editing ? 'Vazifaning sanasi o‘zgarmaydi.' : '“' + task.task_text + '” vazifasini o‘chirasizmi?';
+    taskInputLabel.hidden = !editing;
+    taskInput.hidden = !editing;
+    taskInput.disabled = !editing;
+    taskInput.value = task.task_text;
+    taskSubmit.textContent = editing ? 'Saqlash' : 'Ha, o‘chirish';
+    taskSubmit.classList.toggle('danger', !editing);
+    taskError.textContent = '';
+    taskDialog.showModal();
+    (editing ? taskInput : taskCancel).focus();
+  }
+
+  contentEl.addEventListener('click', openTaskDialog);
+  daySheetContent.addEventListener('click', openTaskDialog);
+  taskCancel.addEventListener('click', function () { if (!taskBusy) taskDialog.close(); });
+  taskDialog.addEventListener('cancel', function (event) { if (taskBusy) event.preventDefault(); });
+  taskForm.addEventListener('submit', function (event) {
+    event.preventDefault();
+    if (taskBusy || !chosenTask) return;
+    const text = taskInput.value.trim();
+    if (taskAction === 'edit' && (!text || text.length > 1000 || /[\r\n]/.test(text))) {
+      taskError.textContent = 'Vazifani 1–1000 belgili bitta qatorda yozing.';
+      taskInput.focus();
+      return;
+    }
+    taskBusy = true;
+    taskSubmit.disabled = true;
+    taskCancel.disabled = true;
+    taskInput.disabled = true;
+    taskError.textContent = '';
+    const editing = taskAction === 'edit';
+    apiFetch('/tasks/' + encodeURIComponent(chosenTask.id), {
+      method: editing ? 'PATCH' : 'DELETE',
+      headers: {'Content-Type': 'application/json'},
+      ...(editing ? {body: JSON.stringify({task_text: text})} : {})
+    }).then(function (result) {
+      taskDialog.close();
+      Object.keys(cache).forEach(function (key) { delete cache[key]; });
+      taskRegistry.clear();
+      document.getElementById('taskNotice').textContent =
+        (editing ? 'Vazifa yangilandi.' : 'Vazifa o‘chirildi.') +
+        (result.checklist_updated === false ? ' Botdagi ro‘yxat keyingi yangilanishda moslashadi.' : '');
+      loadPeriod(currentPeriod, true);
+      if (openSheetDate) openDaySheet(openSheetDate);
+      haptic('light');
+    }).catch(function (error) {
+      taskError.textContent = error.message || 'Amal bajarilmadi. Qayta urinib ko‘ring.';
+    }).finally(function () {
+      taskBusy = false;
+      taskSubmit.disabled = false;
+      taskCancel.disabled = false;
+      taskInput.disabled = !editing;
+    });
+  });
 
   const monthNames = [
     'Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun',
@@ -822,13 +957,13 @@
     setHeaderName(tgUser.first_name);
   }
 
-  function apiFetch(path) {
+  function apiFetch(path, options) {
     const url = API_BASE + path + (path.includes('?') ? '&' : '?') +
       'initData=' + encodeURIComponent(initData || '');
-    return fetch(url).then(function (res) {
+    return fetch(url, options).then(function (res) {
       if (!res.ok) {
         return res.json().catch(function () { return {}; }).then(function (body) {
-          throw new Error(body.detail || ('Xatolik: ' + res.status));
+          throw new Error(typeof body.detail === 'string' ? body.detail : ('Xatolik: ' + res.status));
         });
       }
       return res.json();
@@ -893,6 +1028,7 @@
 
     html += metricMarkup(s.completed, s.failed || 0, s.pending || 0);
 
+    html += '<button type="button" class="tomorrow-btn" data-day-date="' + escapeHtml(data.tomorrow || addDays(data.date, 1)) + '">🌅 Ertangi vazifalarni ochish →</button>';
     html += '<p class="section-title">VAZIFALAR</p>';
 
     if (!data.tasks.length) {
@@ -907,6 +1043,7 @@
             '<div class="task-body">' +
               '<p class="task-text' + (t.status === 'completed' ? ' done' : '') + '">' + escapeHtml(t.task_text) + '</p>' +
               (t.status === 'failed' ? '<p class="task-reason">' + escapeHtml(t.fail_reason_display || 'sababi yozilmadi') + '</p>' : '') +
+              taskActionsMarkup(t) +
             '</div>' +
           '</div>'
         );
@@ -1067,6 +1204,8 @@
   }
 
   function openDaySheet(selectedDate) {
+    openSheetDate = selectedDate;
+    const request = ++dayRequest;
     haptic('light');
     daySheetTitle.textContent = shortDate(selectedDate);
     daySheetSubtitle.textContent = 'Vazifalar yuklanmoqda…';
@@ -1077,9 +1216,10 @@
 
     apiFetch('/day?date=' + encodeURIComponent(selectedDate))
       .then(function (data) {
-        renderDaySheet(data);
+        if (request === dayRequest && openSheetDate === selectedDate) renderDaySheet(data);
       })
       .catch(function (err) {
+        if (request !== dayRequest || openSheetDate !== selectedDate) return;
         daySheetSubtitle.textContent = '';
         daySheetContent.innerHTML = '<div class="state-msg"><span class="state-icon">⚠️</span>' +
           escapeHtml(err.message || 'Vazifalarni yuklab bo‘lmadi') + '</div>';
@@ -1104,6 +1244,7 @@
           '<div class="task-icon ' + iconClass + '">' + icon + '</div>' +
           '<div class="task-body"><p class="task-text' + (t.status === 'completed' ? ' done' : '') + '">' + escapeHtml(t.task_text) + '</p>' +
           (t.status === 'failed' ? '<p class="task-reason">Sabab: ' + escapeHtml(t.fail_reason_display || 'yozilmagan') + '</p>' : '') +
+          taskActionsMarkup(t) +
           '</div></div>';
       });
     }
@@ -1112,6 +1253,8 @@
   }
 
   function closeDaySheet() {
+    openSheetDate = null;
+    dayRequest++;
     daySheetOverlay.classList.remove('open');
     daySheetOverlay.setAttribute('aria-hidden', 'true');
     document.body.classList.remove('sheet-open');
@@ -1168,6 +1311,7 @@
   }
 
   function loadPeriod(period, force) {
+    const request = ++periodRequest;
     currentPeriod = period;
     const path = periodPath(period);
     const cacheKey = path;
@@ -1182,6 +1326,7 @@
 
     apiFetch(path)
       .then(function (data) {
+        if (request !== periodRequest) return;
         cache[cacheKey] = data;
         lastUpdatedAt = new Date();
         refreshBtn.classList.remove('loading');
@@ -1190,6 +1335,7 @@
         }
       })
       .catch(function (err) {
+        if (request !== periodRequest) return;
         refreshBtn.classList.remove('loading');
         if (currentPeriod === period) {
           showError(err.message || 'Ma\'lumotni yuklab bo\'lmadi');
