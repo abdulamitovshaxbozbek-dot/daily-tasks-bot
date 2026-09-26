@@ -1350,6 +1350,7 @@ def build_live_checklist(
     heading: str,
     instructions: Optional[str] = None
 ) -> tuple[str, dict]:
+    """Checklistda belgilash, tahrirlash va o‘chirish tugmalarini ko‘rsatadi."""
 
     pending_tasks = summary["pending"]
 
@@ -1378,6 +1379,10 @@ def build_live_checklist(
             f"{index}. ⏳ {task['task_text']}"
         )
 
+        keyboard.append([
+            {"text": f"✏️ {index}", "callback_data": f"task_edit|{task['id']}"},
+            {"text": f"🗑 {index}", "callback_data": f"task_delete|{task['id']}"}
+        ])
         keyboard.append(
             [
                 {
@@ -1821,6 +1826,7 @@ def handle_create_tasks(
     text: str,
     from_voice: bool = False
 ):
+    """Vazifani qabul qiladi; soat 22:00 dan keyin saqlash sanasini so'raydi."""
 
     user = get_user_by_chat_id(
         chat_id
@@ -1846,43 +1852,6 @@ def handle_create_tasks(
 
         return {
             "ok": False
-        }
-
-    if user["state"] == "completed":
-
-        next_morning_time = (
-            str(user["morning_time"])[:5]
-            if user["morning_time"]
-            else "ertalab"
-        )
-
-        telegram_send_message_with_keyboard(
-            chat_id,
-
-            "🌙 Bugungi kuningiz yakunlangan.\n\n"
-            f"Yangi kuningiz soat {next_morning_time} da "
-            "boshlanadi. Shundan keyin yangi vazifalarni "
-            "yuborishingiz mumkin.\n\n"
-            "📊 Natijangizni pastdagi tugma orqali ko‘rishingiz "
-            "mumkin.",
-
-            {
-                "inline_keyboard": [
-                    [
-                        {
-                            "text": "📊 Hisobotni ko‘rish",
-                            "web_app": {
-                                "url": MINIAPP_URL
-                            }
-                        }
-                    ]
-                ]
-            }
-        )
-
-        return {
-            "ok": False,
-            "day_completed": True
         }
 
     raw_tasks = re.split(
@@ -1915,7 +1884,43 @@ def handle_create_tasks(
             "ok": False
         }
 
+    # Sana va vaqt bitta so'rovdan olinadi: yarim tunda sana adashmaydi.
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Tashkent')::date,
+                    TO_CHAR(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Tashkent', 'HH24:MI')
+            """)
+            today, current_time = cur.fetchone()
+
+    if current_time >= "22:00":
+        set_pending_late_tasks(chat_id, tasks, from_voice)
+        telegram_send_message_with_keyboard(
+            chat_id,
+            "🌙 Soat kech bo'lib qoldi.\n\n"
+            "Bu vazifa(lar)ni qaysi kun uchun belgilashni xohlaysiz?\n\n"
+            + "\n".join(f"• {task}" for task in tasks),
+            {"inline_keyboard": [[
+                {"text": "📅 Bugunga", "callback_data": "late_task|today"},
+                {"text": "🌅 Ertagagi kunga", "callback_data": "late_task|tomorrow"}
+            ]]}
+        )
+        return {"ok": True, "awaiting_date_choice": True}
+
+    return _save_tasks_for_date(user, tasks, today, from_voice)
+
+
+def _save_tasks_for_date(user, tasks, task_date, from_voice=False):
+    """Ikkala oqim vazifalarini tanlangan sanaga bir xil tekshiruv bilan saqlaydi."""
+    chat_id = user["telegram_chat_id"]
     today = get_today()
+    date_label = "bugun" if task_date == today else format_uz_date(task_date)
+    tasks = [uzbek_to_latin(clean_task_text(task)) for task in tasks]
+    tasks = [task for task in tasks if task]
+    if not tasks:
+        telegram_send_message(chat_id, "⚠️ Vazifa matni bo‘sh.")
+        return {"ok": False}
 
     # Birinchi vazifami? (1-koddan, to‘g‘ri cursor bilan)
     with get_connection() as conn:
@@ -1950,7 +1955,7 @@ def handle_create_tasks(
                 """,
                 (
                     user["id"],
-                    today
+                    task_date
                 )
             )
 
@@ -2000,7 +2005,7 @@ def handle_create_tasks(
                     (
                         user["id"],
                         task_text,
-                        today
+                        task_date
                     )
                 )
 
@@ -2017,7 +2022,7 @@ def handle_create_tasks(
             # Bugun barcha vazifalar belgilangandan keyin yana task
             # qo'shilsa, yangi task ham tugagach completion xabari qayta
             # yuborilishi uchun bir martalik flagni ochamiz.
-            if added_count > 0:
+            if added_count > 0 and task_date == today:
 
                 cur.execute(
                     """
@@ -2079,7 +2084,7 @@ def handle_create_tasks(
 
         response_parts.append(
             f"🔄 {duplicate_count} ta vazifa "
-            f"bugun allaqachon qo‘shilgan."
+            f"{date_label} allaqachon qo‘shilgan."
         )
 
         response_parts.append(
@@ -2092,6 +2097,9 @@ def handle_create_tasks(
             "🤲 Kuningiz barakali o‘tsin!"
         )
 
+    if added_count > 0 and task_date != today:
+        response_parts.append(f"📅 Sana: {format_uz_date(task_date)}")
+
     if response_parts:
 
         telegram_send_message(
@@ -2102,7 +2110,7 @@ def handle_create_tasks(
     # Yangi vazifa qo'shilganda eski checklistni pastga ko'chiramiz:
     # eski xabar o'chadi, DB'dagi barcha pending vazifalar bilan yangi
     # checklist tasdiq xabaridan keyin yuboriladi.
-    if added_count > 0:
+    if added_count > 0 and task_date == today:
 
         refresh_live_checklist(
             chat_id,
@@ -2120,6 +2128,73 @@ def handle_create_tasks(
         "added": added_count,
         "duplicates": duplicate_count
     }
+
+
+def set_pending_late_tasks(chat_id, tasks, from_voice=False):
+    """Sana tanlanmaguncha vazifalar va ovozli manba belgisini vaqtincha saqlaydi."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO public.pending_late_tasks (chat_id, tasks, created_at)
+                VALUES (%s, %s::jsonb, now())
+                ON CONFLICT (chat_id) DO UPDATE
+                SET tasks = EXCLUDED.tasks, created_at = EXCLUDED.created_at
+            """, (chat_id, json.dumps({"tasks": tasks, "from_voice": from_voice})))
+        conn.commit()
+
+
+def handle_late_task_choice(
+    chat_id, choice, callback_query_id=None, message_id=None
+):
+    """Kechki tanlovni bir marta olib, vazifalarni bugun yoki ertagaga saqlaydi."""
+    if choice not in ("today", "tomorrow"):
+        if callback_query_id:
+            telegram_answer_callback(callback_query_id, "Noto‘g‘ri tanlov.")
+        return {"ok": False, "invalid_choice": True}
+
+    user = get_user_by_chat_id(chat_id)
+    if not user or user["state"] == "blocked":
+        if callback_query_id:
+            telegram_answer_callback(callback_query_id, "Avval /start buyrug‘ini bosing.")
+        return {"ok": False}
+
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                DELETE FROM public.pending_late_tasks
+                WHERE chat_id = %s
+                RETURNING tasks
+            """, (chat_id,))
+            row = cur.fetchone()
+        conn.commit()
+
+    if not row:
+        if callback_query_id:
+            telegram_answer_callback(callback_query_id, "Bu so‘rov eskirgan.")
+        return {"ok": True, "expired": True}
+
+    payload = row["tasks"]
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    # Oddiy JSON ro'yxati ko'rinishidagi yozuvlar ham qo'llab-quvvatlanadi.
+    tasks = payload["tasks"] if isinstance(payload, dict) else payload
+    from_voice = bool(payload.get("from_voice", False)) if isinstance(payload, dict) else False
+    task_date = get_today()
+    if choice == "tomorrow":
+        task_date += timedelta(days=1)
+
+    result = _save_tasks_for_date(user, tasks, task_date, from_voice)
+    if message_id:
+        try:
+            telegram_delete_message(chat_id, message_id)
+        except Exception as error:
+            print("Late task delete message error:", type(error).__name__)
+    if callback_query_id:
+        telegram_answer_callback(
+            callback_query_id,
+            "Saqlandi ✅" if result.get("ok") else "Vazifa saqlanmadi."
+        )
+    return result
 
 
 # =========================================================
@@ -4042,17 +4117,10 @@ def handle_broadcast(
 # =========================================================
 
 def handle_day_cycle():
-    """
-    User holatini Asia/Tashkent vaqti bo'yicha boshqaradi.
+    """Eski checklistni tozalaydi va ertalabki xabarni kuniga bir marta yuboradi.
 
-    - 00:00 da active -> completed va kechagi checklist yopiladi.
-    - Har userning morning_time vaqti kelganda completed -> active
-      bo'ladi va yangi kunni rejalashtirish xabari yuboriladi.
-    - morning_time'dan 3 soat o'tib, hali umuman task yozmagan
-      active userlarga eslatma yuboriladi (bir martalik, kuniga bir marta).
-
-    Endpoint har daqiqada chaqirilishi mumkin: state shartlari sababli
-    bir xil o'tish va xabar takroran bajarilmaydi.
+    Kun yopilmaydi; oldindan yozilgan bugungi vazifalar xabarda ko'rsatiladi.
+    Morning_time'dan keyingi 3 soatlik eslatma olib tashlangan.
     """
 
     with get_connection() as conn:
@@ -4062,6 +4130,7 @@ def handle_day_cycle():
             cur.execute(
                 """
                 SELECT
+                    (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Tashkent')::date,
                     TO_CHAR(
                         CURRENT_TIMESTAMP
                         AT TIME ZONE 'Asia/Tashkent',
@@ -4070,13 +4139,14 @@ def handle_day_cycle():
                 """
             )
 
-            current_time = cur.fetchone()[0]
+            today, current_time = cur.fetchone()
 
     # -----------------------------------------------------
-    # Yangi kun: userlarni tungi yopiq holatga o'tkazamiz.
+    # Yangi kun: faqat eski checklistni tozalaymiz, user faol qoladi.
     # Eski checklist message_id sini RETURNING orqali olib,
     # Telegramdagi xabarni ham o'chirishga harakat qilamiz.
     # -----------------------------------------------------
+    deleted_checklists = 0
     if current_time == "00:00":
 
         with get_connection() as conn:
@@ -4089,7 +4159,6 @@ def handle_day_cycle():
                     """
                     UPDATE public.users AS u
                     SET
-                        state = 'completed',
                         live_checklist_message_id = NULL,
                         live_checklist_date = NULL
                     FROM (
@@ -4099,6 +4168,11 @@ def handle_day_cycle():
                             live_checklist_message_id
                         FROM public.users
                         WHERE state = 'active'
+                          AND (live_checklist_message_id IS NOT NULL
+                               OR live_checklist_date IS NOT NULL)
+                          AND (live_checklist_date IS NULL OR live_checklist_date < (
+                              CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Tashkent'
+                          )::date)
                           AND (%s = false OR active_bot_id = %s)
                         FOR UPDATE
                     ) AS old
@@ -4139,19 +4213,8 @@ def handle_day_cycle():
                     repr(error)
                 )
 
-        return {
-            "ok": True,
-            "action": "day_closed",
-            "time": current_time,
-            "users": len(closed_users),
-            "deleted_checklists": deleted_checklists
-        }
-
-    # -----------------------------------------------------
-    # User tanlagan ertalabki vaqti: faqat completed userni
-    # atomar tarzda active qilamiz. Bir daqiqada endpoint bir necha
-    # marta chaqirilsa ham xabar faqat bir marta yuboriladi.
-    # -----------------------------------------------------
+    # Xabardan oldin sanani atomar belgilaymiz: parallel chaqiruvlar
+    # ham kuniga faqat bitta yuborishga ruxsat oladi. State o'zgarmaydi.
     with get_connection() as conn:
 
         with conn.cursor(
@@ -4161,8 +4224,9 @@ def handle_day_cycle():
             cur.execute(
                 """
                 UPDATE public.users
-                SET state = 'active'
-                WHERE state = 'completed'
+                SET last_morning_greeting_date = %s
+                WHERE state = 'active'
+                  AND last_morning_greeting_date IS DISTINCT FROM %s
                   AND morning_time IS NOT NULL
                   AND LEFT(morning_time::text, 5) = %s
                   AND (%s = false OR active_bot_id = %s)
@@ -4171,24 +4235,39 @@ def handle_day_cycle():
                     telegram_chat_id,
                     first_name
                 """,
-                (current_time, require_joined(), bot_id())
+                (today, today, current_time, require_joined(), bot_id())
             )
 
-            activated_users = cur.fetchall()
+            morning_users = cur.fetchall()
 
         conn.commit()
 
     results = []
 
-    for user in activated_users:
+    for user in morning_users:
 
         chat_id = user["telegram_chat_id"]
         first_name = user["first_name"] or "Do‘st"
         try:
 
-            telegram_send_message(
-                chat_id,
-                f"""🌅 Assalomu alaykum, {first_name}!
+            with get_connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("""
+                        SELECT task_text, status FROM public.tasks
+                        WHERE user_id = %s AND task_date = %s
+                        ORDER BY created_at ASC
+                    """, (user["id"], today))
+                    today_tasks = cur.fetchall()
+
+            if today_tasks:
+                greeting = (
+                    f"🌅 Assalomu alaykum, {first_name}!\n\n"
+                    "Kecha rejalashtirgan vazifalaringiz:\n\n"
+                    + "\n".join(f"• {task['task_text']}" for task in today_tasks)
+                    + "\n\nIshga tushirdikmi? Omad! 💪"
+                )
+            else:
+                greeting = f"""🌅 Assalomu alaykum, {first_name}!
 
 Bugun maqsadingiz sari qanday qadam tashlaysiz?
 
@@ -4198,7 +4277,10 @@ Masalan:
 • Kitobdan 20 bet o‘qish
 • 30 daqiqa piyoda yurish
 • Ingliz tilidan 5 ta so‘z yodlash"""
-            )
+
+            telegram_send_message(chat_id, greeting)
+            if today_tasks:
+                refresh_live_checklist(chat_id, user)
 
             results.append(
                 {
@@ -4232,112 +4314,6 @@ Masalan:
                     block_conn.commit()
 
             results.append(
-                {
-                    "chat_id": chat_id,
-                    "sent": False,
-                    "error": error_text
-                }
-            )
-
-    # -----------------------------------------------------
-    # Morning_time'dan 3 soat o'tgan, lekin bugun hali umuman
-    # task yozmagan active userlarga eslatma yuboramiz.
-    # Yuborishdan oldin atomar claim qilinadi va commit saqlanadi.
-    # Vaqti o'tgan eslatmalar keyingi chaqiruvda ham olinadi.
-    # Yuborish xatosida claim bekor qilinmaydi: avtomatik qayta yuborilmaydi.
-    # -----------------------------------------------------
-
-    with get_connection() as conn:
-
-        with conn.cursor(
-            cursor_factory=RealDictCursor
-        ) as cur:
-
-            cur.execute(
-                """
-                UPDATE public.users
-                SET no_task_reminder_sent_date = (
-                    CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Tashkent'
-                )::date
-                WHERE state = 'active'
-                  AND morning_time IS NOT NULL
-                  AND (
-                      CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Tashkent'
-                  )::time >= morning_time + interval '3 hours'
-                  AND no_task_reminder_sent_date IS DISTINCT FROM (
-                      CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Tashkent'
-                  )::date
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM public.tasks t
-                      WHERE t.user_id = public.users.id
-                        AND t.task_date = (
-                            CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Tashkent'
-                        )::date
-                  )
-                  AND (%s = false OR active_bot_id = %s)
-                RETURNING id, telegram_chat_id, first_name
-                """,
-                (require_joined(), bot_id())
-            )
-
-            no_task_users = cur.fetchall()
-
-        conn.commit()
-
-    no_task_results = []
-
-    for user in no_task_users:
-
-        chat_id = user["telegram_chat_id"]
-        first_name = user["first_name"] or "Do‘st"
-
-        try:
-
-            telegram_send_message(
-                chat_id,
-                f"""⏰ {first_name}, bugungi rejangiz hali bo‘sh.
-
-Atigi 1 ta kichik vazifa yozib boshlang. 👣
-
-Masalan:
-• Ingliz tilidan 5 ta so‘z yodlash
-
-Har kuni maqsad sari bir qadam."""
-            )
-
-            no_task_results.append(
-                {
-                    "chat_id": chat_id,
-                    "sent": True
-                }
-            )
-
-        except Exception as error:
-
-            error_text = str(error)
-
-            if (
-                "403" in error_text
-                or "bot was blocked" in error_text.lower()
-            ):
-
-                with get_connection() as block_conn:
-
-                    with block_conn.cursor() as block_cur:
-
-                        block_cur.execute(
-                            """
-                            UPDATE public.users
-                            SET state = 'blocked'
-                            WHERE id = %s
-                            """,
-                            (user["id"],)
-                        )
-
-                    block_conn.commit()
-
-            no_task_results.append(
                 {
                     "chat_id": chat_id,
                     "sent": False,
@@ -4347,14 +4323,11 @@ Har kuni maqsad sari bir qadam."""
 
     return {
         "ok": True,
-        "action": "morning_activation",
+        "action": "morning_greeting",
         "time": current_time,
-        "activated": len(activated_users),
+        "greeted": len(morning_users),
         "results": results,
-        "no_task_reminders_sent": len(
-            [r for r in no_task_results if r["sent"]]
-        ),
-        "no_task_results": no_task_results
+        "deleted_checklists": deleted_checklists
     }
 
 def handle_live_checklist_reminders(period: str):
@@ -5577,12 +5550,205 @@ def handle_voice_confirm(
 # TELEGRAM WEBHOOK
 # =========================================================
 
+def handle_manage_tasks(chat_id):
+    """Bugungi va ertangi bajarilmagan vazifalarni botda boshqarish uchun chiqaradi."""
+    user = get_user_by_chat_id(chat_id)
+    if not user or user["state"] == "blocked":
+        telegram_send_message(chat_id, "⚠️ Avval /start buyrug‘ini bosing.")
+        return {"ok": False}
+    today = get_today()
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, task_text, task_date FROM public.tasks
+                WHERE user_id = %s AND status = 'pending'
+                  AND task_date IN (%s, %s)
+                ORDER BY task_date, created_at, id
+            """, (user["id"], today, today + timedelta(days=1)))
+            tasks = cur.fetchall()
+    if not tasks:
+        telegram_send_message(chat_id, "📋 Bugun va ertaga uchun bajarilmagan vazifalar yo‘q.")
+    for offset in range(0, len(tasks), 5):
+        lines = ["📋 Vazifalarni boshqarish", ""]
+        keyboard = []
+        for index, task in enumerate(tasks[offset:offset + 5], offset + 1):
+            label = "Bugun" if task["task_date"] == today else "Ertaga"
+            lines.append(f"{index}. {label}: {task['task_text'][:300]}")
+            keyboard.append([
+                {"text": f"✏️ {index}", "callback_data": f"task_edit|{task['id']}"},
+                {"text": f"🗑 {index}", "callback_data": f"task_delete|{task['id']}"}
+            ])
+        telegram_send_message_with_keyboard(chat_id, "\n".join(lines), {"inline_keyboard": keyboard})
+    return {"ok": True, "route": "manage_tasks", "count": len(tasks)}
+
+
+def _remove_task_prompt(chat_id, message_id):
+    """Amal bajarilgach yordamchi xabarni o'chiradi; xato saqlashni takrorlatmaydi."""
+    if message_id:
+        try:
+            telegram_delete_message(chat_id, message_id)
+        except Exception as error:
+            print("Task prompt delete error:", type(error).__name__)
+
+
+def handle_task_management(chat_id, task_id, action, callback_query_id=None, message_id=None):
+    """Egasi va sanani tekshirib, tahrirlashni boshlaydi yoki tasdiqlangan vazifani o'chiradi."""
+    if action not in ("edit", "delete", "delete_yes", "delete_no"):
+        return {"ok": False}
+    if action == "delete_no":
+        if callback_query_id:
+            telegram_answer_callback(callback_query_id, "Bekor qilindi")
+        _remove_task_prompt(chat_id, message_id)
+        return {"ok": True, "cancelled": True}
+    user = get_user_by_chat_id(chat_id)
+    if not user or user["state"] == "blocked":
+        if callback_query_id:
+            telegram_answer_callback(callback_query_id, "Avval /start buyrug‘ini bosing.")
+        return {"ok": False}
+    today = get_today()
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, task_text, task_date FROM public.tasks
+                WHERE id::text = %s AND user_id = %s AND status = 'pending'
+                  AND task_date IN (%s, %s)
+                FOR UPDATE
+            """, (task_id, user["id"], today, today + timedelta(days=1)))
+            task = cur.fetchone()
+            if task and action == "delete_yes":
+                cur.execute("DELETE FROM public.tasks WHERE id::text = %s AND user_id = %s",
+                            (task_id, user["id"]))
+                cur.execute("DELETE FROM public.pending_task_edits WHERE chat_id = %s AND task_id = %s",
+                            (chat_id, task_id))
+        conn.commit()
+    if not task:
+        if callback_query_id:
+            telegram_answer_callback(callback_query_id, "Vazifa topilmadi, belgilangan yoki sanasi o‘tgan.")
+        return {"ok": True, "unavailable": True}
+
+    if action == "edit":
+        sent = telegram_send_message_with_keyboard(
+            chat_id,
+            "✏️ Vazifani tahrirlash\n\n"
+            f"Hozirgi matn: {task['task_text'][:1000]}\n\n"
+            "Shu xabarga javob qilib yangi matnni bitta qatorda yuboring (1000 belgigacha).\n"
+            "Sana o‘zgarmaydi. Bekor qilish: /cancel",
+            {"force_reply": True, "selective": True, "input_field_placeholder": "Vazifaning yangi matni"}
+        )
+        prompt_id = sent["result"]["message_id"]
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO public.pending_task_edits (chat_id, task_id, prompt_message_id, created_at)
+                    VALUES (%s, %s, %s, now())
+                    ON CONFLICT (chat_id) DO UPDATE SET task_id = EXCLUDED.task_id,
+                        prompt_message_id = EXCLUDED.prompt_message_id, created_at = EXCLUDED.created_at
+                """, (chat_id, task_id, prompt_id))
+            conn.commit()
+    elif action == "delete":
+        telegram_send_message_with_keyboard(
+            chat_id, f"🗑 Ushbu vazifani o‘chirasizmi?\n\n{task['task_text'][:1000]}",
+            {"inline_keyboard": [[
+                {"text": "🗑 Ha, o‘chirish", "callback_data": f"task_delete_yes|{task_id}"},
+                {"text": "Bekor qilish", "callback_data": f"task_delete_no|{task_id}"}
+            ]]}
+        )
+    else:
+        _remove_task_prompt(chat_id, message_id)
+        telegram_send_message(chat_id, "🗑 Vazifa o‘chirildi.")
+        if task["task_date"] == today:
+            refresh_live_checklist(chat_id, user)
+    if callback_query_id:
+        telegram_answer_callback(callback_query_id, "O‘chirildi ✅" if action == "delete_yes" else "")
+    return {"ok": True, "route": f"task_{action}"}
+
+
+def handle_cancel_task_edit(chat_id):
+    """Kutilayotgan tahrirlashni bekor qiladi; vazifaning o'ziga tegmaydi."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM public.pending_task_edits WHERE chat_id = %s RETURNING prompt_message_id",
+                        (chat_id,))
+            row = cur.fetchone()
+        conn.commit()
+    if row:
+        _remove_task_prompt(chat_id, row[0])
+    telegram_send_message(chat_id, "Tahrirlash bekor qilindi." if row else "Kutilayotgan tahrirlash yo‘q.")
+    return {"ok": True, "cancelled": bool(row)}
+
+
+def handle_task_edit_reply(chat_id, message):
+    """Faqat tahrirlash xabariga javobni mavjud vazifaga yozadi; yangi vazifa yaratmaydi."""
+    reply = message.get("reply_to_message") or {}
+    if not (reply.get("from", {}).get("is_bot") and
+            (reply.get("text") or "").startswith("✏️ Vazifani tahrirlash\n")):
+        return None
+    user = get_user_by_chat_id(chat_id)
+    if not user or user["state"] == "blocked":
+        telegram_send_message(chat_id, "⚠️ Avval /start buyrug‘ini bosing.")
+        return {"ok": False}
+    text = (message.get("text") or "").strip()
+    cleaned = uzbek_to_latin(clean_task_text(text))
+    if not cleaned or len(cleaned) > 1000 or "\n" in text or "\r" in text:
+        telegram_send_message(chat_id, "⚠️ Shu tahrirlash xabariga javob qilib 1–1000 belgili matnni bitta qatorda yuboring.")
+        return {"ok": False, "invalid_text": True}
+    today = get_today()
+    error = None
+    task = None
+    # Vazifani oldin qulflash o'chirish handleri bilan qulf tartibini bir xil saqlaydi.
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT t.id, t.task_date FROM public.tasks t
+                JOIN public.pending_task_edits p ON p.task_id = t.id::text
+                WHERE p.chat_id = %s AND p.prompt_message_id = %s
+                  AND p.created_at > now() - interval '15 minutes'
+                  AND t.user_id = %s AND t.status = 'pending'
+                  AND t.task_date IN (%s, %s)
+                FOR UPDATE OF t
+            """, (chat_id, reply.get("message_id"), user["id"], today, today + timedelta(days=1)))
+            task = cur.fetchone()
+            if task:
+                cur.execute("""
+                    SELECT task_id FROM public.pending_task_edits
+                    WHERE chat_id = %s AND prompt_message_id = %s AND task_id = %s
+                      AND created_at > now() - interval '15 minutes'
+                    FOR UPDATE
+                """, (chat_id, reply.get("message_id"), str(task["id"])))
+                if not cur.fetchone():
+                    task = None
+            if not task:
+                error = "Bu tahrirlash so‘rovi eskirgan. /vazifalar orqali qayta tanlang."
+            else:
+                cur.execute("""
+                    SELECT task_text FROM public.tasks
+                    WHERE user_id = %s AND task_date = %s AND id::text <> %s
+                """, (user["id"], task["task_date"], str(task["id"])))
+                if normalize_task(cleaned) in {normalize_task(row["task_text"]) for row in cur.fetchall()}:
+                    error = "🔄 Shu sanada bunday vazifa bor. Tahrirlash xabariga boshqa matn bilan javob bering."
+                else:
+                    cur.execute("UPDATE public.tasks SET task_text = %s WHERE id::text = %s AND user_id = %s",
+                                (cleaned, str(task["id"]), user["id"]))
+                    cur.execute("DELETE FROM public.pending_task_edits WHERE chat_id = %s AND prompt_message_id = %s",
+                                (chat_id, reply.get("message_id")))
+        conn.commit()
+    if error:
+        telegram_send_message(chat_id, error)
+        return {"ok": False, "edit_rejected": True}
+    _remove_task_prompt(chat_id, reply.get("message_id"))
+    telegram_send_message(chat_id, f"✏️ Vazifa yangilandi:\n\n{cleaned}")
+    if task["task_date"] == today:
+        refresh_live_checklist(chat_id, user)
+    return {"ok": True, "route": "task_edited"}
+
+
 @router.post("/telegram")
 def telegram_webhook(
     update: dict,
     background_tasks: BackgroundTasks,
     x_telegram_bot_api_secret_token: Optional[str] = Header(default=None)
 ):
+    """Telegram so‘rovlarini, sana tanlovi va vazifa tahririni tegishli handlerga uzatadi."""
 
     verify_webhook(x_telegram_bot_api_secret_token)
     print("========================================")
@@ -5682,6 +5848,21 @@ def telegram_webhook(
                     "message_id"
                 )
             )
+
+            management_action, separator, task_id = callback_data.partition("|")
+            if separator and management_action in (
+                "task_edit", "task_delete", "task_delete_yes", "task_delete_no"
+            ):
+                return handle_task_management(
+                    chat_id, task_id, management_action.removeprefix("task_"),
+                    callback_query_id, callback_message_id
+                )
+
+            if callback_data.startswith("late_task|"):
+                choice = callback_data.split("|", 1)[1]
+                return handle_late_task_choice(
+                    chat_id, choice, callback_query_id, callback_message_id
+                )
 
             if callback_data.startswith(
                 "morning_time|"
@@ -5834,6 +6015,16 @@ def telegram_webhook(
                 "ok": True,
                 "route": "broadcast_started"
             }
+
+        if message_text == "/vazifalar":
+            return handle_manage_tasks(chat_id)
+
+        if message_text == "/cancel":
+            return handle_cancel_task_edit(chat_id)
+
+        edit_result = handle_task_edit_reply(chat_id, message)
+        if edit_result is not None:
+            return edit_result
 
         if message_text.startswith("/"):
 
