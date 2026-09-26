@@ -84,7 +84,7 @@
   }
   .chart-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
   .chart-track { width: 100%; max-width: 22px; height: 90px; display: flex; align-items: flex-end; border-radius: 6px; background: var(--bg-elevated); overflow: hidden; }
-  .chart-fill { width: 100%; min-height: 2px; background: linear-gradient(180deg, #F2C874, var(--accent)); border-radius: 6px 6px 0 0; }
+  .chart-fill { width: 100%; min-height: 0; background: linear-gradient(180deg, #F2C874, var(--accent)); border-radius: 6px 6px 0 0; }
   .chart-fill.secondary { background: linear-gradient(180deg, #8FD1A8, var(--success)); }
   .chart-label { font-size: 9.5px; color: var(--text-dim); margin-top: 5px; }
   .legend { display: flex; gap: 14px; margin-top: 10px; font-size: 11px; color: var(--text-dim); }
@@ -180,6 +180,16 @@
   .nav-btn.active { color: var(--accent); }
 
   @media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }
+
+  .metric-note { font-size: 12px; line-height: 1.6; color: var(--text-dim); margin: 12px 0; }
+  .metric-row { display: grid; grid-template-columns: minmax(0,1fr) 32px 52px; gap: 10px; align-items: center; margin: 18px 0; font-size: 12px; }
+  .metric-track { height: 5px; background: var(--bg-elevated); margin-top: 8px; border-radius: 5px; }
+  .metric-track i { display: block; height: 100%; background: var(--success); border-radius: 5px; }
+  .reason-card { overflow-wrap: anywhere; }
+  .reason-card p { font-size: 13px; line-height: 1.6; }
+  .reason-text { white-space: pre-wrap; color: var(--text-dim); }
+  .refresh-admin { font: inherit; color: var(--accent); background: var(--bg-card); border: 1px solid var(--border); padding: 9px 14px; border-radius: 12px; margin-top: 10px; }
+  .refresh-admin:disabled { opacity: .5; }
 </style>
 </head>
 <body>
@@ -188,6 +198,7 @@
   <div class="header">
     <h1 id="pageTitle">Overview</h1>
     <p id="pageSubtitle">Qadam admin dashboard</p>
+    <button id="adminRefresh" class="refresh-admin" type="button" disabled>↻ Yangilash</button>
   </div>
   <div id="content">
     <div class="skeleton"></div>
@@ -197,16 +208,16 @@
 
 <nav class="bottom-nav">
   <button class="nav-btn active" data-tab="overview" type="button">
-    <span class="nav-icon">🏠</span>Overview
+    <span class="nav-icon">🏠</span>Umumiy
   </button>
   <button class="nav-btn" data-tab="activity" type="button">
-    <span class="nav-icon">⚡</span>Activity
+    <span class="nav-icon">⚡</span>Faollik
   </button>
   <button class="nav-btn" data-tab="retention" type="button">
     <span class="nav-icon">🔁</span>Retention
   </button>
   <button class="nav-btn" data-tab="users" type="button">
-    <span class="nav-icon">👥</span>Users
+    <span class="nav-icon">👥</span>Userlar
   </button>
 </nav>
 
@@ -227,10 +238,10 @@
   const subtitleEl = document.getElementById('pageSubtitle');
 
   const titles = {
-    overview: ['Overview', "Bugungi umumiy ko'rsatkichlar"],
-    activity: ['Activity', "Bugungi foydalanuvchi funneli"],
+    overview: ['Umumiy', "Bugungi umumiy ko'rsatkichlar"],
+    activity: ['Faollik', 'Bugungi rejalar va bajarilish holati'],
     retention: ['Retention', 'D1 / D3 / D7 / D30 saqlanish'],
-    users: ['Users', 'Segmentlar va foydalanuvchi ro\u2018yxati']
+    users: ['Foydalanuvchilar', 'Segmentlar va foydalanuvchi ro\u2018yxati']
   };
 
   let currentTab = 'overview';
@@ -238,11 +249,12 @@
   let usersSearch = '';
   let searchDebounce = null;
   let isAdminVerified = false;
+  let loadVersion = 0;
 
   function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str == null ? '' : String(str);
-    return div.innerHTML;
+    return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   function haptic(style) {
@@ -254,10 +266,10 @@
   function apiFetch(path) {
     const url = API_BASE + path + (path.includes('?') ? '&' : '?') +
       'initData=' + encodeURIComponent(initData || '');
-    return fetch(url).then(function (res) {
+    return fetch(url, {cache: 'no-store'}).then(function (res) {
       if (!res.ok) {
         return res.json().catch(function () { return {}; }).then(function (body) {
-          const err = new Error(body.detail || ('Xatolik: ' + res.status));
+          const err = new Error(typeof body.detail === 'string' ? body.detail : ('Xatolik: ' + res.status));
           err.status = res.status;
           throw err;
         });
@@ -281,27 +293,39 @@
     return parts.length === 3 ? parts[2] + '.' + parts[1] + '.' + parts[0] : iso;
   }
 
+  // Barcha raqamlar server hisobidan olinadi; noma'lum qiymat 0 deb ko'rsatilmaydi.
+  function number(value) { return value === null || value === undefined ? '—' : String(value); }
+  function pct(value) { return value === null || value === undefined ? '—' : value + '%'; }
+  function note(text) { return '<p class="metric-note">' + escapeHtml(text || '') + '</p>'; }
+  function kpi(value, label, sub) {
+    return '<div class="kpi-card"><span class="kpi-value">' + number(value) + '</span><span class="kpi-label">' + escapeHtml(label) + '</span>' +
+      (sub ? '<div class="kpi-sub">' + escapeHtml(sub) + '</div>' : '') + '</div>';
+  }
+  function dataNotes(data) {
+    const stamp = data.generated_at ? new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Tashkent', dateStyle: 'short', timeStyle: 'medium'
+    }).format(new Date(data.generated_at)) : '—';
+    return note('Hisob sanasi: ' + shortDate(data.date) + ' · Toshkent vaqti. Yangilangan: ' + stamp) +
+      note(data.scope_note) + note(data.task_note) + (data.signup_date_note ? note(data.signup_date_note) : '');
+  }
+
   // ---------- Overview ----------
 
   function renderOverview(overview, trends) {
-    const u = overview.users;
-    const t = overview.tasks;
-
+    const u = overview.users, t = overview.tasks;
     let html = '<div class="kpi-grid">' +
-      '<div class="kpi-card"><span class="kpi-value">' + u.total + '</span><span class="kpi-label">👥 Jami foydalanuvchi</span></div>' +
-      '<div class="kpi-card"><span class="kpi-value">+' + u.today_new + '</span><span class="kpi-label">🆕 Bugun qo\u2018shilgan</span><div class="kpi-sub">Kecha: +' + u.yesterday_new + '</div></div>' +
-      '<div class="kpi-card"><span class="kpi-value">' + u.today_active + '</span><span class="kpi-label">🔥 Bugun faol</span><div class="kpi-sub">7 kunda: ' + u.week_active + '</div></div>' +
-      '<div class="kpi-card"><span class="kpi-value">' + t.today_users_with_tasks + '</span><span class="kpi-label">📝 Bugun vazifa kiritgan</span><div class="kpi-sub">Jami ' + t.today_total + ' ta vazifa</div></div>' +
-    '</div>';
-
-    html += '<div class="kpi-grid">' +
-      '<div class="kpi-card"><span class="kpi-value">' + u.week_new + '</span><span class="kpi-label">Oxirgi 7 kunda qo\u2018shilgan</span></div>' +
-      '<div class="kpi-card"><span class="kpi-value">' + u.today_completed_day + '</span><span class="kpi-label">Kunini yakunlagan</span></div>' +
-    '</div>';
-
-    html += '<p class="section-title">USER GROWTH / ACTIVITY (oxirgi ' + trends.days.length + ' kun)</p>';
-    html += '<div class="card">' + trendsChartMarkup(trends) + '</div>';
-
+      kpi(u.total, 'Joriy bot foydalanuvchilari', 'Bloklanganlar ham jami ichida: ' + u.blocked) +
+      kpi(u.today_new, 'Bugun bazaga qo‘shilgan', 'Kecha: ' + number(u.yesterday_new)) +
+      kpi(u.today_active, 'Bugun botda faol', 'Bugun bilan oxirgi 7 kun: ' + u.week_active) +
+      kpi(t.today_users_with_tasks, 'Bugunga vazifasi bor', 'Bugungi mavjud vazifalar: ' + t.today_total) +
+      kpi(u.week_new, 'Oxirgi 7 kunda qo‘shilgan', 'Bugun va oldingi 6 kun') +
+      kpi(u.all_marked_users, 'Bugungi barcha vazifasi belgilangan', 'Bajarilgan yoki bajarilmagan deb belgilangan') +
+      kpi(u.all_completed_users, 'Bugungi barcha vazifasi bajarilgan', 'Kamida bitta vazifa bo‘lishi shart') +
+      kpi(t.tomorrow_total, 'Ertangi vazifalar', t.tomorrow_users_with_tasks + ' foydalanuvchida') +
+      kpi(t.pending_date_choices, 'Sana tanlanmagan so‘rovlar', 'Barcha sanalardagi kutilayotgan yozuvlar') + '</div>';
+    html += note('Vazifa sanasi uning yozilgan sanasi emas: kecha ertagaga yozilgan vazifa bugungi rejaga kiradi. Barcha vazifalar belgilanishi kunni yopmaydi.');
+    html += '<p class="section-title">OXIRGI ' + trends.days.length + ' KUN</p><div class="card">' + trendsChartMarkup(trends) + '</div>';
+    html += dataNotes(overview);
     contentEl.innerHTML = html;
   }
 
@@ -330,50 +354,53 @@
   }
 
   function loadOverview() {
+    const request = ++loadVersion;
     showSkeleton();
-    Promise.all([
-      apiFetch('/overview'),
-      apiFetch('/trends?days=7')
-    ]).then(function (results) {
-      if (currentTab !== 'overview') return;
-      renderOverview(results[0], results[1]);
-    }).catch(handleLoadError);
+    apiFetch('/overview').then(function (data) {
+      if (currentTab !== 'overview' || request !== loadVersion) return;
+      renderOverview(data, data.trends);
+    }).catch(function (err) { if (request === loadVersion) handleLoadError(err); });
   }
 
   // ---------- Activity ----------
 
   function renderActivity(data) {
-    let html = '<div class="card"><p class="section-title" style="margin-top:0;">FOYDALANUVCHI FUNNELI</p>';
-
-    data.funnel.forEach(function (step) {
-      html += '<div class="funnel-row">' +
-        '<div class="funnel-bar-wrap"><div class="funnel-bar" style="width:' + Math.max(4, step.percent_of_previous) + '%"></div>' +
-          '<span class="funnel-label">' + escapeHtml(step.label) + '</span></div>' +
-        '<span class="funnel-count">' + step.count + '</span>' +
-        '<span class="funnel-pct">' + step.percent_of_previous + '%</span>' +
-      '</div>';
+    let html = '<div class="card"><p class="section-title">BUGUNGI FOYDALANUVCHI GURUHLARI</p>' +
+      note('Guruhlar mustaqil va ustma-ust kelishi mumkin. Foiz har doim jami ' + data.total_users + ' foydalanuvchiga nisbatan. Bu funnel emas.');
+    data.metrics.forEach(function (step) {
+      html += '<div class="metric-row"><div><span>' + escapeHtml(step.label) + '</span><div class="metric-track"><i style="width:' +
+        Math.max(0, Math.min(100, step.percent_of_total || 0)) + '%"></i></div></div><strong>' + step.count + '</strong><span>' + pct(step.percent_of_total) + '</span></div>';
     });
-
-    html += '</div>';
-
-    html += '<p class="section-title">BUGUNGI VAZIFALAR</p><div class="card">';
-    html += '<div class="task-split">' +
-      '<div class="task-split-item"><div class="task-split-value">✅ ' + data.tasks.completed + '</div><div class="task-split-label">' + data.tasks.completed_percent + '%</div></div>' +
-      '<div class="task-split-item"><div class="task-split-value">❌ ' + data.tasks.failed + '</div><div class="task-split-label">' + data.tasks.failed_percent + '%</div></div>' +
-      '<div class="task-split-item"><div class="task-split-value">⏳ ' + data.tasks.pending + '</div><div class="task-split-label">' + data.tasks.pending_percent + '%</div></div>' +
-    '</div>';
-    html += '<p style="text-align:center;font-size:11px;color:var(--text-dim);margin:10px 0 0;">Jami ' + data.tasks.total + ' ta vazifa</p>';
-    html += '</div>';
-
-    contentEl.innerHTML = html;
+    html += '</div><p class="section-title">BUGUNGI VAZIFALAR</p><div class="kpi-grid">' +
+      kpi(data.tasks.completed, 'Bajarilgan', pct(data.tasks.completed_percent)) +
+      kpi(data.tasks.failed, 'Bajarilmagan deb belgilangan', pct(data.tasks.failed_percent)) +
+      kpi(data.tasks.pending, 'Hali belgilanmagan', pct(data.tasks.pending_percent)) +
+      kpi(data.tasks.total, 'Bugungi jami vazifa') + '</div>';
+    if (data.tasks.unknown) html += note('Noma’lum statusdagi vazifalar: ' + data.tasks.unknown + '. Ular jami hisobda bor, pending yoki failed deb taxmin qilinmadi.');
+    html += note('Foizlar jami bugungi vazifalarga nisbatan; yaxlitlash sabab yig‘indi 100% dan ozgina farq qilishi mumkin.');
+    html += '<p class="section-title">BAJARILMAGANLIK SABABLARI</p><div class="card">';
+    if (!data.reasons.length) html += note('Bugunga bajarilmagan deb belgilangan vazifa yo‘q.');
+    data.reasons.forEach(function (r) { html += segmentRow(escapeHtml(r.label), r.count); });
+    html += note('Sababi hali saqlanmagan: ' + data.tasks.missing_reason + '. “Boshqa” yozma sababi bor: ' + data.tasks.custom_reason +
+      '. “Boshqa” tanlangan, ammo yozma matni yo‘q: ' + data.tasks.other_without_text + '.') + '</div>';
+    if (data.custom_reasons.length) {
+      html += '<p class="section-title">“BOSHQA” — YOZILGAN SABABLAR</p>' + note('Bugungi ' + data.tasks.custom_reason + ' yozma sababdan ' + data.custom_reasons.length +
+        ' tasi. Eng yangi yaratilgan vazifalar bo‘yicha; sabab yozilgan vaqt bazada alohida saqlanmaydi.');
+      data.custom_reasons.forEach(function (r) {
+        html += '<div class="card reason-card"><strong>' + escapeHtml(r.first_name || 'Noma’lum') + '</strong><p>' + escapeHtml(r.task_text) +
+          '</p><p class="reason-text">' + escapeHtml(r.reason) + '</p></div>';
+      });
+    }
+    contentEl.innerHTML = html + dataNotes(data);
   }
 
   function loadActivity() {
+    const request = ++loadVersion;
     showSkeleton();
     apiFetch('/activity').then(function (data) {
-      if (currentTab !== 'activity') return;
+      if (currentTab !== 'activity' || request !== loadVersion) return;
       renderActivity(data);
-    }).catch(handleLoadError);
+    }).catch(function (err) { if (request === loadVersion) handleLoadError(err); });
   }
 
   // ---------- Retention ----------
@@ -383,66 +410,56 @@
   }
 
   function renderRetention(data) {
-    let html = '<div class="retention-headline">' +
-      '<div class="kpi-card"><span class="kpi-value">' + retentionCell(data.headline.d1) + '</span><span class="kpi-label">D1</span></div>' +
-      '<div class="kpi-card"><span class="kpi-value">' + retentionCell(data.headline.d3) + '</span><span class="kpi-label">D3</span></div>' +
-      '<div class="kpi-card"><span class="kpi-value">' + retentionCell(data.headline.d7) + '</span><span class="kpi-label">D7</span></div>' +
-      '<div class="kpi-card"><span class="kpi-value">' + retentionCell(data.headline.d30) + '</span><span class="kpi-label">D30</span></div>' +
-    '</div>';
-
-    if (data.tracking_start) {
-      html += '<p style="font-size:11px;color:var(--text-dim);margin:0 0 14px;">Kuzatuv boshlangan sana: ' + escapeHtml(shortDate(data.tracking_start)) + '. Bu sanadan oldingi cohortlar uchun retention "—" bilan ko\u2018rsatiladi.</p>';
-    }
-
-    html += '<p class="section-title">COHORT JADVALI</p>';
-
-    if (!data.cohorts.length) {
-      html += '<div class="state-msg"><span class="state-icon">📭</span>Hozircha cohort ma\u2018lumoti yo\u2018q</div>';
-    } else {
-      html += '<div class="card cohort-scroll"><table class="cohort"><thead><tr>' +
-        '<th>Cohort</th><th>Yangi</th><th>D1</th><th>D3</th><th>D7</th><th>D30</th>' +
-      '</tr></thead><tbody>';
-
-      data.cohorts.forEach(function (row) {
-        html += '<tr>' +
-          '<td>' + escapeHtml(shortDate(row.cohort_date)) + '</td>' +
-          '<td>' + row.new_users + '</td>' +
-          '<td>' + retentionCell(row.d1) + '</td>' +
-          '<td>' + retentionCell(row.d3) + '</td>' +
-          '<td>' + retentionCell(row.d7) + '</td>' +
-          '<td>' + retentionCell(row.d30) + '</td>' +
-        '</tr>';
+    let html = '<div class="retention-headline">';
+    ['d1','d3','d7','d30'].forEach(function (key) {
+      const c = data.headline_counts[key];
+      html += kpi(pct(data.headline[key]), key.toUpperCase(), c.retained + ' / ' + c.eligible + ' user');
+    });
+    html += '</div>' + note(data.retention_note) + note('Hisob oynasi: oxirgi ' + data.window_days + ' kun ichida bazaga qo‘shilgan guruhlar.') +
+      note('Faollik jadvalidagi eng eski yozuv: ' + (data.tracking_start ? shortDate(data.tracking_start) : 'yo‘q') +
+        '. Shu kun va undan oldingi guruhlar, shuningdek hali tugamagan D-kunlar “—” bilan ko‘rsatiladi. “—” 0% degani emas.');
+    if (!data.cohorts.length) html += note('Bu davr uchun hisoblashga yaroqli ro‘yxatdan o‘tish ma’lumoti yo‘q.');
+    else {
+      html += '<div class="card cohort-scroll"><table class="cohort"><thead><tr><th>Qo‘shilgan sana</th><th>User</th><th>D1</th><th>D3</th><th>D7</th><th>D30</th></tr></thead><tbody>';
+      data.cohorts.forEach(function (r) {
+        html += '<tr><td>' + shortDate(r.cohort_date) + '</td><td>' + r.new_users + '</td>' +
+          ['d1','d3','d7','d30'].map(function (key) { return '<td>' + pct(r[key]) + '</td>'; }).join('') + '</tr>';
       });
-
       html += '</tbody></table></div>';
     }
-
-    contentEl.innerHTML = html;
+    contentEl.innerHTML = html + dataNotes(data);
   }
 
   function loadRetention() {
+    const request = ++loadVersion;
     showSkeleton();
-    apiFetch('/retention?cohorts=14').then(function (data) {
-      if (currentTab !== 'retention') return;
+    apiFetch('/retention?cohorts=60').then(function (data) {
+      if (currentTab !== 'retention' || request !== loadVersion) return;
       renderRetention(data);
-    }).catch(handleLoadError);
+    }).catch(function (err) { if (request === loadVersion) handleLoadError(err); });
   }
 
   // ---------- Users ----------
 
   function renderUsers(data) {
+    usersPage = data.page;
+    const previousSearch = document.getElementById('userSearch');
+    const restoreSearch = previousSearch && document.activeElement === previousSearch;
+    const selection = restoreSearch ? previousSearch.selectionStart : null;
     const s = data.segments;
 
     let html = '<div class="segment-list">' +
-      segmentRow('🔥 Active today', s.active_today) +
-      segmentRow('🟢 Active ≤2 days', s.active_2d) +
-      segmentRow('🟡 Inactive 3–7 days', s.inactive_3_7) +
-      segmentRow('🟠 Inactive 8–30 days', s.inactive_8_30) +
-      segmentRow('🔴 Inactive 30+ days', s.inactive_30_plus) +
-      segmentRow('🚫 Blocked', s.blocked) +
+      segmentRow('🔥 Bugun faol (bloklanmagan)', s.active_today) +
+      segmentRow('🟢 Oxirgi faollik 1–2 kun oldin', s.active_2d) +
+      segmentRow('🟡 Oxirgi faollik 3–7 kun oldin', s.inactive_3_7) +
+      segmentRow('🟠 Oxirgi faollik 8–30 kun oldin', s.inactive_8_30) +
+      segmentRow('🔴 Oxirgi faollik 30 kundan oldin', s.inactive_30_plus) +
+      segmentRow('⚪ Faollik qaydi yo‘q', s.never_active) +
+      segmentRow('🚫 Bloklangan', s.blocked) +
     '</div>';
 
-    html += '<input type="text" class="search-box" id="userSearch" placeholder="Ism yoki username bo\u2018yicha qidirish" value="' + escapeHtml(usersSearch) + '">';
+    html += note('Segmentlar ustma-ust tushmaydi; yig‘indisi jami ' + s.total + ' user. Qidiruv segmentlarni emas, pastdagi ro‘yxatni filtrlaydi.') + note('Qidiruv natijasi: ' + data.total + ' user.');
+    html += '<input type="text" class="search-box" id="userSearch" placeholder="Ism, username yoki Telegram ID bo\u2018yicha qidirish" value="' + escapeHtml(usersSearch) + '">';
 
     html += '<div id="userList">';
 
@@ -456,9 +473,13 @@
             '<span class="user-username">' + (u.username ? '@' + escapeHtml(u.username) : '') + '</span>' +
           '</div>' +
           '<div class="user-meta">' +
-            '<span>Qo\u2018shilgan: ' + escapeHtml(shortDate(u.joined_at)) + '</span>' +
+            '<span>Qo\u2018shilgan: ' + escapeHtml(shortDate(u.joined_at) || '—') + '</span>' +
             '<span>So\u2018nggi faollik: ' + (u.last_active_date ? escapeHtml(shortDate(u.last_active_date)) : '—') + '</span>' +
-            '<span>Vazifa: ' + u.completed_tasks + '/' + u.total_tasks + '</span>' +
+            '<span>Bugungacha: ' + u.completed_tasks + ' bajarilgan / ' + u.total_tasks + ' mavjud vazifa</span>' +
+            '<span>Kelajak sanalarga: ' + u.future_tasks + ' vazifa</span>' +
+            '<span>Holat: ' + escapeHtml(({active:'Faol akkaunt',blocked:'Bloklangan',waiting_morning_time:'Ertalabki vaqt tanlanmagan',completed:'Eski completed holati'})[u.state] || u.state || 'Noma’lum') + '</span>' +
+            '<span>Ertalabki vaqt: ' + escapeHtml(u.morning_time || '—') + '</span>' +
+            '<span>Ertalabki xabar uchun oxirgi urinish: ' + escapeHtml(shortDate(u.last_morning_greeting_date) || '—') + '</span>' +
           '</div>' +
         '</div>';
       });
@@ -474,11 +495,13 @@
       '</div>';
     }
 
-    contentEl.innerHTML = html;
+    contentEl.innerHTML = html + dataNotes(data);
 
     const searchInput = document.getElementById('userSearch');
     if (searchInput) {
+      if (restoreSearch) { searchInput.focus(); searchInput.setSelectionRange(selection, selection); }
       searchInput.addEventListener('input', function (e) {
+        loadVersion++;
         usersSearch = e.target.value;
         clearTimeout(searchDebounce);
         searchDebounce = setTimeout(function () {
@@ -499,13 +522,14 @@
   }
 
   function loadUsers() {
+    const request = ++loadVersion;
     if (contentEl.querySelector('.segment-list') === null) showSkeleton();
     const params = '?page=' + usersPage + '&page_size=20' +
       (usersSearch ? '&search=' + encodeURIComponent(usersSearch) : '');
     apiFetch('/users' + params).then(function (data) {
-      if (currentTab !== 'users') return;
+      if (currentTab !== 'users' || request !== loadVersion) return;
       renderUsers(data);
-    }).catch(handleLoadError);
+    }).catch(function (err) { if (request === loadVersion) handleLoadError(err); });
   }
 
   // ---------- Tab wiring ----------
@@ -526,6 +550,8 @@
   }
 
   function switchTab(tab) {
+    if (!isAdminVerified) return;
+    clearTimeout(searchDebounce);
     currentTab = tab;
     const meta = titles[tab];
     titleEl.textContent = meta[0];
@@ -547,11 +573,14 @@
     });
   });
 
+  document.getElementById('adminRefresh').addEventListener('click', function () { if (isAdminVerified) loaders[currentTab](); });
+
   // ---------- Initial admin check ----------
 
   showSkeleton();
   apiFetch('/me').then(function () {
     isAdminVerified = true;
+    document.getElementById('adminRefresh').disabled = false;
     switchTab('overview');
   }).catch(function (err) {
     if (err.status === 403) {
