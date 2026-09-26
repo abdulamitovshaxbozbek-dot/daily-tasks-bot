@@ -19,8 +19,9 @@ def verify_admin(chat_id: int = Depends(get_miniapp_chat_id)) -> int:
 
 
 def _context(cur):
-    """Hisoblarni bir xil baza snapshoti va Toshkent sanasida o'qish uchun tayyorlaydi."""
-    cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+    """Mavjud ulanish sozlamalarini o'zgartirmasdan Toshkent sanasi va filtrlarni tayyorlaydi."""
+    # get_connection ulanishni tayyorlashda allaqachon so'rov bajargan
+    # bo'lishi mumkin. Boshlangan tranzaksiyaning isolation darajasiga tegmaymiz.
     cur.execute("SELECT CURRENT_TIMESTAMP AS generated_at, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Tashkent')::date AS today")
     clock = cur.fetchone()
     current_bot = bot_id()
@@ -110,7 +111,7 @@ def admin_overview(_: int = Depends(verify_admin)):
                 JOIN scoped_users u ON u.telegram_chat_id = p.chat_id
             """, p)
             tasks.update(dict(cur.fetchone()))
-            # Kartalar va grafik bitta snapshotdan olinadi.
+            # Kartalar va grafik bir ulanishda, bir xil hisob sanasi bilan olinadi.
             p["start"] = p["week_start"]
             cur.execute(cte + """
                 SELECT d::date AS day,
