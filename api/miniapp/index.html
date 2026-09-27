@@ -1011,17 +1011,20 @@
     if (motivation && motivation.title) {
       html += (
         '<div class="insight">' +
-          '<p class="insight-title">' + escapeHtml(motivation.title) + '</p>' +
-          '<p class="insight-text">' + escapeHtml(motivation.text) + '</p>' +
+          '<p class="insight-title">Har kuni maqsad sari bir qadam 👣</p>' +
+          '<p class="insight-text">Har kun bir xil o‘tmaydi. Bugun qilingan kichik harakatlar ham muhim. Ertaga qolgan vazifalardan birini davom ettirsangiz bo‘ladi.</p>' +
         '</div>'
       );
     }
     if (topReason && topReason.display) {
+      const reasonMissing = topReason.display === 'sababi yozilmadi';
+      const reasonText = reasonMissing
+        ? 'Ayrim vazifalarda sabab ko‘rsatilmagan. Keyingi safar qisqacha sabab yozish, qaysi joy qiyin bo‘lganini tushunishga yordam beradi.'
+        : '“' + topReason.display + '” sababi ' + topReason.count + ' marta qayd etilgan. Keyingi rejalarda shu joyni hisobga olib, eslatma yoki kichikroq vazifadan boshlash foydali bo‘lishi mumkin.';
       html += (
         '<div class="insight" style="margin-top:10px;">' +
-          '<p class="insight-title">🔍 Eng ko‘p uchragan sabab</p>' +
-          '<p class="insight-text">' + escapeHtml(topReason.display) +
-            ' — ' + topReason.count + ' marta</p>' +
+          '<p class="insight-title">E’tibor berish mumkin bo‘lgan joy</p>' +
+          '<p class="insight-text">' + escapeHtml(reasonText) + '</p>' +
         '</div>'
       );
     }
