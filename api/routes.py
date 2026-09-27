@@ -2302,6 +2302,24 @@ def handle_task_status(
                 "Bajarilmadi ❌"
             )
 
+    # Bajarilgan vazifani kichik qarsak bilan nishonlaymiz. Bu
+    # xabar yuborilmasa ham task statusi allaqachon saqlangan bo'ladi.
+    if status == "completed":
+
+        try:
+
+            telegram_send_message(
+                chat_id,
+                "👏"
+            )
+
+        except Exception as error:
+
+            print(
+                "Completion applause error:",
+                error
+            )
+
     live_message_id = get_live_checklist_message_id(
         user["id"],
         today
