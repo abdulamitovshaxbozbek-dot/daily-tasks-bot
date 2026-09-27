@@ -4269,17 +4269,20 @@ def handle_day_cycle():
 
             if today_tasks:
                 greeting = (
-                    f"🌅 Assalomu alaykum, {first_name}!\n\n"
+                    f"🌅 Assalomu alaykum va rohmatullohi va barokatuh, {first_name}!\n\n"
+                    "Yaxshi dam oldingizmi?\n\n"
                     "Kecha rejalashtirgan vazifalaringiz:\n\n"
                     + "\n".join(f"• {task['task_text']}" for task in today_tasks)
-                    + "\n\nIshga tushirdikmi? Omad! 💪"
+                    + "\n\nQo‘shimcha yana vazifalar yuborishingiz mumkin!"
                 )
             else:
-                greeting = f"""🌅 Assalomu alaykum, {first_name}!
+                greeting = f"""🌅 Assalomu alaykum va rohmatullohi va barokatuh, {first_name}!
 
-Bugun maqsadingiz sari qanday qadam tashlaysiz?
+Yaxshi dam oldingizmi?
 
-Bajarishni istagan kamida 1 ta vazifangizni hozir yozib yuboring. 👣
+Kun bo‘yi qanday ishlar qilmoqchisiz?
+
+Bajarishni istagan vazifalaringizni hozir yozib yuboring. 👣
 
 Masalan:
 • Kitobdan 20 bet o‘qish
@@ -4346,17 +4349,17 @@ def handle_live_checklist_reminders(period: str):
     """
 
     headings = {
-        "midday": "☀️ Kunning yarmi — davom etamiz!",
-        "evening": "🌙 Kunni yakunlaymiz!"
+        "midday": "☀️ Bugungi kuningizning yarmi o‘z nihoyasiga yetmoqda!",
+        "evening": "🌙 Kuningiz yakunlanib qoldi!"
     }
     reminder_instructions = {
         "midday": (
             "Quyida hali belgilanmagan vazifalaringiz bor. "
-            "Bajarganlaringizni belgilang, qolganlaridan bittasini "
-            "davom ettiring. 👣"
+            "Bajarganlaringizni belgilang. Har kuni maqsad sari bir qadam. 👣"
         ),
         "evening": (
-            "Bugungi vazifalaringiz qanday ketdi?\n"
+            "Kuningiz yaxshi o‘tdi degan umiddaman!\n\n"
+            "Sizda bugun bajarilmay qolgan vazifalaringiz quyidagilar:\n"
             "Bajarganlaringizni ✅, bajara olmaganlaringizni ❌ "
             "bilan belgilang."
         )
@@ -4570,9 +4573,11 @@ Quyidagi vaqtlardan birini tanlang:"""
 
         else:
 
-            text = f"""👋 Salom, {first_name}!
+            text = f"""👋 Assalomu alaykum va rohmatullohi va barokatuh, {first_name}!
 
 Bugun kichik bir qadamdan boshlaymizmi? 👣
+
+So‘nggi kunlarda vazifalar yubormayapsiz!
 
 Bajarishni istagan 1 ta vazifangizni yozib yoki 🎙️ ovozli xabar orqali yuboring.
 
