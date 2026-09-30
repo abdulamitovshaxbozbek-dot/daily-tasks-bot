@@ -1,7 +1,4 @@
-"""Tashkent schedules; persistent claims prevent duplicate worker execution.
-Claims are committed before side effects. Interrupted/failed jobs need operator
-review rather than automatic replay, since Telegram sends cannot be rolled back.
-"""
+"""Tashkent schedules; persistent claims prevent duplicate worker execution."""
 import logging
 import os
 import threading
@@ -14,7 +11,7 @@ ZONE = ZoneInfo("Asia/Tashkent")
 
 def due_jobs(now):
     local = now.astimezone(ZONE)
-    jobs = ["day_cycle"]
+    jobs = ["day_cycle", "task_reminders"]
     if local.minute == 0:
         if local.hour == 11:
             jobs.append("reminders")
@@ -29,10 +26,14 @@ def initialize(conn):
     with conn.cursor() as cur:
         cur.execute("""CREATE TABLE IF NOT EXISTS public.qadam_schedule_runs (
             job TEXT NOT NULL, slot TIMESTAMPTZ NOT NULL,
-            status TEXT NOT NULL DEFAULT 'started',
-            finished_at TIMESTAMPTZ,
+            status TEXT NOT NULL DEFAULT 'started', finished_at TIMESTAMPTZ,
             PRIMARY KEY (job, slot)
         )""")
+        cur.execute("ALTER TABLE public.tasks ADD COLUMN IF NOT EXISTS reminder_time TIME")
+        cur.execute("ALTER TABLE public.tasks ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMPTZ")
+        cur.execute("""CREATE INDEX IF NOT EXISTS tasks_due_reminder_idx
+            ON public.tasks (task_date, reminder_time)
+            WHERE status = 'pending' AND reminder_time IS NOT NULL AND reminder_sent_at IS NULL""")
     conn.commit()
 
 
@@ -61,7 +62,6 @@ def run_tick(conn, now, handlers):
                 status = 'partial_failure'
         except Exception as error:
             status = 'failed'
-            # Avoid exception strings containing Telegram request URLs/tokens.
             logger.error('Schedule %s failed (%s)', job, type(error).__name__)
         with conn.cursor() as cur:
             cur.execute("""UPDATE public.qadam_schedule_runs
@@ -73,10 +73,10 @@ def run_tick(conn, now, handlers):
 
 def worker(stop):
     import psycopg2
-    from routes import handle_day_cycle, handle_reminders, handle_live_checklist_reminders
-
+    from routes import handle_day_cycle, handle_reminders, handle_live_checklist_reminders, handle_task_reminders
     handlers = {
         'day_cycle': handle_day_cycle,
+        'task_reminders': handle_task_reminders,
         'reminders': handle_reminders,
         'midday': lambda: handle_live_checklist_reminders('midday'),
         'evening': lambda: handle_live_checklist_reminders('evening'),
@@ -85,7 +85,6 @@ def worker(stop):
         conn = None
         try:
             conn = psycopg2.connect(os.environ['DATABASE_URL'], connect_timeout=10)
-            # Only one process initializes/runs the scheduler at a time.
             with conn.cursor() as cur:
                 cur.execute('SELECT pg_try_advisory_lock(716240921)')
                 leader = cur.fetchone()[0]
