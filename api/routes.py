@@ -1370,7 +1370,7 @@ def build_live_checklist(
         "",
         instructions if instructions is not None else (
             "Vazifani bajarganingizdan keyingina belgilang.\n"
-            "Hozir hech narsani bosishingiz shart emas. 🔔"
+            "Eslatma vaqtini pastdagi tugma orqali Mini Appda belgilashingiz mumkin."
         ),
         ""
     ]
@@ -1386,19 +1386,30 @@ def build_live_checklist(
         keyboard.append(
             [
                 {
-                    "text": f"✅ {index}",
+                    "text": f"✅ {index} Bajarildi",
                     "callback_data": (
                         f"task_status|{task['id']}|completed"
                     )
                 },
                 {
-                    "text": f"❌ {index}",
+                    "text": f"❌ {index} Bajarilmadi",
                     "callback_data": (
                         f"task_status|{task['id']}|failed"
                     )
                 }
             ]
         )
+
+    keyboard.append(
+        [
+            {
+                "text": "🔔 Eslatma qo‘yish",
+                "web_app": {
+                    "url": MINIAPP_URL
+                }
+            }
+        ]
+    )
 
     return (
         "\n".join(lines).rstrip(),
