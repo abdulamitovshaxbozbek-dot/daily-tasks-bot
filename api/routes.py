@@ -4445,6 +4445,48 @@ def handle_live_checklist_reminders(period: str):
         "results": results
     }
 
+def handle_task_reminders():
+    """Vaqti kelgan tasklarni yuborishdan avval bazada atomar claim qiladi."""
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                UPDATE public.tasks AS t
+                SET reminder_sent_at = CURRENT_TIMESTAMP
+                FROM public.users AS u
+                WHERE t.user_id = u.id
+                  AND t.status = 'pending'
+                  AND t.task_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Tashkent')::date
+                  AND t.reminder_time IS NOT NULL
+                  AND t.reminder_sent_at IS NULL
+                  AND t.reminder_time <= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Tashkent')::time
+                  AND u.telegram_chat_id IS NOT NULL
+                  AND u.state != 'blocked'
+                  AND (%s = false OR u.active_bot_id = %s)
+                RETURNING t.id, t.task_text, u.telegram_chat_id, u.first_name
+            """, (require_joined(), bot_id()))
+            tasks = cur.fetchall()
+        conn.commit()
+
+    results = []
+    for task in tasks:
+        keyboard = {"inline_keyboard": [[
+            {"text": "✅ Bajarildi", "callback_data": f"task_status|{task['id']}|completed"},
+            {"text": "❌ Bajarilmadi", "callback_data": f"task_status|{task['id']}|failed"}
+        ]]}
+        try:
+            telegram_send_message_with_keyboard(
+                task["telegram_chat_id"],
+                f"⏰ {task.get('first_name') or 'Do‘st'}, rejalashtirgan vazifangiz vaqti keldi.\n\n"
+                f"📌 {task['task_text']}\n\n"
+                "Boshlash uchun bir kichik qadam kifoya. Bajarganingizdan keyin belgilang. 👣",
+                keyboard
+            )
+            results.append({"task_id": str(task["id"]), "sent": True})
+        except Exception as error:
+            results.append({"task_id": str(task["id"]), "sent": False, "error": str(error)})
+    return {"ok": True, "processed": len(results), "results": results}
+
+
 def handle_reminders():
 
     today = get_today()
@@ -5584,6 +5626,10 @@ class MiniappTaskEditRequest(BaseModel):
     task_text: str = Field(min_length=1, max_length=1000)
 
 
+class MiniappTaskReminderRequest(BaseModel):
+    reminder_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
 def send_task_management_link(chat_id):
     """Botdagi eski tahrirlash tugmalari o'rniga Mini Appni ochishni taklif qiladi."""
     telegram_send_message_with_keyboard(
@@ -5741,6 +5787,56 @@ def miniapp_edit_task(task_id: str, payload: MiniappTaskEditRequest, chat_id: in
 def miniapp_delete_task(task_id: str, chat_id: int = Depends(get_miniapp_chat_id)):
     """Mini Appda tasdiqlangan o'chirishni foydalanuvchi huquqlari bilan bajaradi."""
     return _miniapp_change_task(chat_id, task_id)
+
+
+@router.put("/miniapp/tasks/{task_id}/reminder")
+def miniapp_set_task_reminder(
+    task_id: str,
+    payload: MiniappTaskReminderRequest,
+    chat_id: int = Depends(get_miniapp_chat_id)
+):
+    """Bugungi yoki ertangi pending vazifaga Toshkent vaqti bilan eslatma qo'yadi."""
+    user = get_user_by_chat_id(chat_id)
+    if not user or user["state"] == "blocked":
+        raise HTTPException(status_code=403, detail="Eslatma qo‘yish uchun botda /start bosing.")
+    today = get_today()
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                UPDATE public.tasks
+                SET reminder_time = %s::time, reminder_sent_at = NULL
+                WHERE id::text = %s AND user_id = %s AND status = 'pending'
+                  AND task_date IN (%s, %s)
+                RETURNING id, task_date, reminder_time
+            """, (payload.reminder_time, task_id, user["id"], today, today + timedelta(days=1)))
+            task = cur.fetchone()
+        conn.commit()
+    if not task:
+        raise HTTPException(status_code=404, detail="Vazifa topilmadi, belgilangan yoki sanasi o‘tgan.")
+    return {"ok": True, "task_id": str(task["id"]), "reminder_time": str(task["reminder_time"])[:5]}
+
+
+@router.delete("/miniapp/tasks/{task_id}/reminder")
+def miniapp_clear_task_reminder(task_id: str, chat_id: int = Depends(get_miniapp_chat_id)):
+    """Vazifaning eslatmasini o‘chiradi; vazifaning o‘zi saqlanadi."""
+    user = get_user_by_chat_id(chat_id)
+    if not user or user["state"] == "blocked":
+        raise HTTPException(status_code=403, detail="Eslatmani boshqarish uchun botda /start bosing.")
+    today = get_today()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE public.tasks
+                SET reminder_time = NULL, reminder_sent_at = NULL
+                WHERE id::text = %s AND user_id = %s AND status = 'pending'
+                  AND task_date IN (%s, %s)
+                RETURNING id
+            """, (task_id, user["id"], today, today + timedelta(days=1)))
+            task = cur.fetchone()
+        conn.commit()
+    if not task:
+        raise HTTPException(status_code=404, detail="Vazifa topilmadi, belgilangan yoki sanasi o‘tgan.")
+    return {"ok": True, "task_id": task_id}
 
 
 @router.post("/telegram")
@@ -6371,6 +6467,12 @@ def _tasks_to_json(tasks) -> list[dict]:
 
             created_at = created_at.isoformat()
 
+        reminder_time = task.get("reminder_time")
+
+        if reminder_time is not None:
+
+            reminder_time = str(reminder_time)[:5]
+
         result.append(
             {
                 "id": str(task["id"]),
@@ -6378,6 +6480,7 @@ def _tasks_to_json(tasks) -> list[dict]:
                 "status": task["status"],
                 "task_date": task_date,
                 "created_at": created_at,
+                "reminder_time": reminder_time,
                 "fail_reason": task.get("fail_reason"),
                 "fail_reason_text": task.get("fail_reason_text"),
                 "can_manage": task["status"] == "pending" and task_date in (
