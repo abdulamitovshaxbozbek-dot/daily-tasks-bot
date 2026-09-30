@@ -697,6 +697,8 @@
   .task-dialog [hidden] { display: none; }
   .task-dialog textarea { box-sizing: border-box; width: 100%; min-height: 100px; padding: 12px;
     border: 1px solid var(--border); border-radius: 12px; background: #0f2e2b; color: var(--text); font: inherit; }
+  .task-dialog input[type="time"] { box-sizing: border-box; width: 100%; min-height: 46px; padding: 10px 12px;
+    border: 1px solid var(--border); border-radius: 12px; background: #0f2e2b; color: var(--text); font: inherit; }
   .task-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
   .task-dialog .primary { background: #c5e8bc; color: #0f2e2b; font-weight: 600; }
   .task-dialog .danger { background: #ffb4a9; }
@@ -756,6 +758,8 @@
     <p id="taskDialogText"></p>
     <label id="taskInputLabel" for="taskInput">Vazifa matni</label>
     <textarea id="taskInput" maxlength="1000" rows="3"></textarea>
+    <label id="reminderTimeLabel" for="reminderTime" hidden>Eslatma vaqti</label>
+    <input id="reminderTime" type="time" hidden>
     <p id="taskError" class="task-error" role="alert"></p>
     <div class="task-dialog-actions">
       <button id="taskCancel" type="button">Bekor qilish</button>
@@ -804,6 +808,8 @@
   const taskForm = document.getElementById('taskForm');
   const taskInput = document.getElementById('taskInput');
   const taskInputLabel = document.getElementById('taskInputLabel');
+  const reminderTime = document.getElementById('reminderTime');
+  const reminderTimeLabel = document.getElementById('reminderTimeLabel');
   const taskDialogTitle = document.getElementById('taskDialogTitle');
   const taskDialogText = document.getElementById('taskDialogText');
   const taskError = document.getElementById('taskError');
@@ -820,7 +826,10 @@
     taskRegistry.set(String(task.id), task);
     if (!task.can_manage) return '';
     const id = encodeURIComponent(task.id);
+    const reminderLabel = task.reminder_time ? 'Eslatma: ' + task.reminder_time : 'Eslatma qo‘yish';
     return '<div class="task-actions">' +
+      '<button type="button" class="task-action-icon" data-task-action="reminder" data-task-id="' + id + '" aria-label="' + reminderLabel + '" title="' + reminderLabel + '">🔔</button>' +
+      (task.reminder_time ? '<button type="button" class="task-action-icon" data-task-action="clear-reminder" data-task-id="' + id + '" aria-label="Eslatmani o‘chirish" title="Eslatmani o‘chirish">🔕</button>' : '') +
       '<button type="button" class="task-action-icon" data-task-action="edit" data-task-id="' + id + '" aria-label="Vazifani tahrirlash" title="Tahrirlash">' +
         '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>' +
       '</button>' +
@@ -837,17 +846,23 @@
     chosenTask = task;
     taskAction = button.dataset.taskAction;
     const editing = taskAction === 'edit';
-    taskDialogTitle.textContent = editing ? 'Vazifani tahrirlash' : 'Vazifani o‘chirish';
-    taskDialogText.textContent = editing ? 'Vazifaning sanasi o‘zgarmaydi.' : '“' + task.task_text + '” vazifasini o‘chirasizmi?';
+    const reminding = taskAction === 'reminder';
+    const clearingReminder = taskAction === 'clear-reminder';
+    taskDialogTitle.textContent = editing ? 'Vazifani tahrirlash' : (reminding ? 'Eslatma qo‘yish' : (clearingReminder ? 'Eslatmani o‘chirish' : 'Vazifani o‘chirish'));
+    taskDialogText.textContent = editing ? 'Vazifaning sanasi o‘zgarmaydi.' : (reminding ? '“' + task.task_text + '” uchun vaqtni tanlang.' : (clearingReminder ? '“' + task.task_text + '” eslatmasini o‘chirasizmi?' : '“' + task.task_text + '” vazifasini o‘chirasizmi?'));
     taskInputLabel.hidden = !editing;
     taskInput.hidden = !editing;
     taskInput.disabled = !editing;
+    reminderTimeLabel.hidden = !reminding;
+    reminderTime.hidden = !reminding;
+    reminderTime.disabled = !reminding;
     taskInput.value = task.task_text;
-    taskSubmit.textContent = editing ? 'Saqlash' : 'Ha, o‘chirish';
-    taskSubmit.classList.toggle('danger', !editing);
+    reminderTime.value = task.reminder_time || '';
+    taskSubmit.textContent = (editing || reminding) ? 'Saqlash' : 'Ha, o‘chirish';
+    taskSubmit.classList.toggle('danger', !(editing || reminding));
     taskError.textContent = '';
     taskDialog.showModal();
-    (editing ? taskInput : taskCancel).focus();
+    (editing ? taskInput : (reminding ? reminderTime : taskCancel)).focus();
   }
 
   contentEl.addEventListener('click', openTaskDialog);
@@ -858,27 +873,37 @@
     event.preventDefault();
     if (taskBusy || !chosenTask) return;
     const text = taskInput.value.trim();
+    const reminderValue = reminderTime.value;
     if (taskAction === 'edit' && (!text || text.length > 1000 || /[\r\n]/.test(text))) {
       taskError.textContent = 'Vazifani 1–1000 belgili bitta qatorda yozing.';
       taskInput.focus();
+      return;
+    }
+    if (taskAction === 'reminder' && !/^([01]\d|2[0-3]):[0-5]\d$/.test(reminderValue)) {
+      taskError.textContent = 'Eslatma vaqtini tanlang.';
+      reminderTime.focus();
       return;
     }
     taskBusy = true;
     taskSubmit.disabled = true;
     taskCancel.disabled = true;
     taskInput.disabled = true;
+    reminderTime.disabled = true;
     taskError.textContent = '';
     const editing = taskAction === 'edit';
-    apiFetch('/tasks/' + encodeURIComponent(chosenTask.id), {
-      method: editing ? 'PATCH' : 'DELETE',
+    const reminding = taskAction === 'reminder';
+    const clearingReminder = taskAction === 'clear-reminder';
+    const path = '/tasks/' + encodeURIComponent(chosenTask.id) + (reminding || clearingReminder ? '/reminder' : '');
+    apiFetch(path, {
+      method: reminding ? 'PUT' : (clearingReminder ? 'DELETE' : (editing ? 'PATCH' : 'DELETE')),
       headers: {'Content-Type': 'application/json'},
-      ...(editing ? {body: JSON.stringify({task_text: text})} : {})
+      ...((editing || reminding) ? {body: JSON.stringify(editing ? {task_text: text} : {reminder_time: reminderValue})} : {})
     }).then(function (result) {
       taskDialog.close();
       Object.keys(cache).forEach(function (key) { delete cache[key]; });
       taskRegistry.clear();
       document.getElementById('taskNotice').textContent =
-        (editing ? 'Vazifa yangilandi.' : 'Vazifa o‘chirildi.') +
+        (reminding ? 'Eslatma saqlandi: ' + reminderValue + '.' : (clearingReminder ? 'Eslatma o‘chirildi.' : (editing ? 'Vazifa yangilandi.' : 'Vazifa o‘chirildi.'))) +
         (result.checklist_updated === false ? ' Botdagi ro‘yxat keyingi yangilanishda moslashadi.' : '');
       loadPeriod(currentPeriod, true);
       if (openSheetDate) openDaySheet(openSheetDate);
@@ -890,6 +915,7 @@
       taskSubmit.disabled = false;
       taskCancel.disabled = false;
       taskInput.disabled = !editing;
+      reminderTime.disabled = !reminding;
     });
   });
 
