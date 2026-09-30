@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import html
 import time
 import hmac
 import hashlib
@@ -1023,7 +1024,8 @@ def get_motivation(percent: int):
 
 def telegram_send_message(
     chat_id: int,
-    text: str
+    text: str,
+    parse_mode: Optional[str] = None
 ):
 
     if not TELEGRAM_TOKEN:
@@ -1033,13 +1035,19 @@ def telegram_send_message(
             detail="TELEGRAM_TOKEN is not configured"
         )
 
+    payload = {
+        "chat_id": chat_id,
+        "text": text
+    }
+
+    if parse_mode:
+
+        payload["parse_mode"] = parse_mode
+
     response = requests.post(
         f"https://api.telegram.org/"
         f"bot{TELEGRAM_TOKEN}/sendMessage",
-        json={
-            "chat_id": chat_id,
-            "text": text
-        },
+        json=payload,
         timeout=15
     )
 
@@ -1067,7 +1075,8 @@ def telegram_send_message(
 def telegram_send_message_with_keyboard(
     chat_id: int,
     text: str,
-    reply_markup: dict
+    reply_markup: dict,
+    parse_mode: Optional[str] = None
 ):
 
     if not TELEGRAM_TOKEN:
@@ -1077,14 +1086,20 @@ def telegram_send_message_with_keyboard(
             detail="TELEGRAM_TOKEN is not configured"
         )
 
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "reply_markup": reply_markup
+    }
+
+    if parse_mode:
+
+        payload["parse_mode"] = parse_mode
+
     response = requests.post(
         f"https://api.telegram.org/"
         f"bot{TELEGRAM_TOKEN}/sendMessage",
-        json={
-            "chat_id": chat_id,
-            "text": text,
-            "reply_markup": reply_markup
-        },
+        json=payload,
         timeout=15
     )
 
@@ -1158,7 +1173,8 @@ def telegram_edit_message_with_keyboard(
     chat_id: int,
     message_id: int,
     text: str,
-    reply_markup: dict
+    reply_markup: dict,
+    parse_mode: Optional[str] = None
 ):
     """Mavjud Telegram xabari va inline tugmalarini yangilaydi."""
 
@@ -1169,15 +1185,21 @@ def telegram_edit_message_with_keyboard(
             detail="TELEGRAM_TOKEN is not configured"
         )
 
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+        "reply_markup": reply_markup
+    }
+
+    if parse_mode:
+
+        payload["parse_mode"] = parse_mode
+
     response = requests.post(
         f"https://api.telegram.org/"
         f"bot{TELEGRAM_TOKEN}/editMessageText",
-        json={
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "text": text,
-            "reply_markup": reply_markup
-        },
+        json=payload,
         timeout=15
     )
 
@@ -1358,20 +1380,22 @@ def build_live_checklist(
 
     pending_tasks = summary["pending"]
 
+    instruction_text = instructions if instructions is not None else (
+        "Vazifani bajarganingizdan keyingina belgilang.\n"
+        "Eslatma vaqtini pastdagi tugma orqali Mini Appda belgilashingiz mumkin."
+    )
+
     lines = [
-        heading,
+        f"<b>{html.escape(heading)}</b>",
         "",
-        (
+        "<b>" + (
             f"📊 Jami: {summary['total']}  |  "
             f"✅ {summary['completed']}  |  "
             f"❌ {summary['failed']}  |  "
             f"⏳ {len(pending_tasks)}"
-        ),
+        ) + "</b>",
         "",
-        instructions if instructions is not None else (
-            "Vazifani bajarganingizdan keyingina belgilang.\n"
-            "Eslatma vaqtini pastdagi tugma orqali Mini Appda belgilashingiz mumkin."
-        ),
+        html.escape(instruction_text),
         ""
     ]
 
@@ -1380,7 +1404,7 @@ def build_live_checklist(
     for index, task in enumerate(pending_tasks, start=1):
 
         lines.append(
-            f"{index}. ⏳ {task['task_text']}"
+            f"{index}. ⏳ {html.escape(str(task['task_text']))}"
         )
 
         keyboard.append(
@@ -1478,7 +1502,8 @@ def refresh_live_checklist(
                 chat_id,
                 old_message_id,
                 text,
-                keyboard
+                keyboard,
+                parse_mode="HTML"
             )
 
             return {
@@ -1504,7 +1529,8 @@ def refresh_live_checklist(
     sent = telegram_send_message_with_keyboard(
         chat_id,
         text,
-        keyboard
+        keyboard,
+        parse_mode="HTML"
     )
 
     new_message_id = (
@@ -2589,6 +2615,26 @@ def handle_fail_reason(
 # DAILY REPORT
 # =========================================================
 
+def format_report_html(lines: list[str]) -> str:
+    """Hisobot matnini xavfsiz HTMLga aylantirib, asosiy natijalarni qalin qiladi."""
+    bold_prefixes = (
+        "📊 KUNLIK XULOSA",
+        "📊 HAFTALIK XULOSA",
+        "📊 OYLIK XULOSA",
+        "📊 YILLIK XULOSA",
+        "👍 ",
+        "🟩 Bajarildi",
+        "🟥 Bajarilmadi",
+        "🎯 ",
+    )
+    formatted = []
+    for line in lines:
+        safe_line = html.escape(str(line))
+        if str(line).startswith(bold_prefixes):
+            safe_line = f"<b>{safe_line}</b>"
+        formatted.append(safe_line)
+    return "\n\n".join(formatted)
+
 def handle_daily_report(
     chat_id: int
 ):
@@ -2839,7 +2885,8 @@ def handle_daily_report(
 
     telegram_send_message(
         chat_id,
-        "\n\n".join(lines)
+        format_report_html(lines),
+        parse_mode="HTML"
     )
 
     return {
@@ -3187,7 +3234,8 @@ def handle_weekly_report(
 
     telegram_send_message(
         chat_id,
-        "\n\n".join(lines)
+        format_report_html(lines),
+        parse_mode="HTML"
     )
 
     return {
@@ -3468,7 +3516,8 @@ def handle_monthly_report(
 
     telegram_send_message(
         chat_id,
-        "\n\n".join(lines)
+        format_report_html(lines),
+        parse_mode="HTML"
     )
 
     return {
@@ -3784,7 +3833,8 @@ def handle_yearly_report(
 
     telegram_send_message(
         chat_id,
-        "\n\n".join(lines)
+        format_report_html(lines),
+        parse_mode="HTML"
     )
 
     return {
@@ -4267,6 +4317,7 @@ def handle_day_cycle():
 
         chat_id = user["telegram_chat_id"]
         first_name = user["first_name"] or "Do‘st"
+        safe_first_name = html.escape(str(first_name))
         try:
 
             with get_connection() as conn:
@@ -4280,14 +4331,14 @@ def handle_day_cycle():
 
             if today_tasks:
                 greeting = (
-                    f"🌅 Assalomu alaykum va rohmatullohi va barokatuh, {first_name}!\n\n"
+                    f"<b>🌅 Assalomu alaykum va rohmatullohi va barokatuh, {safe_first_name}!</b>\n\n"
                     "Yaxshi dam oldingizmi?\n\n"
                     "Kecha rejalashtirgan vazifalaringiz:\n\n"
-                    + "\n".join(f"• {task['task_text']}" for task in today_tasks)
+                    + "\n".join(f"• {html.escape(str(task['task_text']))}" for task in today_tasks)
                     + "\n\nQo‘shimcha yana vazifalar yuborishingiz mumkin!"
                 )
             else:
-                greeting = f"""🌅 Assalomu alaykum va rohmatullohi va barokatuh, {first_name}!
+                greeting = f"""<b>🌅 Assalomu alaykum va rohmatullohi va barokatuh, {safe_first_name}!</b>
 
 Yaxshi dam oldingizmi?
 
@@ -4300,7 +4351,7 @@ Masalan:
 • 30 daqiqa piyoda yurish
 • Ingliz tilidan 5 ta so‘z yodlash"""
 
-            telegram_send_message(chat_id, greeting)
+            telegram_send_message(chat_id, greeting, parse_mode="HTML")
             if today_tasks:
                 refresh_live_checklist(chat_id, user)
 
@@ -4485,12 +4536,15 @@ def handle_task_reminders():
             {"text": "❌ Bajarilmadi", "callback_data": f"task_status|{task['id']}|failed"}
         ]]}
         try:
+            safe_name = html.escape(str(task.get("first_name") or "Do‘st"))
+            safe_task_text = html.escape(str(task["task_text"]))
             telegram_send_message_with_keyboard(
                 task["telegram_chat_id"],
-                f"⏰ {task.get('first_name') or 'Do‘st'}, rejalashtirgan vazifangiz vaqti keldi.\n\n"
-                f"📌 {task['task_text']}\n\n"
+                f"<b>⏰ {safe_name}, rejalashtirgan vazifangiz vaqti keldi.</b>\n\n"
+                f"<b>📌 {safe_task_text}</b>\n\n"
                 "Boshlash uchun bir kichik qadam kifoya. Bajarganingizdan keyin belgilang. 👣",
-                keyboard
+                keyboard,
+                parse_mode="HTML"
             )
             results.append({"task_id": str(task["id"]), "sent": True})
         except Exception as error:
@@ -4574,15 +4628,16 @@ def handle_reminders():
             user["first_name"]
             or "Do‘st"
         )
+        safe_first_name = html.escape(str(first_name))
 
         if (
             user["morning_time"] is None
             or user["state"] == "waiting_morning_time"
         ):
 
-            text = f"""👋 Assalomu alaykum, {first_name}!
+            text = f"""<b>👋 Assalomu alaykum, {safe_first_name}!</b>
 
-⏰ Siz ertalabki vaqtingizni hali tanlamagansiz.
+<b>⏰ Siz ertalabki vaqtingizni hali tanlamagansiz.</b>
 
 🕐 Iltimos, vaqt tanlashni yakunlang. Shundan so‘ng botdan bemalol foydalanishingiz mumkin. 😊
 
@@ -4626,9 +4681,9 @@ Quyidagi vaqtlardan birini tanlang:"""
 
         else:
 
-            text = f"""👋 Assalomu alaykum va rohmatullohi va barokatuh, {first_name}!
+            text = f"""<b>👋 Assalomu alaykum va rohmatullohi va barokatuh, {safe_first_name}!</b>
 
-Bugun kichik bir qadamdan boshlaymizmi? 👣
+<b>Bugun kichik bir qadamdan boshlaymizmi? 👣</b>
 
 So‘nggi kunlarda vazifalar yubormayapsiz!
 
@@ -4645,14 +4700,16 @@ Masalan: Kitobdan 10 bet o‘qish."""
                 telegram_send_message_with_keyboard(
                     chat_id,
                     text,
-                    reply_markup
+                    reply_markup,
+                    parse_mode="HTML"
                 )
 
             else:
 
                 telegram_send_message(
                     chat_id,
-                    text
+                    text,
+                    parse_mode="HTML"
                 )
 
             with get_connection() as update_conn:
