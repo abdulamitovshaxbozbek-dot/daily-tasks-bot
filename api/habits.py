@@ -133,13 +133,14 @@ def install(router, get_connection, auth, bot_id, require_joined, send, answer):
 
     @contextmanager
     def connection():
-        conn = get_connection()
-        try:
+        with get_connection() as conn:
             initialize(conn)
-            with conn:
+            try:
                 yield conn
-        finally:
-            conn.close()
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
 
     def owner(cur, chat_id):
         cur.execute("""SELECT id FROM public.users WHERE telegram_chat_id=%s
