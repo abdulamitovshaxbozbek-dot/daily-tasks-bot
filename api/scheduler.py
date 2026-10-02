@@ -11,7 +11,7 @@ ZONE = ZoneInfo("Asia/Tashkent")
 
 def due_jobs(now):
     local = now.astimezone(ZONE)
-    jobs = ["day_cycle", "task_reminders"]
+    jobs = ["day_cycle", "task_reminders", "habit_reminders"]
     if local.minute == 0:
         if local.hour == 11:
             jobs.append("reminders")
@@ -35,6 +35,9 @@ def initialize(conn):
             ON public.tasks (task_date, reminder_time)
             WHERE status = 'pending' AND reminder_time IS NOT NULL AND reminder_sent_at IS NULL""")
     conn.commit()
+
+    from habits import initialize as initialize_habits
+    initialize_habits(conn)
 
 
 def claim(conn, job, slot):
@@ -73,10 +76,11 @@ def run_tick(conn, now, handlers):
 
 def worker(stop):
     import psycopg2
-    from routes import handle_day_cycle, handle_reminders, handle_live_checklist_reminders, handle_task_reminders
+    from routes import handle_day_cycle, handle_reminders, handle_live_checklist_reminders, handle_task_reminders, handle_habit_reminders
     handlers = {
         'day_cycle': handle_day_cycle,
         'task_reminders': handle_task_reminders,
+        'habit_reminders': handle_habit_reminders,
         'reminders': handle_reminders,
         'midday': lambda: handle_live_checklist_reminders('midday'),
         'evening': lambda: handle_live_checklist_reminders('evening'),

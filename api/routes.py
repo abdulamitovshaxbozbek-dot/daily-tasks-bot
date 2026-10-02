@@ -5994,6 +5994,11 @@ def telegram_webhook(
             "WEBHOOK: ACTIVITY UPDATE DONE"
         )
 
+        habit_command = message_text.split(maxsplit=1)[0:1]
+        if habit_command and habit_command[0].split("@", 1)[0] in ("/qazo", "/namoz", "/odatlar"):
+            section = {"/qazo": "qaza", "/namoz": "prayers", "/odatlar": "habits"}[habit_command[0].split("@", 1)[0]]
+            return handle_habit_chat_summary(chat_id, section)
+
         if message_text.split(maxsplit=1)[0:1] == ["/start"]:
 
             return handle_telegram_start(
@@ -6015,6 +6020,8 @@ def telegram_webhook(
             )
 
             management_action, separator, task_id = callback_data.partition("|")
+            if callback_data.startswith("habit|"):
+                return handle_habit_callback(chat_id, callback_data, callback_query_id)
             if separator and management_action in (
                 "task_edit", "task_delete", "task_delete_yes", "task_delete_no"
             ):
@@ -7104,3 +7111,12 @@ def proxy_to_legacy(
         )
 
     return response.json()
+
+
+# Opt-in habits use their own tables and authenticated Mini App endpoints.
+from habits import install as install_habits
+
+handle_habit_reminders, handle_habit_callback, handle_habit_chat_summary = install_habits(
+    router, get_connection, get_miniapp_chat_id, bot_id, require_joined,
+    telegram_send_message_with_keyboard, telegram_answer_callback,
+)
