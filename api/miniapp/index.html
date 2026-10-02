@@ -1416,5 +1416,218 @@
 })();
 </script>
 
+<style>
+  [hidden] { display:none!important; }
+  .journey-nav { display:flex; gap:5px; padding:5px; margin:0 0 22px; background:rgba(255,255,255,.045); border:1px solid rgba(255,255,255,.08); border-radius:18px; }
+  .journey-nav button { flex:1; padding:12px 3px; border:0; border-radius:13px; background:transparent; color:#a7bfba; font:inherit; font-size:12px; cursor:pointer; }
+  .journey-nav button[aria-selected="true"] { background:#d7ebc8; color:#153d32; font-weight:700; box-shadow:0 3px 12px #00191030; }
+  #journeyPanel { padding-bottom:32px; }
+  #journeyPanel button, #journeyDialog button { font:inherit; cursor:pointer; }
+  #journeyPanel button:disabled, #journeyDialog button:disabled { opacity:.45; cursor:default; }
+  .j-hero { position:relative; overflow:hidden; padding:25px; border-radius:26px; background:linear-gradient(130deg,#245447,#123b34 75%); border:1px solid #52715d; margin-bottom:20px; }
+  .j-hero:after { content:''; position:absolute; width:150px; height:150px; border:1px solid #acc88924; border-radius:50%; right:-65px; top:-55px; box-shadow:0 0 0 22px #acc88909,0 0 0 45px #acc88908; pointer-events:none; }
+  .j-eyebrow { color:#c8d9a8; letter-spacing:2px; font-size:10px; font-weight:700; text-transform:uppercase; margin:0 0 12px; }
+  .j-hero h2 { font-size:28px; line-height:1.2; letter-spacing:-.8px; margin:0 0 10px; color:#f4f4e5; }
+  .j-copy { font-size:13px; line-height:1.7; color:#adc8bf; margin:6px 0 0; }
+  .j-next { display:flex; justify-content:space-between; align-items:center; gap:10px; border-top:1px solid #ffffff17; margin-top:20px; padding-top:16px; }
+  .j-next strong { font-size:25px; color:#e3eac2; font-variant-numeric:tabular-nums; }
+  .j-head { display:flex; justify-content:space-between; gap:12px; align-items:center; margin:22px 0 12px; }
+  .j-head h3 { font-size:16px; margin:0; }
+  .j-btn { border:1px solid #75998240; border-radius:12px; background:#ffffff07; color:#e1e8d7; padding:10px 13px; font-size:12px!important; }
+  .j-primary { background:#d8eac3; color:#163e32; border-color:#d8eac3; font-weight:700!important; }
+  .j-card { padding:18px; border:1px solid #ffffff10; background:#ffffff04; border-radius:19px; margin-bottom:10px; }
+  .j-row { display:flex; align-items:center; gap:13px; }
+  .j-icon { width:42px; height:42px; border-radius:14px; background:#c5dfa311; color:#d6e5b6; display:grid; place-items:center; font-size:19px; flex-shrink:0; }
+  .j-grow { flex:1; min-width:0; }
+  .j-title { display:block; font-size:15px; font-weight:600; overflow-wrap:anywhere; }
+  .j-small { display:block; font-size:11px; line-height:1.6; color:#9bb9af; margin-top:4px; }
+  .j-time { font-size:19px; font-weight:600; font-variant-numeric:tabular-nums; color:#dfe8cb; }
+  .j-actions { display:flex; gap:8px; margin-top:15px; }
+  .j-actions button { flex:1; }
+  .j-done { border-color:#a6d89c44; background:#a6d89c0b; }
+  .j-status { color:#c5e8b2; font-size:12px; margin:12px 0 0; }
+  .j-link { border:0; background:none; color:#a5b9af; padding:5px; font-size:11px!important; text-decoration:underline; }
+  .j-ring { width:64px; height:64px; border-radius:50%; background:conic-gradient(#cee2a9 var(--progress),#ffffff10 0); display:grid; place-items:center; flex-shrink:0; }
+  .j-ring span { display:grid; place-items:center; width:53px; height:53px; border-radius:50%; background:#173e34; font-size:17px; font-weight:700; }
+  .j-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:9px; margin:12px 0 20px; }
+  .j-stat { padding:14px 6px; text-align:center; background:#ffffff04; border:1px solid #ffffff0c; border-radius:15px; }
+  .j-stat strong { font-size:20px; display:block; color:#e1e9cb; }
+  .j-stat span { font-size:10px; color:#9fb8ae; }
+  .j-calendar { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; margin-top:14px; }
+  .j-day { aspect-ratio:1.2; border-radius:7px; background:#ffffff08; display:grid; place-items:center; font-size:10px; color:#adc5b9; }
+  .j-day.partial { background:#668e5140; }.j-day.full { background:#b7d896; color:#153829; }
+  .j-warning { padding:12px; color:#efcf9d; background:#f2bf5410; border:1px solid #f2bf5430; border-radius:12px; font-size:12px; line-height:1.6; }
+  .j-empty { text-align:center; padding:28px 16px; }.j-empty h3 { margin:12px 0; }
+  #journeyDialog { box-sizing:border-box; width:min(420px,calc(100% - 32px)); max-height:85dvh; overflow:auto; background:#133b32; color:#edf0df; border:1px solid #71916b; border-radius:24px; padding:24px; }
+  #journeyDialog::backdrop { background:#031c17bb; backdrop-filter:blur(5px); }
+  #journeyDialog h2 { margin:0 0 9px; font-size:22px; }
+  #journeyDialog label { display:block; font-size:12px; color:#c3d3bd; margin:18px 0 7px; }
+  #journeyDialog input:not([type=checkbox]), #journeyDialog select { box-sizing:border-box; width:100%; color:#eef2df; background:#0f2e27; border:1px solid #799c6944; border-radius:12px; padding:13px; font:inherit; }
+  #journeyDialog input[type=checkbox] { accent-color:#b7d896; }
+  .j-toast { color:#cfdfb4; font-size:12px; line-height:1.6; margin:10px 0; }
+  @media(prefers-reduced-motion:no-preference) { .j-card { animation:j-enter .25s ease-out; } @keyframes j-enter { from { opacity:.3; transform:translateY(5px); } to { opacity:1; transform:none; } } }
+</style>
+<dialog id="journeyDialog" aria-labelledby="journeyDialogTitle"><form id="journeyForm"></form></dialog>
+<script>
+(function () {
+  'use strict';
+  const tg = window.Telegram && window.Telegram.WebApp;
+  const app = document.querySelector('.app');
+  const tabs = app.querySelector('.tabs');
+  const original = [tabs, document.getElementById('content'), document.getElementById('taskNotice')];
+  const nav = document.createElement('nav');
+  nav.className = 'journey-nav'; nav.setAttribute('aria-label', 'Asosiy bo‘limlar');
+  nav.innerHTML = [['tasks','Vazifalar'],['prayers','Namoz'],['habits','Odatlar'],['qaza','Qazo']].map(([key,label]) =>
+    '<button type="button" role="tab" data-section="'+key+'" aria-selected="'+(key==='tasks')+'">'+label+'</button>').join('');
+  nav.setAttribute('role','tablist');
+  app.insertBefore(nav, tabs);
+  const panel = document.createElement('section'); panel.id='journeyPanel'; panel.hidden=true;
+  panel.setAttribute('aria-label','Odatlar va namozlar'); app.appendChild(panel);
+  const dialog=document.getElementById('journeyDialog'), form=document.getElementById('journeyForm');
+  let section='tasks', model=null, request=0, busy=false, mode='', selected=null, notice='';
+  const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  async function api(path, method='GET', body) {
+    const res=await fetch('/api/miniapp/'+path+'?initData='+encodeURIComponent(tg ? tg.initData : ''),{
+      method, headers: {'Content-Type':'application/json'}, ...(body ? {body:JSON.stringify(body)} : {})
+    });
+    const data=await res.json();
+    if(!res.ok) throw new Error(typeof data.detail==='string'?data.detail:'Amalni bajarib bo‘lmadi. Qayta urinib ko‘ring.');
+    return data;
+  }
+  function btn(label,action,id,primary=false,disabled=false) {
+    return '<button type="button" class="j-btn '+(primary?'j-primary':'')+'" data-action="'+action+'"'+(id!=null?' data-id="'+esc(id)+'"':'')+(disabled?' disabled':'')+'>'+label+'</button>';
+  }
+  function hero(eyebrow,title,text,extra='') {
+    return '<div class="j-hero"><p class="j-eyebrow">'+eyebrow+'</p><h2>'+title+'</h2><p class="j-copy">'+text+'</p>'+extra+'</div>';
+  }
+  function stats(kind) {
+    return '<div class="j-stats">'+[['daily','Bugun'],['weekly','Shu hafta'],['monthly','Shu oy']].map(([key,label])=>{
+      const s=model.stats[key][kind]; return '<div class="j-stat"><strong>'+s.done+' <small style="font-size:11px;opacity:.5">/ '+s.total+'</small></strong><span>'+label+'</span></div>';
+    }).join('')+'</div>';
+  }
+  function marks(entry, prayer) {
+    if(!entry) return '<p class="j-small">Vaqtlar yuklanmoqda.</p>';
+    if(entry.status!=='pending') {
+      const label=entry.status==='done'?(prayer?'✓ O‘qildi':'✓ Bajarildi'):entry.status==='qaza_done'?'✓ Qazosi o‘qildi':(prayer?'Qazo hisobiga qo‘shildi':'Bugun bajarilmadi');
+      return '<p class="j-status">'+label+'</p>';
+    }
+    return '<p class="j-small">'+(entry.available?'Holatni bot chatida belgilang.':'Vaqti hali kirmagan.')+'</p>';
+  }
+  function render() {
+    if(!model || section==='tasks') return;
+    const dateParts=model.date.split('-');
+    const today=Number(dateParts[2])+'-'+['yanvar','fevral','mart','aprel','may','iyun','iyul','avgust','sentabr','oktabr','noyabr','dekabr'][Number(dateParts[1])-1];
+    let view='';
+    if(section==='prayers') {
+      const settings=model.settings, enabled=settings&&settings.enabled;
+      const next=Object.entries(model.times).filter(([key])=>key!=='quyosh').sort((a,b)=>a[1].localeCompare(b[1])).find(([,t])=>t>model.now);
+      const names={bomdod:'Bomdod',peshin:'Peshin',asr:'Asr',shom:'Shom',xufton:'Xufton'};
+      view+=hero(today+' · NAMOZ','Kuningizga xotirjamlik.',enabled?esc(model.regions[settings.region]):'Hududingizni tanlang. Namoz vaqtlarini birga kuzatamiz.',
+        enabled&&next?'<div class="j-next"><span class="j-copy">Keyingi namoz · '+names[next[0]]+'</span><strong>'+esc(next[1])+'</strong></div>':'');
+      view+='<div class="j-head"><h3>Besh vaqt namoz</h3>'+btn('⚙ Hudud va eslatma','settings')+'</div>';
+      if(!enabled) view+='<div class="j-card j-empty"><div style="font-size:34px">☾</div><h3>Bir marta sozlang</h3><p class="j-copy">Hududingizga mos vaqtlar va har kuni botdan eslatmalar.</p><div class="j-actions">'+btn('Hududni tanlash','settings',null,true)+'</div></div>';
+      if(model.warning) view+='<p class="j-warning">'+esc(model.warning)+'</p>';
+      if(enabled) {
+        Object.entries(names).forEach(([key,title],index)=>{
+          const entry=model.entries.find(e=>e.kind==='prayer'&&e.ref===key);
+          view+='<article class="j-card '+(entry&&entry.status==='done'?'j-done':'')+'"><div class="j-row"><div class="j-icon">'+['☀','◉','◐','◒','☾'][index]+'</div><div class="j-grow"><span class="j-title">'+title+'</span><span class="j-small">'+(entry&&!entry.available?'Vaqti hali kirmagan':today)+'</span></div><span class="j-time">'+esc(model.times[key]||(entry&&entry.time)||'—')+'</span></div>'+marks(entry,true)+'</article>';
+        });
+        view+=stats('prayer');
+        view+='<p class="j-copy">Faqat “O‘qimadim” deb belgilangan namoz qazo hisobiga qo‘shiladi. Belgilanmagan namoz ochiq qoladi.</p>';
+        view+='<p class="j-small">Vaqtlar: <a href="https://namoz-vaqti.uz" target="_blank" rel="noopener noreferrer" style="color:inherit">namoz-vaqti.uz</a> · '+esc(model.regions[settings.region])+'. Mahalliy masjid jadvali farq qilishi mumkin.</p>';
+      }
+    } else if(section==='habits') {
+      const ids=new Set(model.habits.map(h=>String(h.id))), entries=model.entries.filter(e=>e.kind==='habit'&&ids.has(e.ref));
+      const completed=entries.filter(e=>e.status==='done').length, total=model.habits.length;
+      view+=hero(today+' · SIZNING RITMINGIZ','Har kuni maqsad sari bir qadam 👣','Bugungi harakatingiz ertangi odatingizga aylanadi.',
+        '<div class="j-next"><div><span class="j-title">'+completed+' / '+total+' odat bajarildi</span><span class="j-small">'+(total&&completed===total?'Bugungi rejangiz bajarildi. O‘zingizga rahmat ayting.':'O‘zingizga qulay sur’atda davom eting.')+'</span></div><div class="j-ring" style="--progress:'+(total?Math.round(completed/total*100):0)+'%"><span>'+(total?Math.round(completed/total*100):0)+'%</span></div></div>');
+      view+='<div class="j-head"><h3>Bugungi odatlar</h3>'+btn('+ Odat qo‘shish','add',null,true)+'</div>';
+      if(!total) view+='<div class="j-card j-empty"><div style="font-size:32px">👣</div><h3>Bitta odatdan boshlang</h3><p class="j-copy">Kitob o‘qish, kunlik zikr yoki sayr. Nomini va eslatma vaqtini bir marta belgilang.</p><div class="j-actions">'+btn('Birinchi odatim','add',null,true)+'</div></div>';
+      model.habits.forEach(h=>{
+        const entry=entries.find(e=>e.ref===String(h.id));
+        view+='<article class="j-card '+(entry&&entry.status==='done'?'j-done':'')+'"><div class="j-row"><div class="j-icon">'+(h.kind==='zikr'?'📿':'👣')+'</div><div class="j-grow"><span class="j-title">'+esc(h.title)+'</span><span class="j-small">🔔 '+esc(h.reminder_time)+' · Har kuni</span></div><button class="j-btn" aria-label="Odatni tahrirlash" data-action="edit" data-id="'+h.id+'">✎</button></div>'+marks(entry,false)+'<div class="j-next"><span class="j-small">🔥 '+h.streak.current+' kun ketma-ket</span><span class="j-small">Eng uzuni: '+h.streak.best+' kun</span></div></article>';
+      });
+      if(total) {
+        view+=stats('habit');
+        view+='<div class="j-card"><span class="j-title">So‘nggi 28 kun</span><p class="j-small">Har bir belgi — bir kunlik harakatingiz.</p><div class="j-calendar">'+model.calendar.map(d=>'<div class="j-day '+(d.total&&d.done===d.total?'full':d.done?'partial':'')+'" title="'+d.date+': '+d.done+'/'+d.total+'" aria-label="'+d.date+': '+d.done+'/'+d.total+'">'+Number(d.date.slice(-2))+'</div>').join('')+'</div><p class="j-small">Yorqin yashil — barcha odatlar bajarilgan.</p></div>';
+        const best=Math.max(...model.habits.map(h=>h.streak.current)), next=[3,7,14,30,60,100].find(n=>n>best)||best+30;
+        view+='<p class="j-copy">Keyingi marrangiz: '+next+' kun. Bir kun qolib ketsa ham, avvalgi natijalaringiz saqlanadi.</p>';
+      }
+    } else {
+      const count=model.qaza.reduce((s,p)=>s+p.count,0);
+      view+=hero('SHAHSIY HISOB','Qazo namozlar','Har bir belgilangan namoz o‘z hisobida.',
+        '<div class="j-next"><div><span class="j-small">Hisobda qolgan</span><strong>'+count+'</strong></div><div><span class="j-small">Qazosi o‘qilgan</span><strong>'+model.qaza_completed+'</strong></div></div>');
+      if(!count) view+='<div class="j-card j-empty"><div style="font-size:32px">☾</div><h3>Qazo ro‘yxatingiz bo‘sh</h3><p class="j-copy">“O‘qimadim” deb belgilagan namozlaringiz shu yerda ko‘rinadi.</p></div>';
+      model.qaza.forEach(p=>{
+        view+='<article class="j-card"><div class="j-row"><div class="j-grow"><span class="j-title">'+esc(p.title)+'</span><span class="j-small">'+p.count+' ta qazo</span></div></div></article>';
+      });
+      view+='<p class="j-copy">Qazo o‘qilganini belgilash uchun bot chatiga /qazo yuboring.</p>';
+    }
+    panel.innerHTML=(notice?'<p class="j-toast" role="status">'+esc(notice)+'</p>':'')+view;
+  }
+  async function load() {
+    const token=++request;
+    if(!model) panel.innerHTML='<div class="j-card" role="status">Ma’lumotlar yuklanmoqda…</div>';
+    try { const data=await api('habits'); if(token!==request) return; model=data; render(); }
+    catch(e) { if(token!==request) return; panel.innerHTML='<p class="j-warning" role="alert">'+esc(e.message)+'</p>'+btn('Qayta urinish','retry'); }
+  }
+  nav.addEventListener('click',e=>{
+    const button=e.target.closest('[data-section]'); if(!button) return;
+    section=button.dataset.section; notice='';
+    nav.querySelectorAll('button').forEach(b=>b.setAttribute('aria-selected',String(b===button)));
+    original.forEach(el=>el.hidden=section!=='tasks'); panel.hidden=section==='tasks';
+    if(section!=='tasks') { render(); load(); }
+  });
+  document.getElementById('refreshBtn').addEventListener('click',e=>{
+    if(section!=='tasks') { e.stopImmediatePropagation(); load(); }
+  },true);
+  function openForm(type,id) {
+    mode=type; selected=id; let fields='';
+    if(type==='settings') {
+      const s=model.settings||{region:'toshkent-shahri',enabled:true};
+      fields='<h2 id="journeyDialogTitle">Namoz eslatmalari</h2><p class="j-copy">Besh vaqt uchun hududingizga mos kundalik eslatma.</p><label for="jRegion">Viloyat / shahar</label><select id="jRegion" name="region">'+Object.entries(model.regions).map(([key,name])=>'<option value="'+esc(key)+'" '+(key===s.region?'selected':'')+'>'+esc(name)+'</option>').join('')+'</select><label><input type="checkbox" name="enabled" '+(s.enabled?'checked':'')+'> Har kuni eslatma yuborilsin</label>';
+    } else if(type==='archive') {
+      fields='<h2 id="journeyDialogTitle">Odatni arxivlash</h2><p class="j-copy">Bu odat uchun eslatmalar to‘xtaydi. Oldingi natijalar saqlanadi.</p>';
+    } else {
+      const h=model.habits.find(h=>h.id===Number(id))||{title:'',kind:'habit',reminder_time:'08:00'};
+      fields='<h2 id="journeyDialogTitle">'+(type==='edit'?'Odatingizni sozlang':'Yangi odat')+'</h2><p class="j-copy">Kichik va bajarish oson bo‘lgan qadamni tanlang.</p><label for="jTitle">Odat nomi</label><input id="jTitle" name="title" maxlength="120" required value="'+esc(h.title)+'" placeholder="Masalan, 10 bet kitob o‘qish"><label for="jKind">Turi</label><select id="jKind" name="kind"><option value="habit">Kundalik odat</option><option value="zikr" '+(h.kind==='zikr'?'selected':'')+'>Zikr</option></select><label for="jTime">Har kungi eslatma · Toshkent vaqti</label><input id="jTime" name="reminder_time" type="time" required value="'+esc(h.reminder_time)+'">';
+      if(type==='edit') fields+='<p><button type="button" class="j-link" data-archive="'+h.id+'">Odatni arxivlash</button></p>';
+    }
+    form.innerHTML=fields+'<p id="jFormError" class="j-warning" role="alert" hidden></p><div class="j-actions"><button class="j-btn" type="button" data-close>Bekor qilish</button><button class="j-btn j-primary" type="submit">'+(type==='archive'?'Arxivlash':'Saqlash')+'</button></div>';
+    if(!dialog.open) dialog.showModal();
+  }
+  async function mutate(path,method,body) {
+    if(busy) return false; busy=true;
+    panel.querySelectorAll('button').forEach(b=>b.disabled=true); form.querySelectorAll('button').forEach(b=>b.disabled=true);
+    try { await api(path,method,body); notice='Saqlandi'; await load(); return true; }
+    finally { busy=false; form.querySelectorAll('button').forEach(b=>b.disabled=false); render(); }
+  }
+  panel.addEventListener('click',async e=>{
+    const b=e.target.closest('[data-action]'); if(!b||busy) return;
+    const action=b.dataset.action,id=b.dataset.id;
+    if(action==='retry') return load();
+    if(['settings','add','edit'].includes(action)) return openForm(action,id);
+  });
+  form.addEventListener('click',e=>{
+    if(busy) return;
+    if(e.target.closest('[data-close]')) dialog.close();
+    const b=e.target.closest('[data-archive]'); if(b) openForm('archive',b.dataset.archive);
+  });
+  dialog.addEventListener('cancel',e=>{if(busy)e.preventDefault();});
+  form.addEventListener('submit',async e=>{
+    e.preventDefault(); if(busy)return;
+    const data=Object.fromEntries(new FormData(form)), err=document.getElementById('jFormError'); err.hidden=true;
+    try {
+      let ok;
+      if(mode==='settings') ok=await mutate('habits/prayer-settings','PUT',{region:data.region,enabled:data.enabled==='on'});
+      else if(mode==='archive') ok=await mutate('habits/'+selected,'DELETE');
+      else ok=await mutate('habits'+(mode==='edit'?'/'+selected:''),mode==='edit'?'PUT':'POST',data);
+      if(ok)dialog.close();
+    } catch(error) { err.textContent=error.message; err.hidden=false; }
+  });
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&section!=='tasks'&&!busy)load();});
+  setInterval(()=>{if(!document.hidden&&section!=='tasks'&&!busy&&!dialog.open)load();},60000);
+})();
+</script>
 </body>
 </html>
