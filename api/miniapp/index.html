@@ -1419,7 +1419,7 @@
 <style>
   [hidden] { display:none!important; }
   .journey-nav { display:flex; gap:5px; padding:5px; margin:0 0 22px; background:rgba(255,255,255,.045); border:1px solid rgba(255,255,255,.08); border-radius:18px; }
-  .journey-nav button { flex:1; padding:12px 3px; border:0; border-radius:13px; background:transparent; color:#a7bfba; font:inherit; font-size:12px; cursor:pointer; }
+  .journey-nav button { min-height:44px; flex:1; padding:12px 3px; border:0; border-radius:13px; background:transparent; color:#a7bfba; font:inherit; font-size:12px; cursor:pointer; }
   .journey-nav button[aria-selected="true"] { background:#d7ebc8; color:#153d32; font-weight:700; box-shadow:0 3px 12px #00191030; }
   #journeyPanel { padding-bottom:32px; }
   #journeyPanel button, #journeyDialog button { font:inherit; cursor:pointer; }
@@ -1427,13 +1427,13 @@
   .j-hero { position:relative; overflow:hidden; padding:25px; border-radius:26px; background:linear-gradient(130deg,#245447,#123b34 75%); border:1px solid #52715d; margin-bottom:20px; }
   .j-hero:after { content:''; position:absolute; width:150px; height:150px; border:1px solid #acc88924; border-radius:50%; right:-65px; top:-55px; box-shadow:0 0 0 22px #acc88909,0 0 0 45px #acc88908; pointer-events:none; }
   .j-eyebrow { color:#c8d9a8; letter-spacing:2px; font-size:10px; font-weight:700; text-transform:uppercase; margin:0 0 12px; }
-  .j-hero h2 { font-size:28px; line-height:1.2; letter-spacing:-.8px; margin:0 0 10px; color:#f4f4e5; }
+  .j-hero h2 { font-size:24px; line-height:1.2; letter-spacing:-.8px; margin:0 0 10px; color:#f4f4e5; }
   .j-copy { font-size:13px; line-height:1.7; color:#adc8bf; margin:6px 0 0; }
   .j-next { display:flex; justify-content:space-between; align-items:center; gap:10px; border-top:1px solid #ffffff17; margin-top:20px; padding-top:16px; }
   .j-next strong { font-size:25px; color:#e3eac2; font-variant-numeric:tabular-nums; }
   .j-head { display:flex; justify-content:space-between; gap:12px; align-items:center; margin:22px 0 12px; }
   .j-head h3 { font-size:16px; margin:0; }
-  .j-btn { border:1px solid #75998240; border-radius:12px; background:#ffffff07; color:#e1e8d7; padding:10px 13px; font-size:12px!important; }
+  .j-btn { min-height:44px; border:1px solid #75998240; border-radius:12px; background:#ffffff07; color:#e1e8d7; padding:10px 13px; font-size:12px!important; }
   .j-primary { background:#d8eac3; color:#163e32; border-color:#d8eac3; font-weight:700!important; }
   .j-card { padding:18px; border:1px solid #ffffff10; background:#ffffff04; border-radius:19px; margin-bottom:10px; }
   .j-row { display:flex; align-items:center; gap:13px; }
@@ -1466,6 +1466,25 @@
   #journeyDialog input[type=checkbox] { accent-color:#b7d896; }
   .j-toast { color:#cfdfb4; font-size:12px; line-height:1.6; margin:10px 0; }
   @media(prefers-reduced-motion:no-preference) { .j-card { animation:j-enter .25s ease-out; } @keyframes j-enter { from { opacity:.3; transform:translateY(5px); } to { opacity:1; transform:none; } } }
+  .j-menu { position:relative; align-self:flex-start; }
+  .j-menu summary { list-style:none; cursor:pointer; min-width:44px; min-height:44px; display:grid; place-items:center; font-size:25px; border-radius:12px; color:#adc8bf; }
+  .j-menu summary::-webkit-details-marker { display:none; }
+  .j-menu[open] summary { background:#ffffff10; }
+  .j-menu>div { position:absolute; right:0; top:46px; z-index:5; min-width:175px; padding:6px; display:grid; gap:5px; background:#12392f; border:1px solid #789977; border-radius:15px; box-shadow:0 12px 30px #001c1799; }
+  .j-menu button { text-align:left; min-height:44px; }
+  .j-marked { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:12px; }
+  .j-marked .j-status { margin:0; }
+  .j-mark-actions button { min-height:46px; }
+  .j-history { border-top:1px solid #ffffff14; margin:22px 0 12px; padding-top:12px; }
+  .j-history>summary { cursor:pointer; font-size:13px; color:#cbdcc1; padding:10px 0; }
+  .j-weekdays { display:flex; gap:5px; flex-wrap:wrap; }
+  #journeyDialog .j-weekdays label { margin:6px 0; flex:1; cursor:pointer; }
+  .j-weekdays input { position:absolute; opacity:0; }
+  .j-weekdays span { display:block; padding:12px 6px; text-align:center; border:1px solid #ffffff20; border-radius:10px; }
+  .j-weekdays input:checked+span { background:#d8eac3; color:#163e32; }
+  .j-weekdays input:focus-visible+span { outline:2px solid white; outline-offset:2px; }
+  .j-toast { position:sticky; top:8px; z-index:6; padding:12px 15px; background:#254e3e; border:1px solid #8bac74; border-radius:14px; white-space:pre-line; }
+  @media(max-width:420px) { .j-card { padding:15px; } .j-time { font-size:17px; } .j-title { font-size:14px; } .j-menu>div { min-width:150px; } }
 </style>
 <dialog id="journeyDialog" aria-labelledby="journeyDialogTitle"><form id="journeyForm"></form></dialog>
 <script>
@@ -1484,7 +1503,8 @@
   const panel = document.createElement('section'); panel.id='journeyPanel'; panel.hidden=true;
   panel.setAttribute('aria-label','Odatlar va namozlar'); app.appendChild(panel);
   const dialog=document.getElementById('journeyDialog'), form=document.getElementById('journeyForm');
-  let section='tasks', model=null, request=0, busy=false, mode='', selected=null, notice='';
+  let archived=false;
+  let section='tasks', model=null, request=0, busy=false, mode='', selected=null, notice='', formRequest='';
   const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   async function api(path, method='GET', body) {
     const res=await fetch('/api/miniapp/'+path+'?initData='+encodeURIComponent(tg ? tg.initData : ''),{
@@ -1506,13 +1526,25 @@
     }).join('')+'</div>';
   }
   function marks(entry, prayer) {
-    if(!entry) return '<p class="j-small">Vaqtlar yuklanmoqda.</p>';
+    if(!entry) return '<p class="j-small">Bugun rejalashtirilmagan.</p>';
+    const action=(label,name,primary=false)=>'<button type="button" class="j-btn '+(primary?'j-primary':'')+'" data-action="mark" data-id="'+entry.id+'" data-status="'+name+'" data-revision="'+entry.revision+'" '+(busy?'disabled':'')+'>'+label+'</button>';
     if(entry.status!=='pending') {
-      const label=entry.status==='done'?(prayer?'✓ O‘qildi':'✓ Bajarildi'):entry.status==='qaza_done'?'✓ Qazosi o‘qildi':(prayer?'Qazo hisobiga qo‘shildi':'Bugun bajarilmadi');
-      return '<p class="j-status">'+label+'</p>';
+      const label=entry.status==='done'?(prayer?'✓ O‘qildi':'✓ Bajarildi'):entry.status==='qaza_done'?'✓ Qazosi o‘qildi':(prayer?'Qazo hisobida':'Bugun bajarilmadi');
+      return '<div class="j-marked"><span class="j-status">'+label+'</span>'+(entry.can_undo?action('↩ Bekor qilish','undo'):'')+'</div>';
     }
-    return '<p class="j-small">'+(entry.available?'Holatni bot chatida belgilang.':'Vaqti hali kirmagan.')+'</p>';
+    if(!entry.available) return '<p class="j-small">Vaqti hali kirmagan.</p>';
+    if(entry.snooze_at) return '<div class="j-marked"><span class="j-small">⏳ Qayta eslatma qo‘yilgan</span>'+action('↩ Bekor qilish','undo')+'</div>';
+    return '<div class="j-actions j-mark-actions">'+action(prayer?'✓ O‘qidim':'✓ Bajarildi','done',true)+
+      (entry.item_kind==='zikr'?action('⏳ Keyinroq','later'):action(prayer?'Qazoga qo‘shish':'Bajarilmadi','missed'))+'</div>';
   }
+  function management(h) {
+    return '<details class="j-menu"><summary aria-label="'+esc(h.title)+'ni boshqarish">⋮</summary><div>'+
+      (h.active?btn('✎ Tahrirlash','edit',h.id)+btn('📦 Arxivlash','archive',h.id):btn('▶ Faollashtirish','activate',h.id))+
+      btn('🗑 O‘chirish','delete',h.id)+'</div></details>';
+  }
+  const dayNames=['Du','Se','Ch','Pa','Ju','Sh','Ya'];
+  function scheduled(h) { const d=new Date(model.date+'T12:00:00Z');return (h.weekdays||[0,1,2,3,4,5,6]).includes((d.getUTCDay()+6)%7); }
+  function scheduleText(h) { const days=h.weekdays||[0,1,2,3,4,5,6];return days.length===7?'Har kuni':days.map(d=>dayNames[d]).join(' · '); }
   function render() {
     if(!model || section==='tasks') return;
     const dateParts=model.date.split('-');
@@ -1522,7 +1554,7 @@
       const settings=model.settings, enabled=settings&&settings.enabled;
       const next=Object.entries(model.times).filter(([key])=>key!=='quyosh').sort((a,b)=>a[1].localeCompare(b[1])).find(([,t])=>t>model.now);
       const names={bomdod:'Bomdod',peshin:'Peshin',asr:'Asr',shom:'Shom',xufton:'Xufton'};
-      view+=hero(today+' · NAMOZ','Kuningizga xotirjamlik.',enabled?esc(model.regions[settings.region]):'Hududingizni tanlang. Namoz vaqtlarini birga kuzatamiz.',
+      view+=hero(today+' · NAMOZ','Bugungi namozlar',enabled?esc(model.regions[settings.region]):'Hududingizni tanlang. Namoz vaqtlarini birga kuzatamiz.',
         enabled&&next?'<div class="j-next"><span class="j-copy">Keyingi namoz · '+names[next[0]]+'</span><strong>'+esc(next[1])+'</strong></div>':'');
       view+='<div class="j-head"><h3>Besh vaqt namoz</h3>'+btn('⚙ Hudud va eslatma','settings')+'</div>';
       if(!enabled) view+='<div class="j-card j-empty"><div style="font-size:34px">☾</div><h3>Bir marta sozlang</h3><p class="j-copy">Hududingizga mos vaqtlar va har kuni botdan eslatmalar.</p><div class="j-actions">'+btn('Hududni tanlash','settings',null,true)+'</div></div>';
@@ -1532,36 +1564,40 @@
           const entry=model.entries.find(e=>e.kind==='prayer'&&e.ref===key);
           view+='<article class="j-card '+(entry&&entry.status==='done'?'j-done':'')+'"><div class="j-row"><div class="j-icon">'+['☀','◉','◐','◒','☾'][index]+'</div><div class="j-grow"><span class="j-title">'+title+'</span><span class="j-small">'+(entry&&!entry.available?'Vaqti hali kirmagan':today)+'</span></div><span class="j-time">'+esc(model.times[key]||(entry&&entry.time)||'—')+'</span></div>'+marks(entry,true)+'</article>';
         });
-        view+=stats('prayer');
-        view+='<p class="j-copy">Faqat “O‘qimadim” deb belgilangan namoz qazo hisobiga qo‘shiladi. Belgilanmagan namoz ochiq qoladi.</p>';
+        view+='<details class="j-history"><summary>Natijalarimni ko‘rish</summary>'+stats('prayer')+'</details>';
+        view+='<p class="j-copy">Faqat “Qazoga qo‘shish” deb belgilangan namoz qazo hisobiga qo‘shiladi. Belgilanmagan namoz ochiq qoladi.</p>';
         view+='<p class="j-small">Vaqtlar: <a href="https://namoz-vaqti.uz" target="_blank" rel="noopener noreferrer" style="color:inherit">namoz-vaqti.uz</a> · '+esc(model.regions[settings.region])+'. Mahalliy masjid jadvali farq qilishi mumkin.</p>';
       }
     } else if(section==='habits') {
-      const ids=new Set(model.habits.map(h=>String(h.id))), entries=model.entries.filter(e=>e.kind==='habit'&&ids.has(e.ref));
-      const completed=entries.filter(e=>e.status==='done').length, total=model.habits.length;
-      view+=hero(today+' · SIZNING RITMINGIZ','Har kuni maqsad sari bir qadam 👣','Bugungi harakatingiz ertangi odatingizga aylanadi.',
-        '<div class="j-next"><div><span class="j-title">'+completed+' / '+total+' odat bajarildi</span><span class="j-small">'+(total&&completed===total?'Bugungi rejangiz bajarildi. O‘zingizga rahmat ayting.':'O‘zingizga qulay sur’atda davom eting.')+'</span></div><div class="j-ring" style="--progress:'+(total?Math.round(completed/total*100):0)+'%"><span>'+(total?Math.round(completed/total*100):0)+'%</span></div></div>');
+      const ids=new Set(model.habits.filter(h=>h.active).map(h=>String(h.id))), entries=model.entries.filter(e=>e.kind==='habit'&&ids.has(e.ref)&&model.habits.some(h=>String(h.id)===e.ref&&scheduled(h)));
+      const completed=entries.filter(e=>e.status==='done').length, total=model.habits.filter(h=>h.active&&scheduled(h)).length;
+      view+=hero(today+' · SIZNING RITMINGIZ',archived?'Arxivlangan odatlar':'Bugungi odatlar',archived?'Oldingi natijalaringiz saqlangan.':total?'Bitta bosish bilan belgilang.':model.habits.some(h=>h.active)?'Bugun odat rejalashtirilmagan. Eslatma tanlagan kunlaringizda keladi.':'Bitta kichik odatdan boshlang.',
+        archived||!total?'':'<div class="j-next"><div><span class="j-title">'+completed+' / '+total+' bajarildi</span><span class="j-small">'+(total&&completed===total?'Bugungi rejangiz bajarildi. O‘zingizga rahmat ayting.':'O‘zingizga qulay sur’atda davom eting.')+'</span></div><div class="j-ring" style="--progress:'+(total?Math.round(completed/total*100):0)+'%"><span>'+(total?Math.round(completed/total*100):0)+'%</span></div></div>');
       view+='<div class="j-head"><h3>Bugungi odatlar</h3>'+btn('+ Odat qo‘shish','add',null,true)+'</div>';
-      if(!total) view+='<div class="j-card j-empty"><div style="font-size:32px">👣</div><h3>Bitta odatdan boshlang</h3><p class="j-copy">Kitob o‘qish, kunlik zikr yoki sayr. Nomini va eslatma vaqtini bir marta belgilang.</p><div class="j-actions">'+btn('Birinchi odatim','add',null,true)+'</div></div>';
-      model.habits.forEach(h=>{
+      if(!model.habits.some(h=>h.active)&&!archived) view+='<div class="j-card j-empty"><div style="font-size:32px">👣</div><h3>Bitta odatdan boshlang</h3><p class="j-copy">Kitob o‘qish, kunlik zikr yoki sayr. Nomini va eslatma vaqtini bir marta belgilang.</p><div class="j-actions">'+btn('Birinchi odatim','add',null,true)+'</div></div>';
+      view+='<div class="j-actions">'+btn('Faol · '+model.habits.filter(h=>h.active).length,'active-list',null,!archived)+btn('Arxiv · '+model.habits.filter(h=>!h.active).length,'archive-list',null,archived)+'</div>';
+      model.habits.filter(h=>h.active!==archived).sort((a,b)=>{
+        const rank=h=>!scheduled(h)?2:entries.some(e=>e.ref===String(h.id)&&e.status!=='pending')?1:0;
+        return rank(a)-rank(b)||a.reminder_time.localeCompare(b.reminder_time);
+      }).forEach(h=>{
         const entry=entries.find(e=>e.ref===String(h.id));
-        view+='<article class="j-card '+(entry&&entry.status==='done'?'j-done':'')+'"><div class="j-row"><div class="j-icon">'+(h.kind==='zikr'?'📿':'👣')+'</div><div class="j-grow"><span class="j-title">'+esc(h.title)+'</span><span class="j-small">🔔 '+esc(h.reminder_time)+' · Har kuni</span></div><button class="j-btn" aria-label="Odatni tahrirlash" data-action="edit" data-id="'+h.id+'">✎</button></div>'+marks(entry,false)+'<div class="j-next"><span class="j-small">🔥 '+h.streak.current+' kun ketma-ket</span><span class="j-small">Eng uzuni: '+h.streak.best+' kun</span></div></article>';
+        view+='<article class="j-card '+(entry&&entry.status==='done'?'j-done':'')+'"><div class="j-row"><div class="j-icon">'+(h.kind==='zikr'?'📿':'👣')+'</div><div class="j-grow"><span class="j-title">'+esc(h.title)+'</span><span class="j-small">🔔 '+esc(h.reminder_time)+' · '+scheduleText(h)+'</span></div>'+management(h)+'</div>'+(h.active?marks(entry,false):'<p class="j-small">Arxivlangan · eslatmalar o‘chirilgan</p>')+'<div class="j-next"><span class="j-small">🔥 '+h.streak.current+' '+((h.weekdays||[]).length===7?'kun':'marta')+' ketma-ket</span><span class="j-small">Eng uzuni: '+h.streak.best+' kun</span></div></article>';
       });
-      if(total) {
-        view+=stats('habit');
+      if(model.habits.some(h=>h.active)&&!archived) {
+        view+='<details class="j-history"><summary>Natijalarimni ko‘rish</summary>'+stats('habit');
         view+='<div class="j-card"><span class="j-title">So‘nggi 28 kun</span><p class="j-small">Har bir belgi — bir kunlik harakatingiz.</p><div class="j-calendar">'+model.calendar.map(d=>'<div class="j-day '+(d.total&&d.done===d.total?'full':d.done?'partial':'')+'" title="'+d.date+': '+d.done+'/'+d.total+'" aria-label="'+d.date+': '+d.done+'/'+d.total+'">'+Number(d.date.slice(-2))+'</div>').join('')+'</div><p class="j-small">Yorqin yashil — barcha odatlar bajarilgan.</p></div>';
         const best=Math.max(...model.habits.map(h=>h.streak.current)), next=[3,7,14,30,60,100].find(n=>n>best)||best+30;
-        view+='<p class="j-copy">Keyingi marrangiz: '+next+' kun. Bir kun qolib ketsa ham, avvalgi natijalaringiz saqlanadi.</p>';
+        view+='<p class="j-copy">Keyingi marrangiz: '+next+' kun. Bir kun qolib ketsa ham, avvalgi natijalaringiz saqlanadi.</p></details>';
       }
     } else {
       const count=model.qaza.reduce((s,p)=>s+p.count,0);
       view+=hero('SHAHSIY HISOB','Qazo namozlar','Har bir belgilangan namoz o‘z hisobida.',
         '<div class="j-next"><div><span class="j-small">Hisobda qolgan</span><strong>'+count+'</strong></div><div><span class="j-small">Qazosi o‘qilgan</span><strong>'+model.qaza_completed+'</strong></div></div>');
-      if(!count) view+='<div class="j-card j-empty"><div style="font-size:32px">☾</div><h3>Qazo ro‘yxatingiz bo‘sh</h3><p class="j-copy">“O‘qimadim” deb belgilagan namozlaringiz shu yerda ko‘rinadi.</p></div>';
+      if(!count) view+='<div class="j-card j-empty"><div style="font-size:32px">☾</div><h3>Qazo ro‘yxatingiz bo‘sh</h3><p class="j-copy">“Qazoga qo‘shish” deb belgilagan namozlaringiz shu yerda ko‘rinadi.</p></div>';
       model.qaza.forEach(p=>{
-        view+='<article class="j-card"><div class="j-row"><div class="j-grow"><span class="j-title">'+esc(p.title)+'</span><span class="j-small">'+p.count+' ta qazo</span></div></div></article>';
+        view+='<article class="j-card"><div class="j-row"><div class="j-grow"><span class="j-title">'+esc(p.title)+'</span><span class="j-small">'+p.count+' ta qazo</span></div></div>'+(p.oldest_id?'<div class="j-actions"><button type="button" class="j-btn j-primary" data-action="mark" data-id="'+p.oldest_id+'" data-revision="'+p.revision+'" data-status="qaza_done">✓ Bir qazosini o‘qidim</button></div>':'')+'</article>';
       });
-      view+='<p class="j-copy">Qazo o‘qilganini belgilash uchun bot chatiga /qazo yuboring.</p>';
+      view+='<p class="j-small">Hisob shaxsiy. Qazoni o‘qib bo‘lgach belgilang.</p>';
     }
     panel.innerHTML=(notice?'<p class="j-toast" role="status">'+esc(notice)+'</p>':'')+view;
   }
@@ -1582,50 +1618,66 @@
     if(section!=='tasks') { e.stopImmediatePropagation(); load(); }
   },true);
   function openForm(type,id) {
-    mode=type; selected=id; let fields='';
-    if(type==='settings') {
+    mode=type; selected=id; formRequest=crypto.randomUUID(); let fields='';
+    if(type==='later') {
+      fields='<h2 id="journeyDialogTitle">Qachon eslatay?</h2><div class="j-actions">'+[15,30,60].map(n=>'<button type="button" class="j-btn" data-snooze="'+n+'">'+(n===60?'1 soat':n+' daqiqa')+'</button>').join('')+'</div>';
+    } else if(type==='settings') {
       const s=model.settings||{region:'toshkent-shahri',enabled:true};
       fields='<h2 id="journeyDialogTitle">Namoz eslatmalari</h2><p class="j-copy">Besh vaqt uchun hududingizga mos kundalik eslatma.</p><label for="jRegion">Viloyat / shahar</label><select id="jRegion" name="region">'+Object.entries(model.regions).map(([key,name])=>'<option value="'+esc(key)+'" '+(key===s.region?'selected':'')+'>'+esc(name)+'</option>').join('')+'</select><label><input type="checkbox" name="enabled" '+(s.enabled?'checked':'')+'> Har kuni eslatma yuborilsin</label>';
-    } else if(type==='archive') {
-      fields='<h2 id="journeyDialogTitle">Odatni arxivlash</h2><p class="j-copy">Bu odat uchun eslatmalar to‘xtaydi. Oldingi natijalar saqlanadi.</p>';
+    } else if(['archive','delete','activate'].includes(type)) {
+      const h=model.habits.find(h=>h.id===Number(id));
+      fields='<h2 id="journeyDialogTitle">'+esc(h.title)+'</h2><p class="j-copy">'+(type==='delete'?'O‘chirmoqchimisiz? Tarix va natijalar ham o‘chiriladi. Tarixni saqlash uchun arxivlashni tanlang.':type==='activate'?'Eslatmalar qayta yoqiladi. Eski kunlar uchun eslatmalar yuborilmaydi.':'Eslatmalar to‘xtaydi. Tarix va natijalar saqlanadi.')+'</p>';
     } else {
-      const h=model.habits.find(h=>h.id===Number(id))||{title:'',kind:'habit',reminder_time:'08:00'};
+      const h=model.habits.find(h=>h.id===Number(id))||{title:'',kind:'habit',reminder_time:'08:00',weekdays:[0,1,2,3,4,5,6]};
       fields='<h2 id="journeyDialogTitle">'+(type==='edit'?'Odatingizni sozlang':'Yangi odat')+'</h2><p class="j-copy">Kichik va bajarish oson bo‘lgan qadamni tanlang.</p><label for="jTitle">Odat nomi</label><input id="jTitle" name="title" maxlength="120" required value="'+esc(h.title)+'" placeholder="Masalan, 10 bet kitob o‘qish"><label for="jKind">Turi</label><select id="jKind" name="kind"><option value="habit">Kundalik odat</option><option value="zikr" '+(h.kind==='zikr'?'selected':'')+'>Zikr</option></select><label for="jTime">Har kungi eslatma · Toshkent vaqti</label><input id="jTime" name="reminder_time" type="time" required value="'+esc(h.reminder_time)+'">';
+      fields+='<details class="j-history"><summary>Takrorlanish · kunlarni tanlash</summary><div class="j-weekdays">'+dayNames.map((name,index)=>'<label><input type="checkbox" name="weekdays" value="'+index+'" '+((h.weekdays||[0,1,2,3,4,5,6]).includes(index)?'checked':'')+'><span>'+name+'</span></label>').join('')+'</div></details>';
       if(type==='edit') fields+='<p><button type="button" class="j-link" data-archive="'+h.id+'">Odatni arxivlash</button></p>';
     }
-    form.innerHTML=fields+'<p id="jFormError" class="j-warning" role="alert" hidden></p><div class="j-actions"><button class="j-btn" type="button" data-close>Bekor qilish</button><button class="j-btn j-primary" type="submit">'+(type==='archive'?'Arxivlash':'Saqlash')+'</button></div>';
+    form.innerHTML=fields+'<p id="jFormError" class="j-warning" role="alert" hidden></p><div class="j-actions"><button class="j-btn" type="button" data-close>Bekor qilish</button><button class="j-btn j-primary" type="submit" '+(type==='later'?'hidden':'')+'>'+({archive:'Arxivlash',activate:'Faollashtirish',delete:'O‘chirish'}[type]||'Saqlash')+'</button></div>';
     if(!dialog.open) dialog.showModal();
   }
   async function mutate(path,method,body) {
     if(busy) return false; busy=true;
     panel.querySelectorAll('button').forEach(b=>b.disabled=true); form.querySelectorAll('button').forEach(b=>b.disabled=true);
-    try { await api(path,method,body); notice='Saqlandi'; await load(); return true; }
+    try { const result=await api(path,method,body); notice=result.message||'Saqlandi'; if(tg&&tg.HapticFeedback)tg.HapticFeedback.notificationOccurred('success'); await load(); return true; }
     finally { busy=false; form.querySelectorAll('button').forEach(b=>b.disabled=false); render(); }
   }
   panel.addEventListener('click',async e=>{
     const b=e.target.closest('[data-action]'); if(!b||busy) return;
     const action=b.dataset.action,id=b.dataset.id;
+    if(action==='mark') {
+      if(b.dataset.status==='later') return openForm('later',{id:Number(id),revision:Number(b.dataset.revision)});
+      try { await mutate('habit-entries/'+id,'PUT',{status:b.dataset.status,revision:Number(b.dataset.revision)}); }
+      catch(error) { notice=error.message; await load(); }
+      return;
+    }
     if(action==='retry') return load();
-    if(['settings','add','edit'].includes(action)) return openForm(action,id);
+    if(action==='active-list'||action==='archive-list') { archived=action==='archive-list'; render(); return; }
+    if(['settings','add','edit','archive','activate','delete'].includes(action)) return openForm(action,id);
   });
-  form.addEventListener('click',e=>{
+  form.addEventListener('click',async e=>{
     if(busy) return;
     if(e.target.closest('[data-close]')) dialog.close();
+    const snooze=e.target.closest('[data-snooze]');
+    if(snooze) { try { if(await mutate('habit-entries/'+selected.id,'PUT',{status:'s'+snooze.dataset.snooze,revision:selected.revision}))dialog.close(); }catch(error){const err=document.getElementById('jFormError');err.textContent=error.message;err.hidden=false;} return; }
     const b=e.target.closest('[data-archive]'); if(b) openForm('archive',b.dataset.archive);
   });
   dialog.addEventListener('cancel',e=>{if(busy)e.preventDefault();});
   form.addEventListener('submit',async e=>{
     e.preventDefault(); if(busy)return;
-    const data=Object.fromEntries(new FormData(form)), err=document.getElementById('jFormError'); err.hidden=true;
+    const fd=new FormData(form), data=Object.fromEntries(fd), err=document.getElementById('jFormError'); err.hidden=true;
     try {
       let ok;
       if(mode==='settings') ok=await mutate('habits/prayer-settings','PUT',{region:data.region,enabled:data.enabled==='on'});
-      else if(mode==='archive') ok=await mutate('habits/'+selected,'DELETE');
-      else ok=await mutate('habits'+(mode==='edit'?'/'+selected:''),mode==='edit'?'PUT':'POST',data);
+      else if(mode==='delete') ok=await mutate('habits/'+selected,'DELETE');
+      else if(mode==='archive'||mode==='activate') ok=await mutate('habits/'+selected+'/'+mode,'POST');
+      else { data.weekdays=fd.getAll('weekdays').map(Number); if(!data.weekdays.length)throw new Error('Kamida bitta kunni tanlang.'); ok=await mutate('habits'+(mode==='edit'?'/'+selected:''),mode==='edit'?'PUT':'POST',{...data,request_id:formRequest}); }
       if(ok)dialog.close();
     } catch(error) { err.textContent=error.message; err.hidden=false; }
   });
   document.addEventListener('visibilitychange',()=>{if(!document.hidden&&section!=='tasks'&&!busy)load();});
+  const initialSection=new URLSearchParams(location.search).get('section');
+  if(['prayers','habits','qaza'].includes(initialSection)) nav.querySelector('[data-section="'+initialSection+'"]').click();
   setInterval(()=>{if(!document.hidden&&section!=='tasks'&&!busy&&!dialog.open)load();},60000);
 })();
 </script>
