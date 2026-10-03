@@ -299,3 +299,48 @@ def admin_users(page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=
               "total_tasks": r["total_tasks"], "completed_tasks": r["completed_tasks"], "future_tasks": r["future_tasks"]} for r in rows]
     return {"ok": True, **meta, "segments": segments, "page": page, "page_size": page_size,
             "total": total, "total_pages": pages, "users": users}
+
+
+@router.get('/usage')
+def admin_usage(days: int = Query(1, ge=1, le=30), _: int = Depends(verify_admin)):
+    """Distinct users and occurrences are separate; no inferred completion."""
+    from habits import initialize
+    with get_connection() as conn:
+        initialize(conn)
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            p, cte, meta = _context(cur)
+            p['start'] = p['today'] - timedelta(days=days - 1)
+            cur.execute(cte + """SELECT COUNT(DISTINCT user_id) AS users,COUNT(*) AS total,
+                COUNT(*) FILTER(WHERE status='completed') AS done,
+                COUNT(*) FILTER(WHERE status='failed') AS missed,
+                COUNT(*) FILTER(WHERE status='pending') AS pending
+                FROM scoped_tasks WHERE task_date BETWEEN %(start)s AND %(today)s""", p)
+            tasks = dict(cur.fetchone())
+            cur.execute(cte + """SELECT
+                CASE WHEN d.kind='prayer' THEN 'prayer' ELSE COALESCE(d.item_kind,h.kind,'habit') END AS section,
+                COUNT(DISTINCT d.chat_id) FILTER(WHERE d.marked_at IS NOT NULL) AS users,
+                COUNT(*) AS total,
+                COUNT(*) FILTER(WHERE d.status='done') AS done,
+                COUNT(*) FILTER(WHERE d.status='missed') AS missed,
+                COUNT(*) FILTER(WHERE d.status='pending') AS pending,
+                COUNT(*) FILTER(WHERE d.status='qaza_done') AS qaza_done,
+                COALESCE(SUM(d.snooze_count),0) AS snoozes,
+                COUNT(*) FILTER(WHERE d.reminder_state='sent') AS sent,
+                COUNT(*) FILTER(WHERE d.reminder_state='failed') AS failed,
+                COUNT(*) FILTER(WHERE d.reminder_state='started') AS uncertain
+                FROM public.qadam_habit_days d JOIN scoped_users u ON u.telegram_chat_id=d.chat_id
+                LEFT JOIN public.qadam_habits h ON h.id::text=d.ref AND h.scope=d.scope AND h.chat_id=d.chat_id AND d.kind='habit'
+                WHERE d.scope=%(bot)s::text AND d.day BETWEEN %(start)s AND %(today)s GROUP BY 1""", p)
+            sections = {r['section']: dict(r) for r in cur.fetchall()}
+            cur.execute(cte + """SELECT h.kind,COUNT(DISTINCT h.chat_id) AS configured_users,
+                COUNT(*) FILTER(WHERE h.active) AS active_items,
+                COUNT(*) FILTER(WHERE NOT h.active) AS archived_items
+                FROM public.qadam_habits h JOIN scoped_users u ON u.telegram_chat_id=h.chat_id
+                WHERE h.scope=%(bot)s::text GROUP BY h.kind""", p)
+            configured = {r['kind']: dict(r) for r in cur.fetchall()}
+            cur.execute(cte + """SELECT COUNT(*) AS configured_users FROM public.qadam_habit_settings s
+                JOIN scoped_users u ON u.telegram_chat_id=s.chat_id WHERE s.scope=%(bot)s::text AND s.enabled""", p)
+            prayer_settings = dict(cur.fetchone())
+    return {'ok': True, **meta, 'days': days, 'start': p['start'].isoformat(), 'tasks': tasks,
+            'sections': sections, 'configured': configured, 'prayer_settings': prayer_settings,
+            'usage_note': 'Davr yozuvning belgilangan kuni bo‘yicha. Faol sozlamalar hozirgi holat. Userlar bo‘limlar orasida takrorlanishi mumkin. O‘chirilgan odat va zikr tarixi hisobga kirmaydi. Eslatma sonlari har bir yozuvning oxirgi yuborish holati; qayta eslatish urinishlari jami emas. Qazo natijasi namozning asl kuni bo‘yicha.'}

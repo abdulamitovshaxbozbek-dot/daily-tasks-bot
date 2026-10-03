@@ -1811,6 +1811,7 @@ def handle_morning_time(
                       morning_time IS NULL
                       OR state = 'waiting_morning_time'
                   )
+                RETURNING id
                 """,
                 (
                     time_value,
@@ -1818,7 +1819,13 @@ def handle_morning_time(
                 )
             )
 
+            changed = cur.fetchone()
         conn.commit()
+
+    if not changed:
+        if callback_query_id:
+            telegram_answer_callback(callback_query_id, "Vaqt allaqachon tanlangan.")
+        return {"ok": True, "already_selected": True}
 
     if callback_query_id:
 
@@ -1827,26 +1834,26 @@ def handle_morning_time(
             "Vaqt belgilandi ✅"
         )
 
-    telegram_send_message(
+    telegram_send_message_with_keyboard(
         chat_id,
-
         f"""✅ Ertalabki vaqt belgilandi: {time_value}
 
 🚀 Hammasi tayyor!
 
-📝 Endi birinchi qadam — bugungi 1–3 ta vazifangizni yozing.
+📋 Bugungi 1–3 ta vazifangizni shu chatga yozing yoki 🎙️ ovozli xabar orqali yuboring.
 
 Masalan:
-• Kitob o‘qish
+• Kitobdan 10 bet o‘qish
 • Sport qilish
 • Ingliz tilidan 20 ta so‘z yodlash
 
-✍️ Yozib yuboring yoki 🎙️ ovozli xabar orqali ayting (aniq va sekin gapiring).
-
-Har bir kichik reja — tartibli kun sari bir qadam 💪
-
-📢 Yangiliklar: @birqadam_news"""
+🕌 Namoz vaqtlarini sozlash hamda 🔁 odatlaringizni qo‘shish uchun Mini App’ni oching 👇""",
+        {"inline_keyboard": [[{"text": "🕌 Namoz va odatlar", "web_app": {"url": MINIAPP_URL + "?section=prayers"}}]]}
     )
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE public.users SET features_intro_claimed=true WHERE telegram_chat_id=%s", (chat_id,))
+        conn.commit()
 
     return {
         "ok": True,
@@ -3862,129 +3869,15 @@ def handle_admin(
             "ok": False
         }
 
-    today = get_today()
+    from admin_routes import admin_overview
+    data = admin_overview(chat_id)
+    users = data["users"]
+    text = f"""👑 ADMIN PANEL · {data['date']}
 
-    yesterday = today - timedelta(
-        days=1
-    )
+👥 Jami: {users['total']} · Bugun yangi: {users['today_new']}
+📈 Bugun faol: {users['today_active']}
 
-    with get_connection() as conn:
-
-        with conn.cursor(
-            cursor_factory=RealDictCursor
-        ) as cur:
-
-            cur.execute(
-                """
-                SELECT
-                    COUNT(*) AS total,
-
-                    COUNT(*) FILTER (
-                        WHERE (
-                            created_at
-                            AT TIME ZONE 'Asia/Tashkent'
-                        )::date = %s
-                    ) AS today_new,
-
-                    COUNT(*) FILTER (
-                        WHERE (
-                            created_at
-                            AT TIME ZONE 'Asia/Tashkent'
-                        )::date = %s
-                    ) AS yesterday_new,
-
-                    COUNT(*) FILTER (
-                        WHERE last_active_date = %s
-                    ) AS today_active,
-
-                    COUNT(*) FILTER (
-                        WHERE last_active_date >= %s
-                    ) AS last_two_days
-
-                FROM public.users
-                """,
-                (
-                    today,
-                    yesterday,
-                    today,
-                    yesterday
-                )
-            )
-
-            users = cur.fetchone()
-
-            cur.execute(
-                """
-                SELECT
-                    COUNT(*) AS total,
-
-                    COUNT(*) FILTER (
-                        WHERE status = 'completed'
-                    ) AS completed,
-
-                    COUNT(*) FILTER (
-                        WHERE status = 'pending'
-                    ) AS pending,
-
-                    COUNT(*) FILTER (
-                        WHERE status = 'failed'
-                    ) AS failed
-
-                FROM public.tasks
-
-                WHERE task_date = %s
-                """,
-                (today,)
-            )
-
-            tasks = cur.fetchone()
-
-    total_tasks = int(
-        tasks["total"] or 0
-    )
-
-    completed = int(
-        tasks["completed"] or 0
-    )
-
-    percent = (
-        round(
-            completed
-            / total_tasks
-            * 100
-        )
-        if total_tasks
-        else 0
-    )
-
-    text = f"""👑 ADMIN PANEL
-
-📅 {format_short_uz_date(today)}
-
-━━━━━━━━━━━━━━━━━━━━
-
-👥 FOYDALANUVCHILAR
-
-├ Jami: {users["total"]} ta
-├ Bugun qo‘shilgan: {users["today_new"]} ta
-└ Kecha qo‘shilgan: {users["yesterday_new"]} ta
-
-📈 FAOLLIK
-
-├ Bugun foydalangan: {users["today_active"]} ta
-└ Oxirgi 2 kunda foydalangan: {users["last_two_days"]} ta
-
-📋 BUGUNGI VAZIFALAR
-
-├ Jami: {tasks["total"]} ta
-├ Bajarilgan: {tasks["completed"]} ta
-├ Bajarilmagan: {tasks["pending"]} ta
-├ Muvaffaqiyatsiz: {tasks["failed"]} ta
-└ Bajarilish darajasi: {percent}%
-
-📢 Broadcast uchun:
-
-/xabar <matn>"""
+Batafsil statistika va foydalanuvchilar faoliyati Mini App’da 👇"""
 
     telegram_send_message_with_keyboard(
         chat_id,
@@ -4351,7 +4244,17 @@ Masalan:
 • 30 daqiqa piyoda yurish
 • Ingliz tilidan 5 ta so‘z yodlash"""
 
-            telegram_send_message(chat_id, greeting, parse_mode="HTML")
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE public.users SET features_intro_claimed=true WHERE id=%s AND NOT features_intro_claimed RETURNING id", (user["id"],))
+                    introduce = cur.fetchone() is not None
+                conn.commit()
+            if introduce:
+                greeting += "\n\n✨ Namoz va odatlar bo‘limlari qo‘shildi!\n🕌 Namoz vaqtlarini sozlash va 🔁 odatlaringizni qo‘shish uchun Mini App’ni oching. Vazifalarni shu chatga yuboring."
+                telegram_send_message_with_keyboard(chat_id, greeting,
+                    {"inline_keyboard": [[{"text": "🕌 Namoz va odatlar", "web_app": {"url": MINIAPP_URL + "?section=prayers"}}]]}, parse_mode="HTML")
+            else:
+                telegram_send_message(chat_id, greeting, parse_mode="HTML")
             if today_tasks:
                 refresh_live_checklist(chat_id, user)
 
@@ -6021,7 +5924,7 @@ def telegram_webhook(
 
             management_action, separator, task_id = callback_data.partition("|")
             if callback_data.startswith("habit|"):
-                return handle_habit_callback(chat_id, callback_data, callback_query_id)
+                return handle_habit_callback(chat_id, callback_data, callback_query_id, callback_message_id)
             if separator and management_action in (
                 "task_edit", "task_delete", "task_delete_yes", "task_delete_no"
             ):
@@ -7119,4 +7022,5 @@ from habits import install as install_habits
 handle_habit_reminders, handle_habit_callback, handle_habit_chat_summary = install_habits(
     router, get_connection, get_miniapp_chat_id, bot_id, require_joined,
     telegram_send_message_with_keyboard, telegram_answer_callback,
+    telegram_delete_message, update_user_activity, telegram_edit_message_with_keyboard,
 )

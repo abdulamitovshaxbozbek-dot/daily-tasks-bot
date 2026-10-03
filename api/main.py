@@ -15,6 +15,9 @@ from admin_routes import router as admin_router
 @asynccontextmanager
 async def lifespan(app):
     initialize_identity()
+    from habits import initialize
+    with get_connection() as conn:
+        initialize(conn)
     stop, thread = start_scheduler()
     yield
     stop.set()

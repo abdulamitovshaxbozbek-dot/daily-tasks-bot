@@ -9,7 +9,7 @@ import re
 import threading
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
-from typing import Literal, Optional
+from typing import Literal, Optional, List
 from zoneinfo import ZoneInfo
 
 import requests
@@ -31,6 +31,7 @@ REGIONS = {
     "surxondaryo-viloyati": "Surxondaryo viloyati", "xorazm-viloyati": "Xorazm viloyati",
 }
 SCHEMA = """
+ALTER TABLE public.users ADD COLUMN IF NOT EXISTS features_intro_claimed BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE TABLE IF NOT EXISTS public.qadam_habit_settings (
  scope TEXT NOT NULL, chat_id BIGINT NOT NULL, region TEXT NOT NULL,
  enabled BOOLEAN NOT NULL DEFAULT TRUE, enabled_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -52,10 +53,30 @@ CREATE TABLE IF NOT EXISTS public.qadam_habit_days (
  marked_at TIMESTAMPTZ, UNIQUE(scope,chat_id,kind,ref,day)
 );
 CREATE INDEX IF NOT EXISTS qadam_habit_days_owner ON public.qadam_habit_days(scope,chat_id,day);
+CREATE TABLE IF NOT EXISTS public.qadam_habit_requests (
+ scope TEXT NOT NULL, chat_id BIGINT NOT NULL, request_id TEXT NOT NULL, result JSONB NOT NULL,
+ PRIMARY KEY(scope,chat_id,request_id)
+);
 CREATE TABLE IF NOT EXISTS public.qadam_prayer_cache (
  region TEXT NOT NULL, day DATE NOT NULL, times JSONB NOT NULL,
  PRIMARY KEY(region,day)
 );
+ALTER TABLE public.qadam_habits ADD COLUMN IF NOT EXISTS weekdays INTEGER[] NOT NULL DEFAULT ARRAY[0,1,2,3,4,5,6];
+ALTER TABLE public.qadam_habit_days ADD COLUMN IF NOT EXISTS previous_reminder_state TEXT;
+ALTER TABLE public.qadam_habit_days ADD COLUMN IF NOT EXISTS previous_snooze_at TIMESTAMPTZ;
+ALTER TABLE public.qadam_habit_days ADD COLUMN IF NOT EXISTS previous_marked_at TIMESTAMPTZ;
+ALTER TABLE public.qadam_habit_days ADD COLUMN IF NOT EXISTS reminder_message_id BIGINT;
+ALTER TABLE public.qadam_habits ADD COLUMN IF NOT EXISTS active_since TIMESTAMPTZ;
+UPDATE public.qadam_habits SET active_since=created_at WHERE active_since IS NULL;
+ALTER TABLE public.qadam_habits ALTER COLUMN active_since SET DEFAULT now();
+ALTER TABLE public.qadam_habits ALTER COLUMN active_since SET NOT NULL;
+ALTER TABLE public.qadam_habit_days ADD COLUMN IF NOT EXISTS item_kind TEXT;
+ALTER TABLE public.qadam_habit_days ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE public.qadam_habit_days ADD COLUMN IF NOT EXISTS previous_status TEXT;
+ALTER TABLE public.qadam_habit_days ADD COLUMN IF NOT EXISTS snooze_at TIMESTAMPTZ;
+ALTER TABLE public.qadam_habit_days ADD COLUMN IF NOT EXISTS snooze_count INTEGER NOT NULL DEFAULT 0;
+UPDATE public.qadam_habit_days d SET item_kind=h.kind FROM public.qadam_habits h
+ WHERE d.kind='habit' AND d.ref=h.id::text AND d.scope=h.scope AND d.chat_id=h.chat_id AND d.item_kind IS NULL;
 """
 _ready = False
 _schema_lock = threading.Lock()
@@ -93,19 +114,25 @@ def validate_times(payload, region, today):
     return {k: times[k] for k in keys}
 
 
-def streak_stats(rows, today):
+def streak_stats(rows, today, weekdays=None):
     """Today may still be pending; yesterday keeps an ongoing streak alive."""
+    weekdays = set(weekdays or range(7))
+    def previous_planned(day):
+        day -= timedelta(days=1)
+        while day.weekday() not in weekdays:
+            day -= timedelta(days=1)
+        return day
     done = {r["day"] for r in rows if r["status"] == "done" and r["day"] <= today}
     current = best = run = 0
     previous = None
     for day in sorted(done):
-        run = run + 1 if previous == day - timedelta(days=1) else 1
+        run = run + 1 if previous == previous_planned(day) else 1
         best = max(best, run)
         previous = day
-    cursor = today if today in done else today - timedelta(days=1)
+    cursor = today if today in done else previous_planned(today)
     while cursor in done:
         current += 1
-        cursor -= timedelta(days=1)
+        cursor = previous_planned(cursor)
     if any(r["day"] == today and r["status"] == "missed" for r in rows):
         current = 0
     return {"current": current, "best": best}
@@ -117,16 +144,19 @@ class PrayerSettings(BaseModel):
 
 
 class HabitInput(BaseModel):
+    request_id: Optional[str] = Field(default=None, min_length=16, max_length=64)
     title: str = Field(min_length=1, max_length=120)
     kind: Literal["habit", "zikr"] = "habit"
+    weekdays: List[int] = Field(default_factory=lambda: list(range(7)), min_length=1, max_length=7)
     reminder_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
 class MarkInput(BaseModel):
-    status: Literal["done", "missed", "qaza_done"]
+    status: Literal["done", "missed", "qaza_done", "undo", "s15", "s30", "s60"]
+    revision: int = Field(default=0, ge=0)
 
 
-def install(router, get_connection, auth, bot_id, require_joined, send, answer):
+def install(router, get_connection, auth, bot_id, require_joined, send, answer, delete, activity, edit):
     """Integrates without importing routes or changing its existing handlers."""
     def scope():
         return str(bot_id() or "default")
@@ -185,6 +215,7 @@ def install(router, get_connection, auth, bot_id, require_joined, send, answer):
                 warning = exc.detail
         with connection() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT pg_advisory_xact_lock(%s)", (chat_id,))
                 # Settings and habit edits serialize with today's materialization.
                 cur.execute("SELECT * FROM public.qadam_habit_settings WHERE scope=%s AND chat_id=%s FOR UPDATE", (scope(), chat_id))
                 fresh = cur.fetchone()
@@ -197,16 +228,20 @@ def install(router, get_connection, auth, bot_id, require_joined, send, answer):
                 cur.execute("SELECT * FROM public.qadam_habits WHERE scope=%s AND chat_id=%s AND active FOR UPDATE", (scope(), chat_id))
                 for habit in cur.fetchall():
                     # Backfill unmarked history after downtime; only today may send.
-                    created_day = habit["created_at"].astimezone(ZONE).date()
+                    created_day = max(habit["created_at"], habit["active_since"]).astimezone(ZONE).date()
                     cur.execute("""INSERT INTO public.qadam_habit_days(scope,chat_id,kind,ref,day,title,due_at,reminder_state)
                         SELECT %s,%s,'habit',%s,d::date,%s,
                             (d::date + %s::time) AT TIME ZONE 'Asia/Tashkent',
                             CASE WHEN d::date<%s OR (d::date + %s::time) AT TIME ZONE 'Asia/Tashkent'<%s
                                 THEN 'skipped' ELSE NULL END
                         FROM generate_series(%s::date,%s::date,interval '1 day') AS d
+                        WHERE (EXTRACT(ISODOW FROM d)::int-1)=ANY(%s)
                         ON CONFLICT DO NOTHING""",
                         (scope(), chat_id, str(habit["id"]), habit["title"], habit["reminder_time"], today,
-                         habit["reminder_time"], habit["created_at"], created_day, today))
+                         habit["reminder_time"], max(habit["created_at"], habit["active_since"]), created_day, today, habit["weekdays"]))
+                cur.execute("""UPDATE public.qadam_habit_days d SET item_kind=h.kind FROM public.qadam_habits h
+                    WHERE d.scope=%s AND d.chat_id=%s AND d.kind='habit' AND d.ref=h.id::text
+                    AND h.scope=d.scope AND h.chat_id=d.chat_id AND d.item_kind IS NULL""", (scope(), chat_id))
         return settings, times, warning
 
     @router.get("/miniapp/habits")
@@ -218,7 +253,7 @@ def install(router, get_connection, auth, bot_id, require_joined, send, answer):
         settings, times, warning = seed(chat_id, at)
         with connection() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT * FROM public.qadam_habits WHERE scope=%s AND chat_id=%s AND active ORDER BY id", (scope(), chat_id))
+                cur.execute("SELECT * FROM public.qadam_habits WHERE scope=%s AND chat_id=%s ORDER BY active DESC,id", (scope(), chat_id))
                 habits = cur.fetchall()
                 cur.execute("SELECT * FROM public.qadam_habit_days WHERE scope=%s AND chat_id=%s ORDER BY day,id", (scope(), chat_id))
                 history = cur.fetchall()
@@ -226,17 +261,17 @@ def install(router, get_connection, auth, bot_id, require_joined, send, answer):
         for row in history:
             if row["day"] == at.date():
                 today_entries.append({"id": row["id"], "kind": row["kind"], "ref": row["ref"], "title": row["title"],
-                    "status": row["status"], "time": row["due_at"].astimezone(ZONE).strftime("%H:%M"),
+                    "status": row["status"], "revision": row["revision"], "can_undo": row["previous_status"] is not None, "snooze_at": row["snooze_at"].isoformat() if row["snooze_at"] else None, "item_kind": row["item_kind"], "time": row["due_at"].astimezone(ZONE).strftime("%H:%M"),
                     "available": row["kind"] == "habit" or row["due_at"] <= at})
         habit_list = []
         for habit in habits:
             rows = [r for r in history if r["kind"] == "habit" and r["ref"] == str(habit["id"])]
             habit_list.append({"id": habit["id"], "title": habit["title"], "kind": habit["kind"],
-                "reminder_time": str(habit["reminder_time"])[:5], "streak": streak_stats(rows, at.date())})
+                "active": habit["active"], "weekdays": habit["weekdays"], "reminder_time": str(habit["reminder_time"])[:5], "streak": streak_stats(rows, at.date(), habit["weekdays"])})
         qaza = []
         for key, title in PRAYERS.items():
             debts = [r for r in history if r["kind"] == "prayer" and r["ref"] == key and r["status"] == "missed"]
-            qaza.append({"key": key, "title": title, "count": len(debts), "oldest_id": debts[0]["id"] if debts else None})
+            qaza.append({"key": key, "title": title, "count": len(debts), "revision": debts[0]["revision"] if debts else 0, "oldest_id": debts[0]["id"] if debts else None})
         calendar = []
         for delta in range(27, -1, -1):
             day = at.date() - timedelta(days=delta)
@@ -275,10 +310,17 @@ def install(router, get_connection, auth, bot_id, require_joined, send, answer):
                 # Retain marked and claimed occurrences so changing region cannot resend them.
                 cur.execute("""DELETE FROM public.qadam_habit_days WHERE scope=%s AND chat_id=%s AND kind='prayer'
                     AND day=%s AND status='pending' AND (reminder_state IS NULL OR reminder_state='skipped')""", (scope(), chat_id, at.date()))
+        activity(chat_id)
         return {"ok": True}
+
+    def validate_days(payload):
+        if not payload.weekdays or any(d not in range(7) for d in payload.weekdays):
+            raise HTTPException(422, "Kamida bitta hafta kunini tanlang.")
+        return sorted(set(payload.weekdays))
 
     @router.post("/miniapp/habits")
     def create_habit(payload: HabitInput, chat_id: int = Depends(auth)):
+        weekdays = validate_days(payload)
         title = payload.title.strip()
         if not title:
             raise HTTPException(422, "Odat nomini yozing.")
@@ -286,24 +328,34 @@ def install(router, get_connection, auth, bot_id, require_joined, send, answer):
             with conn.cursor() as cur:
                 owner(cur, chat_id)
                 cur.execute("SELECT pg_advisory_xact_lock(%s)", (chat_id,))
+                if payload.request_id:
+                    cur.execute("SELECT result FROM public.qadam_habit_requests WHERE scope=%s AND chat_id=%s AND request_id=%s", (scope(), chat_id, payload.request_id))
+                    existing = cur.fetchone()
+                    if existing:
+                        return existing[0]
                 cur.execute("SELECT count(*) FROM public.qadam_habits WHERE scope=%s AND chat_id=%s AND active", (scope(), chat_id))
                 if cur.fetchone()[0] >= 30:
                     raise HTTPException(422, "Hozircha 30 tagacha faol odat qo‘shish mumkin.")
-                cur.execute("""INSERT INTO public.qadam_habits(scope,chat_id,title,kind,reminder_time)
-                    VALUES(%s,%s,%s,%s,%s::time) RETURNING id""", (scope(), chat_id, title, payload.kind, payload.reminder_time))
+                cur.execute("""INSERT INTO public.qadam_habits(scope,chat_id,title,kind,reminder_time,weekdays)
+                    VALUES(%s,%s,%s,%s,%s::time,%s) RETURNING id""", (scope(), chat_id, title, payload.kind, payload.reminder_time, weekdays))
                 result = cur.fetchone()[0]
+                if payload.request_id:
+                    cur.execute("INSERT INTO public.qadam_habit_requests VALUES(%s,%s,%s,%s)", (scope(), chat_id, payload.request_id, Json({"ok": True, "id": result})))
+        activity(chat_id)
         return {"ok": True, "id": result}
 
     @router.put("/miniapp/habits/{habit_id}")
     def edit_habit(habit_id: int, payload: HabitInput, chat_id: int = Depends(auth)):
+        weekdays = validate_days(payload)
         if not payload.title.strip():
             raise HTTPException(422, "Odat nomini yozing.")
         with connection() as conn:
             with conn.cursor() as cur:
                 owner(cur, chat_id)
-                cur.execute("""UPDATE public.qadam_habits SET title=%s,kind=%s,reminder_time=%s::time
+                cur.execute("SELECT pg_advisory_xact_lock(%s)", (chat_id,))
+                cur.execute("""UPDATE public.qadam_habits SET title=%s,kind=%s,reminder_time=%s::time,weekdays=%s
                     WHERE id=%s AND scope=%s AND chat_id=%s AND active RETURNING id""",
-                    (payload.title.strip(), payload.kind, payload.reminder_time, habit_id, scope(), chat_id))
+                    (payload.title.strip(), payload.kind, payload.reminder_time, weekdays, habit_id, scope(), chat_id))
                 if not cur.fetchone():
                     raise HTTPException(404, "Odat topilmadi.")
                 due = datetime.combine(now_local().date(), time.fromisoformat(payload.reminder_time), ZONE)
@@ -312,55 +364,183 @@ def install(router, get_connection, auth, bot_id, require_joined, send, answer):
                     WHERE scope=%s AND chat_id=%s AND kind='habit' AND ref=%s AND day=%s
                     AND status='pending' AND (reminder_state IS NULL OR reminder_state='skipped')""",
                     (payload.title.strip(), due, due, scope(), chat_id, str(habit_id), due.date()))
+                cur.execute("""DELETE FROM public.qadam_habit_days WHERE scope=%s AND chat_id=%s
+                    AND kind='habit' AND ref=%s AND day=%s AND status='pending'
+                    AND (reminder_state IS NULL OR reminder_state='skipped') AND NOT (EXTRACT(ISODOW FROM day)::int-1)=ANY(%s)""",
+                    (scope(), chat_id, str(habit_id), due.date(), weekdays))
+        activity(chat_id)
         return {"ok": True}
 
-    @router.delete("/miniapp/habits/{habit_id}")
+    @router.post("/miniapp/habits/{habit_id}/archive")
     def archive_habit(habit_id: int, chat_id: int = Depends(auth)):
         with connection() as conn:
             with conn.cursor() as cur:
                 owner(cur, chat_id)
+                cur.execute("SELECT pg_advisory_xact_lock(%s)", (chat_id,))
                 cur.execute("UPDATE public.qadam_habits SET active=false WHERE id=%s AND scope=%s AND chat_id=%s RETURNING id", (habit_id, scope(), chat_id))
                 if not cur.fetchone():
                     raise HTTPException(404, "Odat topilmadi.")
+                cur.execute("""UPDATE public.qadam_habit_days SET snooze_at=NULL,reminder_state='skipped'
+                    WHERE scope=%s AND chat_id=%s AND kind='habit' AND ref=%s AND status='pending'
+                    AND (snooze_at IS NOT NULL OR reminder_state IS NULL)""", (scope(), chat_id, str(habit_id)))
+        activity(chat_id)
         return {"ok": True}
 
-    def mark(chat_id, entry_id, status):
-        at = now_local()
+    @router.post("/miniapp/habits/{habit_id}/activate")
+    def activate_habit(habit_id: int, chat_id: int = Depends(auth)):
         with connection() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            with conn.cursor() as cur:
                 owner(cur, chat_id)
-                cur.execute("SELECT * FROM public.qadam_habit_days WHERE id=%s AND scope=%s AND chat_id=%s FOR UPDATE", (entry_id, scope(), chat_id))
+                cur.execute("SELECT pg_advisory_xact_lock(%s)", (chat_id,))
+                cur.execute("SELECT active FROM public.qadam_habits WHERE id=%s AND scope=%s AND chat_id=%s FOR UPDATE", (habit_id, scope(), chat_id))
                 row = cur.fetchone()
                 if not row:
-                    raise HTTPException(404, "Yozuv topilmadi.")
-                if status == row["status"]:
-                    return {"ok": True, "unchanged": True}
-                if status == "qaza_done":
-                    if row["kind"] != "prayer" or row["status"] != "missed":
-                        raise HTTPException(409, "Bu namoz qazo ro‘yxatida yo‘q.")
-                elif row["status"] == "qaza_done" or row["day"] > at.date() or (row["kind"] == "habit" and row["day"] != at.date()):
-                    raise HTTPException(409, "Bu kun yakunlangan. Qazo bo‘limidan foydalaning.")
-                elif row["kind"] == "prayer" and row["due_at"] > at:
-                    raise HTTPException(409, "Bu namoz vaqti hali kirmagan.")
-                cur.execute("UPDATE public.qadam_habit_days SET status=%s,marked_at=now() WHERE id=%s", (status, entry_id))
-                cur.execute("UPDATE public.users SET last_active_date=%s WHERE telegram_chat_id=%s", (at.date(), chat_id))
+                    raise HTTPException(404, "Odat topilmadi.")
+                if not row[0]:
+                    cur.execute("SELECT count(*) FROM public.qadam_habits WHERE scope=%s AND chat_id=%s AND active", (scope(), chat_id))
+                    if cur.fetchone()[0] >= 30:
+                        raise HTTPException(422, "30 tagacha faol odat mumkin.")
+                    cur.execute("UPDATE public.qadam_habits SET active=true,active_since=now() WHERE id=%s", (habit_id,))
+                    cur.execute("""UPDATE public.qadam_habit_days SET reminder_state='skipped',snooze_at=NULL
+                        WHERE scope=%s AND chat_id=%s AND kind='habit' AND ref=%s AND status='pending'
+                        AND due_at<=now()""", (scope(), chat_id, str(habit_id)))
+                    cur.execute("""UPDATE public.qadam_habit_days SET reminder_state=NULL WHERE scope=%s AND chat_id=%s
+                        AND kind='habit' AND ref=%s AND day=%s AND due_at>now() AND status='pending' AND reminder_state='skipped'""",
+                        (scope(), chat_id, str(habit_id), now_local().date()))
+        activity(chat_id)
+        return {"ok": True}
+
+    @router.delete("/miniapp/habits/{habit_id}")
+    def delete_habit(habit_id: int, chat_id: int = Depends(auth)):
+        with connection() as conn:
+            with conn.cursor() as cur:
+                owner(cur, chat_id)
+                cur.execute("SELECT pg_advisory_xact_lock(%s)", (chat_id,))
+                cur.execute("DELETE FROM public.qadam_habit_days WHERE scope=%s AND chat_id=%s AND kind='habit' AND ref=%s", (scope(), chat_id, str(habit_id)))
+                cur.execute("DELETE FROM public.qadam_habits WHERE id=%s AND scope=%s AND chat_id=%s", (habit_id, scope(), chat_id))
+        activity(chat_id)
         return {"ok": True}
 
     @router.put("/miniapp/habit-entries/{entry_id}")
     def mark_endpoint(entry_id: int, payload: MarkInput, chat_id: int = Depends(auth)):
-        raise HTTPException(403, "Holatni bot chatidagi tugmalar orqali belgilang.")
+        return callback(chat_id, f"habit|{entry_id}|{payload.status}|{payload.revision}", None, web=True)
 
-    def callback(chat_id, data, callback_id):
+    def callback(chat_id, data, callback_id, message_id=None, web=False):
+        def respond(text):
+            if not web:
+                answer(callback_id, text)
         try:
-            _, raw_id, status = data.split("|")
-            if status not in ("done", "missed", "qaza_done"):
+            parts = data.split("|")
+            entry_id, action = int(parts[1]), parts[2]
+            revision = int(parts[3]) if len(parts) == 4 else 0
+            if action not in ("done", "missed", "qaza_done", "undo", "later", "s15", "s30", "s60"):
                 raise ValueError()
-            result = mark(chat_id, int(raw_id), status)
-            text = "Avval belgilangan" if result.get("unchanged") else ("Bajarildi ✅" if status == "done" else "Belgilandi")
+            at = now_local()
+            with connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    owner(cur, chat_id)
+                    cur.execute("SELECT pg_advisory_xact_lock(%s)", (chat_id,))
+                    cur.execute("SELECT * FROM public.qadam_habit_days WHERE id=%s AND scope=%s AND chat_id=%s FOR UPDATE", (entry_id, scope(), chat_id))
+                    row = cur.fetchone()
+                    if not row:
+                        raise HTTPException(404, "Yozuv topilmadi.")
+                    if row["revision"] != revision:
+                        respond("Bu amal avval bajarilgan.")
+                        return {"ok": True, "unchanged": True}
+                    if row["kind"] == "habit":
+                        cur.execute("SELECT active,kind,weekdays FROM public.qadam_habits WHERE id::text=%s AND scope=%s AND chat_id=%s FOR UPDATE", (row["ref"], scope(), chat_id))
+                        habit = cur.fetchone()
+                        if not habit or not habit["active"]:
+                            raise HTTPException(409, "Odat arxivlangan yoki o‘chirilgan.")
+                        row["item_kind"] = habit["kind"]
+                        if row["day"].weekday() not in habit["weekdays"] and action != "undo":
+                            raise HTTPException(409, "Bu odat shu kunga rejalashtirilmagan.")
+                    if action == "later":
+                        if row["item_kind"] != "zikr" or row["status"] != "pending":
+                            raise HTTPException(409, "Bu eslatma uchun keyinroq tanlovi yo‘q.")
+                        buttons = [[{"text": label, "callback_data": f"habit|{entry_id}|s{minutes}|{revision}"}
+                            for label, minutes in (("15 daqiqa",15),("30 daqiqa",30),("1 soat",60))]]
+                        if message_id:
+                            try:
+                                edit(chat_id, message_id, f"📿 {row['title']}\n\nQachon qayta eslatay?", {"inline_keyboard": buttons})
+                            except HTTPException as exc:
+                                if "message is not modified" not in str(exc.detail).lower():
+                                    raise
+                        respond("Vaqtni tanlang.")
+                        return {"ok": True}
+                    if action == "undo":
+                        if row["previous_status"] is None:
+                            raise HTTPException(409, "Bekor qilinadigan amal yo‘q.")
+                        cur.execute("""UPDATE public.qadam_habit_days SET status=previous_status,previous_status=NULL,
+                            marked_at=previous_marked_at,
+                            snooze_at=previous_snooze_at,reminder_state=previous_reminder_state,revision=revision+1 WHERE id=%s""", (entry_id,))
+                    elif action.startswith("s"):
+                        if row["item_kind"] != "zikr" or row["status"] != "pending":
+                            raise HTTPException(409, "Bu eslatmani keyinroqqa surib bo‘lmaydi.")
+                        due = at + timedelta(minutes=int(action[1:]))
+                        cur.execute("""UPDATE public.qadam_habit_days SET previous_snooze_at=snooze_at,previous_reminder_state=reminder_state,previous_marked_at=marked_at,
+                            snooze_at=%s,reminder_state=NULL,
+                            snooze_count=snooze_count+1,revision=revision+1,previous_status='pending' WHERE id=%s""", (due, entry_id))
+                    else:
+                        if row["status"] == action:
+                            respond("Avval belgilangan.")
+                            return {"ok": True, "unchanged": True}
+                        if action == "qaza_done":
+                            if row["kind"] != "prayer" or row["status"] != "missed":
+                                raise HTTPException(409, "Bu namoz qazo ro‘yxatida yo‘q.")
+                        elif row["status"] != "pending" or (row["day"] != at.date() and not (row["item_kind"] == "zikr" and row["snooze_count"] > 0)):
+                            raise HTTPException(409, "Avval natijani bekor qiling yoki /qazo bo‘limidan foydalaning.")
+                        if row["kind"] == "prayer" and row["due_at"] > at:
+                            raise HTTPException(409, "Namoz vaqti hali kirmagan.")
+                        cur.execute("""UPDATE public.qadam_habit_days SET previous_status=status,previous_snooze_at=snooze_at,previous_reminder_state=reminder_state,
+                            previous_marked_at=marked_at,status=%s,marked_at=now(),snooze_at=NULL,revision=revision+1 WHERE id=%s""", (action, entry_id))
+            activity(chat_id)
+            title = html.escape(row["title"])
+            if action == "undo":
+                text = f"↩️ «{title}» uchun oxirgi amal bekor qilindi."
+                keyboard = entry_keyboard({**row, "revision": revision + 1, "status": row["previous_status"]})
+            else:
+                keyboard = {"inline_keyboard": [[{"text": "↩️ Bekor qilish", "callback_data": f"habit|{entry_id}|undo|{revision+1}"}]]}
+                if action.startswith("s"):
+                    text = f"⏳ «{title}» uchun {action[1:]} daqiqadan keyin eslataman."
+                elif row["kind"] == "prayer":
+                    text = (f"✅ {title} namozi " + ("qazosi o‘qildi deb belgilandi." if action == "qaza_done" else "o‘qildi deb belgilandi.") + "\n\nAlloh taolo qabul qilsin! 🤲"
+                            if action != "missed" else f"🕌 {title} namozi qazo namozlaringizga qo‘shildi.\n\nQazosini o‘qib qo‘yishni unutmang.")
+                else:
+                    text = f"✅ «{title}» bajarildi deb belgilandi." if action == "done" else f"«{title}» bugun bajarilmadi deb belgilandi."
+                    if row["item_kind"] == "zikr" and action == "done":
+                        text += "\n\nAlloh taolo qabul qilsin! 🤲"
+            # The revision is committed before sending: duplicate callbacks never resend.
+            if not web:
+                send(chat_id, text, keyboard, parse_mode="HTML")
+            message_id = message_id or row.get("reminder_message_id")
+            if message_id:
+                try:
+                    delete(chat_id, message_id)
+                except Exception:
+                    LOG.warning("Old habit reminder could not be deleted")
+            respond("Bekor qilindi" if action == "undo" else "Saqlandi ✅")
+            return {"ok": True, "message": html.unescape(re.sub(r"<[^>]+>", "", text)), "revision": revision+1}
         except (ValueError, HTTPException) as exc:
-            text = exc.detail if isinstance(exc, HTTPException) else "So‘rov noto‘g‘ri."
-        answer(callback_id, text)
+            if web:
+                raise exc if isinstance(exc, HTTPException) else HTTPException(422, "So‘rov noto‘g‘ri.")
+            respond(exc.detail if isinstance(exc, HTTPException) else "So‘rov noto‘g‘ri.")
         return {"ok": True}
+
+    def entry_keyboard(row):
+        entry_id, rev = row["id"], row.get("revision", 0)
+        def button(label, action):
+            return {"text": label, "callback_data": f"habit|{entry_id}|{action}|{rev}"}
+        if row["status"] == "missed" and row["kind"] == "prayer":
+            return {"inline_keyboard": [[button("✅ Qazosi o‘qildi", "qaza_done")]]}
+        if row["status"] != "pending":
+            return {"inline_keyboard": []}
+        buttons = [[button("✅ O‘qidim" if row["kind"] == "prayer" else "✅ Bajarildi", "done")]]
+        if row.get("item_kind") == "zikr":
+            buttons[0].append(button("⏳ Keyinroq", "later"))
+        else:
+            buttons[0].append(button("🕌 Qazoga qo‘shish" if row["kind"] == "prayer" else "❌ Bajarilmadi", "missed"))
+        return {"inline_keyboard": buttons}
 
     def chat_summary(chat_id, section):
         data = dashboard(chat_id)
@@ -371,12 +551,12 @@ def install(router, get_connection, auth, bot_id, require_joined, send, answer):
                 lines.append(f"{prayer['title']}: <b>{prayer['count']} ta</b>")
                 if prayer["oldest_id"]:
                     buttons.append([{"text": f"✅ {prayer['title']} — 1 ta qazo o‘qildi",
-                        "callback_data": f"habit|{prayer['oldest_id']}|qaza_done"}])
+                        "callback_data": f"habit|{prayer['oldest_id']}|qaza_done|{prayer['revision']}"}])
             lines.append("Qazo o‘qilgach belgilang. Har bir tugma bitta yozuvga tegishli; yangi hisob uchun /qazo yuboring.")
         else:
             prayer = section == "prayers"
             lines.append("<b>🕌 Bugungi namozlar</b>" if prayer else "<b>👣 Bugungi odatlar</b>")
-            active_refs = {str(h["id"]) for h in data["habits"]}
+            active_refs = {str(h["id"]) for h in data["habits"] if h["active"]}
             entries = [e for e in data["entries"] if e["kind"] == ("prayer" if prayer else "habit")
                        and (prayer or e["ref"] in active_refs)]
             for i, entry in enumerate(entries, 1):
@@ -386,9 +566,7 @@ def install(router, get_connection, auth, bot_id, require_joined, send, answer):
                 state = {"pending": "⏳", "done": "✅", "missed": "❌", "qaza_done": "✅ Qazosi o‘qildi"}[entry["status"]]
                 lines.append(f"{i}. {html.escape(entry['title'])} · {entry['time']} · {state}")
                 if entry["available"] and entry["status"] != "qaza_done":
-                    buttons.append([
-                        {"text": f"✅ {i} " + ("O‘qidim" if prayer else "Bajarildi"), "callback_data": f"habit|{entry['id']}|done"},
-                        {"text": f"❌ {i} " + ("O‘qimadim" if prayer else "Bajarilmadi"), "callback_data": f"habit|{entry['id']}|missed"}])
+                    buttons.extend(entry_keyboard(entry)["inline_keyboard"])
             if not entries:
                 lines.append("Mini App’da hududingizni tanlang yoki odat qo‘shing.")
             if data["warning"]:
@@ -415,29 +593,42 @@ def install(router, get_connection, auth, bot_id, require_joined, send, answer):
                 # One claim per occurrence across all scheduler/endpoint workers.
                 with connection() as conn:
                     with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                        cur.execute("""UPDATE public.qadam_habit_days d SET reminder_state='started'
-                            WHERE d.scope=%s AND d.chat_id=%s AND d.day=%s AND d.status='pending'
-                            AND d.reminder_state IS NULL AND d.due_at<=%s AND (
+                        cur.execute("""UPDATE public.qadam_habit_days d SET reminder_state='started',snooze_at=NULL
+                            WHERE d.scope=%s AND d.chat_id=%s AND (d.day=%s OR d.snooze_at IS NOT NULL) AND d.status='pending'
+                            AND d.reminder_state IS NULL AND COALESCE(d.snooze_at,d.due_at)<=%s AND (
                               (d.kind='prayer' AND EXISTS(SELECT 1 FROM public.qadam_habit_settings s
                                 WHERE s.scope=d.scope AND s.chat_id=d.chat_id AND s.enabled)) OR
                               (d.kind='habit' AND EXISTS(SELECT 1 FROM public.qadam_habits h
-                                WHERE h.id::text=d.ref AND h.scope=d.scope AND h.chat_id=d.chat_id AND h.active)))
+                                WHERE h.id::text=d.ref AND h.scope=d.scope AND h.chat_id=d.chat_id AND h.active AND (EXTRACT(ISODOW FROM d.day)::int-1)=ANY(h.weekdays))))
                             RETURNING d.*""", (scope(), chat_id, at.date(), at))
                         due_rows = cur.fetchall()
                     conn.commit()
                 for row in due_rows:
+                    # A queued occurrence may have been completed or archived after claiming.
+                    with connection() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("""SELECT 1 FROM public.qadam_habit_days d WHERE d.id=%s AND d.status='pending'
+                                AND d.revision=%s AND ((d.kind='prayer' AND EXISTS(SELECT 1 FROM public.qadam_habit_settings s
+                                    WHERE s.scope=d.scope AND s.chat_id=d.chat_id AND s.enabled))
+                                OR (d.kind='habit' AND EXISTS(SELECT 1 FROM public.qadam_habits h
+                                    WHERE h.id::text=d.ref AND h.scope=d.scope AND h.chat_id=d.chat_id AND h.active AND (EXTRACT(ISODOW FROM d.day)::int-1)=ANY(h.weekdays))))""", (row["id"], row["revision"]))
+                            eligible = cur.fetchone() is not None
+                            if not eligible:
+                                cur.execute("UPDATE public.qadam_habit_days SET reminder_state='skipped' WHERE id=%s AND reminder_state='started'", (row["id"],))
+                    if not eligible:
+                        continue
                     prayer = row["kind"] == "prayer"
                     title = html.escape(row["title"])
                     day_label = row["day"].strftime("%d.%m.%Y")
                     text = (f"<b>🕌 {title} vaqti kirdi.</b>\n{day_label}\n\nO‘qib bo‘lgach, quyida belgilashingiz mumkin."
                             if prayer else f"<b>⏰ {title}</b>\n\nBugungi kichik qadamingiz uchun vaqt ajrating. 👣")
-                    keyboard = {"inline_keyboard": [[
-                        {"text": "✅ O‘qidim" if prayer else "✅ Bajarildi", "callback_data": f"habit|{row['id']}|done"},
-                        {"text": "❌ O‘qimadim" if prayer else "❌ Bajarilmadi", "callback_data": f"habit|{row['id']}|missed"}]]}
+                    keyboard = entry_keyboard(row)
                     state = "sent"
                     try:
-                        send(chat_id, text, keyboard, parse_mode="HTML")
+                        sent = send(chat_id, text, keyboard, parse_mode="HTML")
+                        message_id = (sent or {}).get("result", {}).get("message_id")
                     except Exception as exc:
+                        message_id = None
                         state = "failed"
                         detail = str(getattr(exc, "detail", "")).lower()
                         if "403" in detail or "bot was blocked" in detail:
@@ -447,7 +638,7 @@ def install(router, get_connection, auth, bot_id, require_joined, send, answer):
                         LOG.warning("Habit send failed (%s)", type(exc).__name__)
                     with connection() as conn:
                         with conn.cursor() as cur:
-                            cur.execute("UPDATE public.qadam_habit_days SET reminder_state=%s WHERE id=%s", (state, row["id"]))
+                            cur.execute("UPDATE public.qadam_habit_days SET reminder_state=%s,reminder_message_id=COALESCE(%s,reminder_message_id) WHERE id=%s AND revision=%s AND reminder_state='started'", (state, message_id, row["id"], row["revision"]))
                     results.append({"id": row["id"], "sent": state == "sent"})
             except Exception as exc:
                 LOG.warning("Habit scheduling failed (%s)", type(exc).__name__)
