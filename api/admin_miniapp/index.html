@@ -213,6 +213,7 @@
   <button class="nav-btn" data-tab="activity" type="button">
     <span class="nav-icon">⚡</span>Faollik
   </button>
+  <button class="nav-btn" data-tab="usage" type="button"><span class="nav-icon">📊</span>Bo‘limlar</button>
   <button class="nav-btn" data-tab="retention" type="button">
     <span class="nav-icon">🔁</span>Retention
   </button>
@@ -239,6 +240,7 @@
 
   const titles = {
     overview: ['Umumiy', "Bugungi umumiy ko'rsatkichlar"],
+    usage: ['Bo‘limlardan foydalanish', 'Vazifa, namoz, odat va zikr'],
     activity: ['Faollik', 'Bugungi rejalar va bajarilish holati'],
     retention: ['Retention', 'D1 / D3 / D7 / D30 saqlanish'],
     users: ['Foydalanuvchilar', 'Segmentlar va foydalanuvchi ro\u2018yxati']
@@ -403,6 +405,27 @@
     }).catch(function (err) { if (request === loadVersion) handleLoadError(err); });
   }
 
+  let usageDays=1;
+  function loadUsage() {
+    const request=++loadVersion; showSkeleton();
+    apiFetch('/usage?days='+usageDays).then(function(data) {
+      if(currentTab!=='usage'||request!==loadVersion)return;
+      let html='<div class="card"><div class="filter-row">'+[1,7,30].map(d=>'<button type="button" data-usage-days="'+d+'">'+(d===1?'Bugun':d+' kun')+'</button>').join('')+'</div><p>'+escapeHtml(data.start)+' — '+escapeHtml(data.date)+'</p></div>';
+      const t=data.tasks;
+      html+='<p class="section-title">📋 VAZIFALAR</p><div class="kpi-grid">'+kpi(t.users,'Rejasi bor foydalanuvchilar')+kpi(t.total,'Jami vazifalar')+kpi(t.done,'Bajarilgan')+kpi(t.missed,'Bajarilmagan deb belgilangan')+kpi(t.pending,'Hali belgilanmagan')+'</div>';
+      [['prayer','🕌 NAMOZ'],['habit','🔁 ODATLAR'],['zikr','📿 ZIKR']].forEach(function(pair) {
+        const key=pair[0], r=data.sections[key]||{}, c=key==='prayer'?data.prayer_settings:(data.configured[key]||{});
+        html+='<p class="section-title">'+pair[1]+'</p><div class="kpi-grid">'+kpi(c.configured_users||0,key==='prayer'?'Eslatmani yoqqanlar':'Qo‘shgan foydalanuvchilar')+kpi(r.users||0,'Natija belgilagan userlar')+kpi(r.done||0,key==='prayer'?'O‘qilgan':'Bajarilgan')+kpi(r.pending||0,'Hali belgilanmagan');
+        if(key==='prayer') html+=kpi(r.missed||0,'Qazo hisobida')+kpi(r.qaza_done||0,'Qazosi o‘qilgan');
+        else html+=kpi(c.active_items||0,'Hozir faol')+kpi(c.archived_items||0,'Arxivlangan');
+        if(key==='zikr')html+=kpi(r.snoozes||0,'Keyinroqqa surishlar');
+        html+='</div><div class="card">'+segmentRow('Eslatma yuborilgan',r.sent||0)+segmentRow('Yuborishda xato',r.failed||0)+segmentRow('Yuborish natijasi tasdiqlanmagan',r.uncertain||0)+'</div>';
+      });
+      contentEl.innerHTML=html+note(data.usage_note)+dataNotes(data);
+    }).catch(function(err){if(request===loadVersion)handleLoadError(err);});
+  }
+  contentEl.addEventListener('click',function(e){const b=e.target.closest('[data-usage-days]');if(b){usageDays=Number(b.dataset.usageDays);loadUsage();}});
+
   // ---------- Retention ----------
 
   function retentionCell(value) {
@@ -537,6 +560,7 @@
   const loaders = {
     overview: loadOverview,
     activity: loadActivity,
+    usage: loadUsage,
     retention: loadRetention,
     users: loadUsers
   };
