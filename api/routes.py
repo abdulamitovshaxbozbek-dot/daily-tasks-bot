@@ -1599,9 +1599,9 @@ def telegram_send_morning_keyboard(
 
         f"""🌅 Assalomu alaykum, {first_name}!
 
-📋 Qadam botiga xush kelibsiz.
+Bugungi rejangizni yozing. QADAM bajarishingizni kuzatadi.
 
-Tizim ishga tushishi uchun savolga javob bering:
+Avval ertalabki reja eslatmasini tanlang:
 
 🕐 Kuningizni soat nechchida rejalashtirasiz?""",
 
@@ -1669,9 +1669,9 @@ def handle_telegram_start(
 
             f"""👋 Assalomu alaykum, {first_name}!
 
-Siz allaqachon ro‘yxatdan o‘tgansiz. ✅
+Bugun nima qilmoqchisiz?
 
-📋 Vazifalaringizni yuborishingiz mumkin."""
+Rejangizni shu chatga yozing yoki ovozli xabar yuboring."""
         )
 
         return {
@@ -1838,17 +1838,13 @@ def handle_morning_time(
         chat_id,
         f"""✅ Ertalabki vaqt belgilandi: {time_value}
 
-🚀 Hammasi tayyor!
+Bugun nima qilmoqchisiz?
 
-📋 Bugungi 1–3 ta vazifangizni shu chatga yozing yoki 🎙️ ovozli xabar orqali yuboring.
+Rejangizni shu chatga yozing yoki 🎙️ ovozli xabar yuboring.
+Masalan: «10 bet kitob o‘qish».
 
-Masalan:
-• Kitobdan 10 bet o‘qish
-• Sport qilish
-• Ingliz tilidan 20 ta so‘z yodlash
-
-🕌 Namoz vaqtlarini sozlash hamda 🔁 odatlaringizni qo‘shish uchun Mini App’ni oching 👇""",
-        {"inline_keyboard": [[{"text": "🕌 Namoz va odatlar", "web_app": {"url": MINIAPP_URL + "?section=prayers"}}]]}
+Eslatma vaqtini Mini App’da 🔔 orqali tanlang. Bajarilganda ✅, bajarilmaganda ❌ va sababni belgilang.""",
+        {"inline_keyboard": [[{"text": "🏠 Bugun", "web_app": {"url": MINIAPP_URL}}]]}
     )
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -4250,9 +4246,9 @@ Masalan:
                     introduce = cur.fetchone() is not None
                 conn.commit()
             if introduce:
-                greeting += "\n\n✨ Namoz va odatlar bo‘limlari qo‘shildi!\n🕌 Namoz vaqtlarini sozlash va 🔁 odatlaringizni qo‘shish uchun Mini App’ni oching. Vazifalarni shu chatga yuboring."
+                greeting += "\n\nBugungi rejangiz va progress Mini App’da."
                 telegram_send_message_with_keyboard(chat_id, greeting,
-                    {"inline_keyboard": [[{"text": "🕌 Namoz va odatlar", "web_app": {"url": MINIAPP_URL + "?section=prayers"}}]]}, parse_mode="HTML")
+                    {"inline_keyboard": [[{"text": "🏠 Bugun", "web_app": {"url": MINIAPP_URL}}]]}, parse_mode="HTML")
             else:
                 telegram_send_message(chat_id, greeting, parse_mode="HTML")
             if today_tasks:
