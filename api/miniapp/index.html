@@ -724,10 +724,10 @@
   </div>
 
   <div class="tabs" role="tablist">
-    <button class="tab active" data-period="daily" role="tab" aria-selected="true">Kunlik</button>
-    <button class="tab" data-period="weekly" role="tab" aria-selected="false">Haftalik</button>
-    <button class="tab" data-period="monthly" role="tab" aria-selected="false">Oylik</button>
-    <button class="tab" data-period="yearly" role="tab" aria-selected="false">Yillik</button>
+    <button class="tab active" data-period="daily" role="tab" aria-selected="true">Kun</button>
+    <button class="tab" data-period="weekly" role="tab" aria-selected="false">Hafta</button>
+    <button class="tab" data-period="monthly" role="tab" aria-selected="false">Oy</button>
+    <button class="tab" data-period="yearly" role="tab" aria-selected="false">Yil</button>
   </div>
 
   <p id="taskNotice" class="task-notice" role="status" aria-live="polite"></p>
@@ -1058,8 +1058,10 @@
   }
 
   function renderDaily(data) {
+    window.qadamDaily = data;
+    if (window.qadamDailyChanged) window.qadamDailyChanged();
     const s = data.stats;
-    let html = '<div class="hero">' +
+    let html = '<div class="hero today-analysis">' +
       ringMarkup(s.percent) +
       '<div class="hero-info">' +
         '<p class="hero-count"><strong>' + s.completed + '</strong> / ' + s.total + ' vazifa bajarildi</p>' +
@@ -1068,15 +1070,14 @@
       '</div>' +
     '</div>';
 
-    html += metricMarkup(s.completed, s.failed || 0, s.pending || 0);
+    html += '<div class="today-analysis">' + metricMarkup(s.completed, s.failed || 0, s.pending || 0) + '</div>';
 
-    html += '<button type="button" class="tomorrow-btn" data-day-date="' + escapeHtml(data.tomorrow || addDays(data.date, 1)) + '">🌅 Ertangi vazifalarni ochish →</button>';
     html += '<p class="section-title">VAZIFALAR</p>';
 
     if (!data.tasks.length) {
       html += '<div class="state-msg"><span class="state-icon">📝</span>Bugun uchun vazifalar hali qo‘shilmagan</div>';
     } else {
-      data.tasks.forEach(function (t) {
+      data.tasks.slice().sort(function (a,b) { return Number(a.status!=='pending')-Number(b.status!=='pending'); }).forEach(function (t) {
         const iconClass = t.status === 'completed' ? 'completed' : (t.status === 'failed' ? 'failed' : 'pending');
         const icon = t.status === 'completed' ? '✓' : (t.status === 'failed' ? '✕' : '⏳');
         html += (
@@ -1092,7 +1093,8 @@
       });
     }
 
-    html += insightMarkup(data.top_fail_reason, data.motivation) + updatedMarkup();
+    html += '<button type="button" class="tomorrow-btn" data-day-date="' + escapeHtml(data.tomorrow || addDays(data.date, 1)) + '">🌅 Ertangi vazifalarni ochish →</button>';
+    html += '<div class="today-analysis">' + insightMarkup(data.top_fail_reason, data.motivation) + '</div>' + updatedMarkup();
     contentEl.innerHTML = html;
   }
 
@@ -1412,12 +1414,24 @@
       /* profil olinmasa ham dashboard davom etadi */
     });
 
+  window.qadamTasks = {
+    showDaily: function () {
+      document.querySelectorAll('.tab').forEach(function (b) {
+        const active = b.dataset.period === 'daily';
+        b.classList.toggle('active', active);
+        b.setAttribute('aria-selected', String(active));
+      });
+      loadPeriod('daily', true);
+    }
+  };
   loadPeriod('daily');
 })();
 </script>
 
 <style>
   [hidden] { display:none!important; }
+  .app[data-view="today"] .today-analysis { display:none; }
+  .journey-nav button { white-space:nowrap; }
   .journey-nav { display:flex; gap:5px; padding:5px; margin:0 0 22px; background:rgba(255,255,255,.045); border:1px solid rgba(255,255,255,.08); border-radius:18px; }
   .journey-nav button { min-height:44px; flex:1; padding:12px 3px; border:0; border-radius:13px; background:transparent; color:#a7bfba; font:inherit; font-size:12px; cursor:pointer; }
   .journey-nav button[aria-selected="true"] { background:#d7ebc8; color:#153d32; font-weight:700; box-shadow:0 3px 12px #00191030; }
@@ -1493,18 +1507,17 @@
   const tg = window.Telegram && window.Telegram.WebApp;
   const app = document.querySelector('.app');
   const tabs = app.querySelector('.tabs');
-  const original = [tabs, document.getElementById('content'), document.getElementById('taskNotice')];
   const nav = document.createElement('nav');
   nav.className = 'journey-nav'; nav.setAttribute('aria-label', 'Asosiy bo‘limlar');
-  nav.innerHTML = [['tasks','Vazifalar'],['prayers','Namoz'],['habits','Odatlar'],['qaza','Qazo']].map(([key,label]) =>
-    '<button type="button" role="tab" data-section="'+key+'" aria-selected="'+(key==='tasks')+'">'+label+'</button>').join('');
+  nav.innerHTML = [['today','🏠 Bugun'],['add','➕ Qo‘shish'],['results','📊 Natijalar'],['preferences','⚙️ Sozlamalar']].map(([key,label]) =>
+    '<button type="button" role="tab" data-section="'+key+'" aria-selected="'+(key==='today')+'">'+label+'</button>').join('');
   nav.setAttribute('role','tablist');
   app.insertBefore(nav, tabs);
   const panel = document.createElement('section'); panel.id='journeyPanel'; panel.hidden=true;
-  panel.setAttribute('aria-label','Odatlar va namozlar'); app.appendChild(panel);
+  panel.setAttribute('aria-label','Bo‘lim mazmuni'); app.insertBefore(panel, tabs);
   const dialog=document.getElementById('journeyDialog'), form=document.getElementById('journeyForm');
   let archived=false;
-  let section='tasks', model=null, request=0, busy=false, mode='', selected=null, notice='', formRequest='';
+  let section='today', model=null, request=0, busy=false, mode='', selected=null, notice='', formRequest='';
   const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   async function api(path, method='GET', body) {
     const res=await fetch('/api/miniapp/'+path+'?initData='+encodeURIComponent(tg ? tg.initData : ''),{
@@ -1546,7 +1559,43 @@
   function scheduled(h) { const d=new Date(model.date+'T12:00:00Z');return (h.weekdays||[0,1,2,3,4,5,6]).includes((d.getUTCDay()+6)%7); }
   function scheduleText(h) { const days=h.weekdays||[0,1,2,3,4,5,6];return days.length===7?'Har kuni':days.map(d=>dayNames[d]).join(' · '); }
   function render() {
-    if(!model || section==='tasks') return;
+    if(!model) return;
+    if(section==='today') {
+      const daily=window.qadamDaily;
+      const tasks=daily && daily.date===model.date ? daily.stats : null;
+      const planned=model.habits.filter(h=>h.active&&scheduled(h));
+      const ids=new Set(planned.map(h=>String(h.id)));
+      const habits={done:model.entries.filter(e=>e.kind==='habit'&&ids.has(e.ref)&&e.status==='done').length,total:planned.length};
+      const prayer=model.stats.daily.prayer || {done:0,total:0};
+      const enabled=model.settings&&model.settings.enabled;
+      const rows=[['🎯 Vazifalar',tasks?tasks.completed:null,tasks?tasks.total:null,'tasks']];
+      if(model.habits.some(h=>h.active)) rows.push(['👣 Odatlar',habits.done,habits.total,'habits']);
+      if(enabled) rows.push(['🕌 Namoz',prayer.done,prayer.total,'prayers']);
+      const done=rows.reduce((n,r)=>n+(r[1]||0),0), total=rows.reduce((n,r)=>n+(r[2]||0),0);
+      const habitPending=planned.filter(h=>!model.entries.some(e=>e.kind==='habit'&&e.ref===String(h.id)&&e.status!=='pending')).length;
+      const prayerPending=enabled?Math.max(0,prayer.total-prayer.done-model.entries.filter(e=>e.kind==='prayer'&&['missed','qaza_done'].includes(e.status)).length):0;
+      const pending=tasks?Math.max(0,tasks.pending==null?tasks.total-tasks.completed-(tasks.failed||0):tasks.pending)+habitPending+prayerPending:0;
+      panel.innerHTML=hero('BUGUN','Bugungi rejangiz',tasks?'Bajarildi: '+done+' / '+total+' · Qolgan: '+pending:'Vazifalar yuklanmoqda…',
+        tasks&&total?'<div class="j-ring" style="--progress:'+Math.round(done/total*100)+'%"><span>'+Math.round(done/total*100)+'%</span></div>':'')+
+        '<div class="j-stats">'+rows.map(r=>'<div class="j-stat">'+(r[3]==='tasks'?'<span>'+r[0]+'</span>':btn(r[0],'section',r[3]))+'<strong>'+(r[1]==null?'…':r[1]+' / '+r[2])+'</strong></div>').join('')+'</div>'+
+        (!tasks||!tasks.total?'<p class="j-copy">Bugun nima qilmoqchisiz? '+btn('🎯 Vazifa yozish','task-chat',null,true)+'</p>':'');
+      return;
+    }
+    if(section==='add') {
+      panel.innerHTML=hero('QO‘SHISH','Bitta qadamdan boshlang','Bugungi rejangizni yozing. QADAM bajarishingizni kuzatadi.')+
+        '<div class="j-actions">'+btn('🎯 Vazifa','task-chat',null,true)+btn('👣 Odat','add')+btn('🕌 Namozni sozlash','settings')+'</div>';
+      return;
+    }
+    if(section==='preferences') {
+      panel.innerHTML=hero('SOZLAMALAR','Rejangizni boshqaring','Vazifa eslatmasini Bugun ro‘yxatidagi 🔔 orqali sozlang.')+
+        '<div class="j-actions">'+btn('👣 Odatlarni boshqarish','section','habits')+btn('🕌 Namoz: hudud va eslatma','settings')+'</div>'+
+        '<p class="j-small">Zikrni odat sifatida qo‘shing. Qazo hisobi Namoz bo‘limida.</p>';
+      return;
+    }
+    if(section==='results') {
+      panel.innerHTML='<h2>Natijalar</h2><div class="j-actions">'+btn('👣 Odat natijalari','section','habits')+btn('🕌 Namoz natijalari','section','prayers')+'</div>';
+      return;
+    }
     const dateParts=model.date.split('-');
     const today=Number(dateParts[2])+'-'+['yanvar','fevral','mart','aprel','may','iyun','iyul','avgust','sentabr','oktabr','noyabr','dekabr'][Number(dateParts[1])-1];
     let view='';
@@ -1556,6 +1605,7 @@
       const names={bomdod:'Bomdod',peshin:'Peshin',asr:'Asr',shom:'Shom',xufton:'Xufton'};
       view+=hero(today+' · NAMOZ','Bugungi namozlar',enabled?esc(model.regions[settings.region]):'Hududingizni tanlang. Namoz vaqtlarini birga kuzatamiz.',
         enabled&&next?'<div class="j-next"><span class="j-copy">Keyingi namoz · '+names[next[0]]+'</span><strong>'+esc(next[1])+'</strong></div>':'');
+      view+='<div class="j-actions">'+btn('Qazo hisobi','section','qaza')+'</div>';
       view+='<div class="j-head"><h3>Besh vaqt namoz</h3>'+btn('⚙ Hudud va eslatma','settings')+'</div>';
       if(!enabled) view+='<div class="j-card j-empty"><div style="font-size:34px">☾</div><h3>Bir marta sozlang</h3><p class="j-copy">Hududingizga mos vaqtlar va har kuni botdan eslatmalar.</p><div class="j-actions">'+btn('Hududni tanlash','settings',null,true)+'</div></div>';
       if(model.warning) view+='<p class="j-warning">'+esc(model.warning)+'</p>';
@@ -1599,6 +1649,7 @@
       });
       view+='<p class="j-small">Hisob shaxsiy. Qazoni o‘qib bo‘lgach belgilang.</p>';
     }
+    view='<div class="j-actions">'+btn('← Bugun','section','today')+'</div>'+view;
     panel.innerHTML=(notice?'<p class="j-toast" role="status">'+esc(notice)+'</p>':'')+view;
   }
   async function load() {
@@ -1607,16 +1658,22 @@
     try { const data=await api('habits'); if(token!==request) return; model=data; render(); }
     catch(e) { if(token!==request) return; panel.innerHTML='<p class="j-warning" role="alert">'+esc(e.message)+'</p>'+btn('Qayta urinish','retry'); }
   }
+  function showSection(next) {
+    section=next; notice='';
+    app.setAttribute('data-view',next);
+    nav.querySelectorAll('button').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.section===next)));
+    tabs.hidden=next!=='results';
+    document.getElementById('content').hidden=!['today','results'].includes(next);
+    document.getElementById('taskNotice').hidden=!['today','results'].includes(next);
+    panel.hidden=false;
+    if(['today','results'].includes(next)&&window.qadamTasks) window.qadamTasks.showDaily();
+    render(); load();
+  }
+  window.qadamDailyChanged=()=>{if(section==='today')render();};
   nav.addEventListener('click',e=>{
-    const button=e.target.closest('[data-section]'); if(!button) return;
-    section=button.dataset.section; notice='';
-    nav.querySelectorAll('button').forEach(b=>b.setAttribute('aria-selected',String(b===button)));
-    original.forEach(el=>el.hidden=section!=='tasks'); panel.hidden=section==='tasks';
-    if(section!=='tasks') { render(); load(); }
+    const button=e.target.closest('[data-section]'); if(button)showSection(button.dataset.section);
   });
-  document.getElementById('refreshBtn').addEventListener('click',e=>{
-    if(section!=='tasks') { e.stopImmediatePropagation(); load(); }
-  },true);
+  document.getElementById('refreshBtn').addEventListener('click',()=>{load();});
   function openForm(type,id) {
     mode=type; selected=id; formRequest=crypto.randomUUID(); let fields='';
     if(type==='later') {
@@ -1651,6 +1708,13 @@
       catch(error) { notice=error.message; await load(); }
       return;
     }
+    if(action==='section') return showSection(id);
+    if(action==='task-chat') {
+      panel.innerHTML=hero('🎯 VAZIFA','Bugun nima qilmoqchisiz?','Bot chatiga rejangizni yozing yoki ovozli xabar yuboring. Masalan: «Bugun 10 bet kitob o‘qish». Saqlangach, Bugun ro‘yxatidagi 🔔 orqali eslatma qo‘ying. ✅ / ❌ va sababni botda belgilang.')+
+        '<div class="j-actions">'+btn('Chatga qaytish','close-app',null,true)+btn('Bugunni ochish','section','today')+'</div>';
+      return;
+    }
+    if(action==='close-app') { if(tg)tg.close(); return; }
     if(action==='retry') return load();
     if(action==='active-list'||action==='archive-list') { archived=action==='archive-list'; render(); return; }
     if(['settings','add','edit','archive','activate','delete'].includes(action)) return openForm(action,id);
@@ -1675,10 +1739,10 @@
       if(ok)dialog.close();
     } catch(error) { err.textContent=error.message; err.hidden=false; }
   });
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&section!=='tasks'&&!busy)load();});
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!busy)load();});
   const initialSection=new URLSearchParams(location.search).get('section');
-  if(['prayers','habits','qaza'].includes(initialSection)) nav.querySelector('[data-section="'+initialSection+'"]').click();
-  setInterval(()=>{if(!document.hidden&&section!=='tasks'&&!busy&&!dialog.open)load();},60000);
+  showSection(['prayers','habits','qaza','add','results','preferences'].includes(initialSection)?initialSection:'today');
+  setInterval(()=>{if(!document.hidden&&!busy&&!dialog.open)load();},60000);
 })();
 </script>
 </body>
