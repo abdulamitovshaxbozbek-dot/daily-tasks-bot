@@ -5,6 +5,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Qadam</title>
+<meta name="qadam-ui-version" content="2026-10-07-task-dialog-v2">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1712,6 +1713,7 @@
     catch(e) { if(token!==request) return; panel.innerHTML='<p class="j-warning" role="alert">'+esc(e.message)+'</p>'+btn('Qayta urinish','retry'); }
   }
   function showSection(next) {
+    if(next==='add') { showSection('today'); openForm('task-chat'); return; }
     section=next; notice='';
     app.setAttribute('data-view',next);
     nav.querySelectorAll('button').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.section===(['today','results'].includes(next)?next:'extras'))));
@@ -1728,10 +1730,15 @@
   });
   document.getElementById('refreshBtn').addEventListener('click',()=>{if(!['today','results'].includes(section))load();});
   document.getElementById('content').addEventListener('click',e=>{
-    if(e.target.closest('[data-dashboard-add]')) { showSection('add'); }
+    if(e.target.closest('[data-dashboard-add]')) openForm('task-chat');
     if(e.target.closest('[data-dashboard-stats]')) showSection('results');
   });
   function openForm(type,id) {
+    if(type==='task-chat') {
+      form.innerHTML='<h2 id="journeyDialogTitle">Bugungi vazifani qo‘shish</h2><p class="j-copy">Bot chatiga vazifangizni yozing yoki ovozli xabar yuboring. Masalan: «Bugun 10 bet kitob o‘qish». Keyin Mini App’ni qayta oching.</p><p id="jChatNotice" class="j-warning" role="status" hidden></p><div class="j-actions"><button type="button" class="j-btn" data-close>Bekor qilish</button><button type="button" class="j-btn j-primary" data-task-chat-close>Chatga o‘tish →</button></div>';
+      if(!dialog.open) dialog.showModal();
+      return;
+    }
     mode=type; selected=id; formRequest=crypto.randomUUID(); let fields='';
     if(type==='later') {
       fields='<h2 id="journeyDialogTitle">Qachon eslatay?</h2><div class="j-actions">'+[15,30,60].map(n=>'<button type="button" class="j-btn" data-snooze="'+n+'">'+(n===60?'1 soat':n+' daqiqa')+'</button>').join('')+'</div>';
@@ -1767,11 +1774,7 @@
     }
     if(action==='section') return showSection(id);
     if(action==='zikr') { openForm('add'); form.querySelector('[name=kind]').value='zikr'; return; }
-    if(action==='task-chat') {
-      panel.innerHTML=hero('🎯 VAZIFA','Bugun nima qilmoqchisiz?','Bot chatiga rejangizni yozing yoki ovozli xabar yuboring. Masalan: «Bugun 10 bet kitob o‘qish». Saqlangach, Bugun ro‘yxatidagi 🔔 orqali eslatma qo‘ying. ✅ / ❌ va sababni botda belgilang.')+
-        '<div class="j-actions">'+btn('Chatga qaytish','close-app',null,true)+btn('Bugunni ochish','section','today')+'</div>';
-      return;
-    }
+    if(action==='task-chat') { if(section!=='today')showSection('today'); openForm('task-chat'); return; }
     if(action==='close-app') { if(tg)tg.close(); return; }
     if(action==='retry') return load();
     if(action==='active-list'||action==='archive-list') { archived=action==='archive-list'; render(); return; }
@@ -1779,7 +1782,12 @@
   });
   form.addEventListener('click',async e=>{
     if(busy) return;
-    if(e.target.closest('[data-close]')) dialog.close();
+    if(e.target.closest('[data-task-chat-close]')) {
+      if(tg && typeof tg.close==='function') tg.close();
+      else { const hint=document.getElementById('jChatNotice'); hint.textContent='Telegramdagi QADAM bot chatini ochib, vazifangizni yuboring.'; hint.hidden=false; }
+      return;
+    }
+    if(e.target.closest('[data-close]')) { dialog.close(); return; }
     const snooze=e.target.closest('[data-snooze]');
     if(snooze) { try { if(await mutate('habit-entries/'+selected.id,'PUT',{status:'s'+snooze.dataset.snooze,revision:selected.revision}))dialog.close(); }catch(error){const err=document.getElementById('jFormError');err.textContent=error.message;err.hidden=false;} return; }
     const b=e.target.closest('[data-archive]'); if(b) openForm('archive',b.dataset.archive);
