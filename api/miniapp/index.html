@@ -1125,8 +1125,14 @@
   let recentRequest = 0;
   function loadRecentWeek(date) {
     const token = ++recentRequest;
-    // Reuse the existing seven-day weekly endpoint and its start parameter.
-    const path = '/weekly?start=' + encodeURIComponent(addDays(date, -6));
+    // The backend accepts Monday starts only. Merge the weeks covering this window.
+    const firstDate = addDays(date, -6);
+    function mondayFor(iso) {
+      const weekday = new Date(iso + 'T12:00:00Z').getUTCDay();
+      return addDays(iso, -((weekday + 6) % 7));
+    }
+    const starts = Array.from(new Set([mondayFor(firstDate), mondayFor(date)]));
+    const paths = starts.map(start => '/weekly?start=' + encodeURIComponent(start));
     const target = document.getElementById('recentWeek');
     const show = data => {
       if (token !== recentRequest || !target.isConnected) return;
@@ -1135,9 +1141,20 @@
         '<span class="week-value">' + (d.total ? d.percent + '%' : '—') + '</span><span class="week-track"><span class="week-fill" style="height:' + Math.max(0, Math.min(100, Number(d.percent) || 0)) + '%"></span></span><span class="week-label">' + escapeHtml(shortDate(d.date).slice(0, 5)) + '</span></button>'
       ).join('') + '</div>';
     };
-    if (cache[path]) { show(cache[path]); return; }
-    apiFetch(path).then(data => { cache[path] = data; show(data); }).catch(() => {
-      if (token === recentRequest && target.isConnected) target.innerHTML = '<p class="hero-period">Progressni yuklab bo‘lmadi.</p><button type="button" class="j-btn" data-retry-week="' + escapeHtml(date) + '">Qayta urinish</button>';
+    Promise.all(paths.map(path => cache[path] ? Promise.resolve(cache[path]) :
+      apiFetch(path).then(data => { cache[path] = data; return data; })
+    )).then(weeks => {
+      const byDate = new Map();
+      weeks.forEach(week => week.days.forEach(day => byDate.set(day.date, day)));
+      const days = Array.from({length:7}, (_, index) => {
+        const dayDate = addDays(firstDate, index);
+        const day = byDate.get(dayDate);
+        if (!day) throw new Error('Kunlik progress ma’lumoti yetishmayapti.');
+        return day;
+      });
+      show({days});
+    }).catch(error => {
+      if (token === recentRequest && target.isConnected) target.innerHTML = '<p class="hero-period">' + escapeHtml(error.message || 'Progressni yuklab bo‘lmadi.') + '</p><button type="button" class="j-btn" data-retry-week="' + escapeHtml(date) + '">Qayta urinish</button>';
     });
   }
   contentEl.addEventListener('click', event => {
@@ -1786,5 +1803,9 @@
   setInterval(()=>{if(!document.hidden&&!busy&&!dialog.open&&!['today','results'].includes(section))load();},60000);
 })();
 </script>
+<style>
+  .journey-nav { background:var(--bg-elevated); }
+  .journey-nav button[aria-selected="true"] { background:var(--accent); color:var(--bg); }
+</style>
 </body>
 </html>
