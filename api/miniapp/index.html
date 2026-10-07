@@ -708,6 +708,32 @@
   .task-notice:empty { display: none; }
 
 </style>
+<style>
+  /* Dashboard hierarchy: task-only summary, then tasks, analysis and recent days. */
+  .header { margin-bottom:18px; }
+  .journey-nav { position:sticky; top:6px; z-index:12; background:var(--bg-elevated); margin-bottom:18px; }
+  .journey-nav button[aria-selected="true"] { background:var(--accent); color:var(--bg); }
+  .tabs { position:static; box-shadow:none; }
+  .today-summary { padding:16px; border:1px solid var(--border); border-radius:18px; background:var(--bg-card); }
+  .summary-line { display:flex; align-items:center; justify-content:space-between; font-size:14px; font-weight:700; }
+  .summary-line strong { font-size:26px; color:var(--accent); }
+  .summary-track { height:6px; border-radius:99px; background:var(--bg-elevated); overflow:hidden; margin:10px 0; }
+  .summary-track div { height:100%; background:var(--accent); border-radius:inherit; }
+  .today-summary p { margin:0 0 7px; font-size:12px; color:var(--text-dim); line-height:1.7; }
+  .today-summary p strong { color:var(--text); }
+  .task-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:20px 0 12px; }
+  .task-heading h2,.daily-analysis h2 { margin:0; font-size:16px; }
+  .daily-analysis { margin:22px 0; padding:16px; background:var(--bg-elevated); border:1px solid var(--border); border-radius:18px; }
+  .daily-analysis .insight { background:none; border:0; padding:0; margin-top:12px; }
+  .daily-analysis>.insight-text { margin-top:10px; }
+  .compact-chart { height:142px; padding:12px 8px; gap:5px; }
+  .compact-chart .week-track { height:72px; max-width:24px; }
+  .compact-chart .week-column { border:0; background:none; color:var(--text); padding:0; font:inherit; }
+  .compact-chart .week-label { font-size:9px; white-space:nowrap; }
+  .task-actions { gap:6px; margin-top:9px; }
+  #journeyPanel:empty { padding:0; }
+  button:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+</style>
 </head>
 <body>
 
@@ -724,7 +750,7 @@
   </div>
 
   <div class="tabs" role="tablist">
-    <button class="tab active" data-period="daily" role="tab" aria-selected="true">Kun</button>
+    <button class="tab active" data-period="daily" role="tab" aria-selected="true">Kunlik</button>
     <button class="tab" data-period="weekly" role="tab" aria-selected="false">Hafta</button>
     <button class="tab" data-period="monthly" role="tab" aria-selected="false">Oy</button>
     <button class="tab" data-period="yearly" role="tab" aria-selected="false">Yil</button>
@@ -1061,18 +1087,13 @@
     window.qadamDaily = data;
     if (window.qadamDailyChanged) window.qadamDailyChanged();
     const s = data.stats;
-    let html = '<div class="hero today-analysis">' +
-      ringMarkup(s.percent) +
-      '<div class="hero-info">' +
-        '<p class="hero-count"><strong>' + s.completed + '</strong> / ' + s.total + ' vazifa bajarildi</p>' +
-        '<p class="hero-period">' + escapeHtml(shortDate(data.date)) + '</p>' +
-        comparisonMarkup(s, data.yesterday && data.yesterday.stats) +
-      '</div>' +
-    '</div>';
-
-    html += '<div class="today-analysis">' + metricMarkup(s.completed, s.failed || 0, s.pending || 0) + '</div>';
-
-    html += '<p class="section-title">VAZIFALAR</p>';
+    const pending = s.pending == null ? Math.max(0, s.total - s.completed - (s.failed || 0)) : s.pending;
+    let html = '<section class="today-summary" aria-label="Bugungi natija">' +
+      '<div class="summary-line"><span>Bugungi natija</span><strong>' + s.percent + '%</strong></div>' +
+      '<div class="summary-track"><div style="width:' + Math.max(0, Math.min(100, Number(s.percent) || 0)) + '%"></div></div>' +
+      '<p><strong>' + s.completed + '/' + s.total + ' bajarildi</strong> · ' + (s.failed || 0) + ' bajarilmadi · ' + pending + ' qoldi</p>' +
+      '<span class="hero-period">' + escapeHtml(shortDate(data.date)) + '</span></section>';
+    html += '<div class="task-heading"><h2>Bugungi vazifalar</h2><button type="button" class="j-btn" data-dashboard-add>+ Vazifa</button></div>';
 
     if (!data.tasks.length) {
       html += '<div class="state-msg"><span class="state-icon">📝</span>Bugun uchun vazifalar hali qo‘shilmagan</div>';
@@ -1094,9 +1115,35 @@
     }
 
     html += '<button type="button" class="tomorrow-btn" data-day-date="' + escapeHtml(data.tomorrow || addDays(data.date, 1)) + '">🌅 Ertangi vazifalarni ochish →</button>';
-    html += '<div class="today-analysis">' + insightMarkup(data.top_fail_reason, data.motivation) + '</div>' + updatedMarkup();
+    html += '<section class="daily-analysis"><h2>Bugungi tahlil</h2>' + comparisonMarkup(s, data.yesterday && data.yesterday.stats) +
+      (insightMarkup(data.top_fail_reason, data.motivation) || '<p class="insight-text">' + (s.total ? 'Bugungi natijangiz vazifalar holatiga qarab yangilanadi.' : 'Birinchi vazifani yozing — natijangiz shu yerda ko‘rinadi.') + '</p>') + '</section>';
+    html += '<section class="recent-progress"><div class="task-heading"><h2>7 kunlik progress</h2><button type="button" class="j-btn" data-dashboard-stats>Barchasi →</button></div><div id="recentWeek" role="status">Yuklanmoqda…</div></section>' + updatedMarkup();
     contentEl.innerHTML = html;
+    loadRecentWeek(data.date);
   }
+
+  let recentRequest = 0;
+  function loadRecentWeek(date) {
+    const token = ++recentRequest;
+    // Reuse the existing seven-day weekly endpoint and its start parameter.
+    const path = '/weekly?start=' + encodeURIComponent(addDays(date, -6));
+    const target = document.getElementById('recentWeek');
+    const show = data => {
+      if (token !== recentRequest || !target.isConnected) return;
+      target.innerHTML = '<div class="week-chart compact-chart">' + data.days.map(d =>
+        '<button type="button" class="week-column' + (d.total ? '' : ' empty') + '" data-day-date="' + escapeHtml(d.date) + '" aria-label="' + escapeHtml(shortDate(d.date)) + ': ' + d.completed + '/' + d.total + ' bajarildi">' +
+        '<span class="week-value">' + (d.total ? d.percent + '%' : '—') + '</span><span class="week-track"><span class="week-fill" style="height:' + Math.max(0, Math.min(100, Number(d.percent) || 0)) + '%"></span></span><span class="week-label">' + escapeHtml(shortDate(d.date).slice(0, 5)) + '</span></button>'
+      ).join('') + '</div>';
+    };
+    if (cache[path]) { show(cache[path]); return; }
+    apiFetch(path).then(data => { cache[path] = data; show(data); }).catch(() => {
+      if (token === recentRequest && target.isConnected) target.innerHTML = '<p class="hero-period">Progressni yuklab bo‘lmadi.</p><button type="button" class="j-btn" data-retry-week="' + escapeHtml(date) + '">Qayta urinish</button>';
+    });
+  }
+  contentEl.addEventListener('click', event => {
+    const retry = event.target.closest('[data-retry-week]');
+    if (retry) loadRecentWeek(retry.dataset.retryWeek);
+  });
 
   function renderWeekly(data) {
     const s = data.stats;
@@ -1403,6 +1450,7 @@
   refreshBtn.addEventListener('click', function () {
     haptic('medium');
     delete cache[periodPath(currentPeriod)];
+    Object.keys(cache).filter(key => key.startsWith('/weekly?start=')).forEach(key => delete cache[key]);
     loadPeriod(currentPeriod, true);
   });
 
@@ -1415,6 +1463,11 @@
     });
 
   window.qadamTasks = {
+    showStatistics: function () {
+      const selected = document.querySelector('.tab.active');
+      loadPeriod(selected && selected.dataset.period !== 'daily' ? selected.dataset.period : 'weekly');
+      document.querySelectorAll('.tab').forEach(b => { const active=b.dataset.period===currentPeriod; b.classList.toggle('active',active); b.setAttribute('aria-selected',String(active)); });
+    },
     showDaily: function () {
       document.querySelectorAll('.tab').forEach(function (b) {
         const active = b.dataset.period === 'daily';
@@ -1430,7 +1483,7 @@
 
 <style>
   [hidden] { display:none!important; }
-  .app[data-view="today"] .today-analysis { display:none; }
+
   .journey-nav button { white-space:nowrap; }
   .journey-nav { display:flex; gap:5px; padding:5px; margin:0 0 22px; background:rgba(255,255,255,.045); border:1px solid rgba(255,255,255,.08); border-radius:18px; }
   .journey-nav button { min-height:44px; flex:1; padding:12px 3px; border:0; border-radius:13px; background:transparent; color:#a7bfba; font:inherit; font-size:12px; cursor:pointer; }
@@ -1509,7 +1562,7 @@
   const tabs = app.querySelector('.tabs');
   const nav = document.createElement('nav');
   nav.className = 'journey-nav'; nav.setAttribute('aria-label', 'Asosiy bo‘limlar');
-  nav.innerHTML = [['today','🏠 Bugun'],['add','➕ Qo‘shish'],['results','📊 Natijalar'],['preferences','⚙️ Sozlamalar']].map(([key,label]) =>
+  nav.innerHTML = [['today','Bugun'],['results','Statistika'],['extras','Qo‘shimcha']].map(([key,label]) =>
     '<button type="button" role="tab" data-section="'+key+'" aria-selected="'+(key==='today')+'">'+label+'</button>').join('');
   nav.setAttribute('role','tablist');
   app.insertBefore(nav, tabs);
@@ -1559,26 +1612,12 @@
   function scheduled(h) { const d=new Date(model.date+'T12:00:00Z');return (h.weekdays||[0,1,2,3,4,5,6]).includes((d.getUTCDay()+6)%7); }
   function scheduleText(h) { const days=h.weekdays||[0,1,2,3,4,5,6];return days.length===7?'Har kuni':days.map(d=>dayNames[d]).join(' · '); }
   function render() {
-    if(!model) return;
-    if(section==='today') {
-      const daily=window.qadamDaily;
-      const tasks=daily && daily.date===model.date ? daily.stats : null;
-      const planned=model.habits.filter(h=>h.active&&scheduled(h));
-      const ids=new Set(planned.map(h=>String(h.id)));
-      const habits={done:model.entries.filter(e=>e.kind==='habit'&&ids.has(e.ref)&&e.status==='done').length,total:planned.length};
-      const prayer=model.stats.daily.prayer || {done:0,total:0};
-      const enabled=model.settings&&model.settings.enabled;
-      const rows=[['🎯 Vazifalar',tasks?tasks.completed:null,tasks?tasks.total:null,'tasks']];
-      if(model.habits.some(h=>h.active)) rows.push(['👣 Odatlar',habits.done,habits.total,'habits']);
-      if(enabled) rows.push(['🕌 Namoz',prayer.done,prayer.total,'prayers']);
-      const done=rows.reduce((n,r)=>n+(r[1]||0),0), total=rows.reduce((n,r)=>n+(r[2]||0),0);
-      const habitPending=planned.filter(h=>!model.entries.some(e=>e.kind==='habit'&&e.ref===String(h.id)&&e.status!=='pending')).length;
-      const prayerPending=enabled?Math.max(0,prayer.total-prayer.done-model.entries.filter(e=>e.kind==='prayer'&&['missed','qaza_done'].includes(e.status)).length):0;
-      const pending=tasks?Math.max(0,tasks.pending==null?tasks.total-tasks.completed-(tasks.failed||0):tasks.pending)+habitPending+prayerPending:0;
-      panel.innerHTML=hero('BUGUN','Bugungi rejangiz',tasks?'Bajarildi: '+done+' / '+total+' · Qolgan: '+pending:'Vazifalar yuklanmoqda…',
-        tasks&&total?'<div class="j-ring" style="--progress:'+Math.round(done/total*100)+'%"><span>'+Math.round(done/total*100)+'%</span></div>':'')+
-        '<div class="j-stats">'+rows.map(r=>'<div class="j-stat">'+(r[3]==='tasks'?'<span>'+r[0]+'</span>':btn(r[0],'section',r[3]))+'<strong>'+(r[1]==null?'…':r[1]+' / '+r[2])+'</strong></div>').join('')+'</div>'+
-        (!tasks||!tasks.total?'<p class="j-copy">Bugun nima qilmoqchisiz? '+btn('🎯 Vazifa yozish','task-chat',null,true)+'</p>':'');
+    if(!model && !['today','results'].includes(section)) return;
+    if(section==='today') { panel.innerHTML=''; return; }
+    if(section==='extras') {
+      panel.innerHTML=hero('QO‘SHIMCHA','O‘zingiz uchun foydali qadamlar','Odat, namoz va zikrni alohida kuzating.') +
+        '<div class="j-actions">'+btn('👣 Odatlar','section','habits',true)+btn('🕌 Namoz','section','prayers')+btn('📿 Zikr','zikr')+'</div>'+
+        '<p class="j-small">Zikr odatlar ichida saqlanadi va kuzatiladi.</p><div class="j-actions">'+btn('➕ Qo‘shish','section','add')+btn('⚙ Sozlamalar','section','preferences')+'</div>';
       return;
     }
     if(section==='add') {
@@ -1592,10 +1631,7 @@
         '<p class="j-small">Zikrni odat sifatida qo‘shing. Qazo hisobi Namoz bo‘limida.</p>';
       return;
     }
-    if(section==='results') {
-      panel.innerHTML='<h2>Natijalar</h2><div class="j-actions">'+btn('👣 Odat natijalari','section','habits')+btn('🕌 Namoz natijalari','section','prayers')+'</div>';
-      return;
-    }
+    if(section==='results') { panel.innerHTML='<h2 class="view-title">Statistika</h2><p class="j-small">Vazifalar bo‘yicha natijalaringiz</p>'; return; }
     const dateParts=model.date.split('-');
     const today=Number(dateParts[2])+'-'+['yanvar','fevral','mart','aprel','may','iyun','iyul','avgust','sentabr','oktabr','noyabr','dekabr'][Number(dateParts[1])-1];
     let view='';
@@ -1649,7 +1685,7 @@
       });
       view+='<p class="j-small">Hisob shaxsiy. Qazoni o‘qib bo‘lgach belgilang.</p>';
     }
-    view='<div class="j-actions">'+btn('← Bugun','section','today')+'</div>'+view;
+    view='<div class="j-actions">'+btn('← Qo‘shimcha','section','extras')+'</div>'+view;
     panel.innerHTML=(notice?'<p class="j-toast" role="status">'+esc(notice)+'</p>':'')+view;
   }
   async function load() {
@@ -1661,19 +1697,23 @@
   function showSection(next) {
     section=next; notice='';
     app.setAttribute('data-view',next);
-    nav.querySelectorAll('button').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.section===next)));
+    nav.querySelectorAll('button').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.section===(['today','results'].includes(next)?next:'extras'))));
     tabs.hidden=next!=='results';
     document.getElementById('content').hidden=!['today','results'].includes(next);
     document.getElementById('taskNotice').hidden=!['today','results'].includes(next);
     panel.hidden=false;
-    if(['today','results'].includes(next)&&window.qadamTasks) window.qadamTasks.showDaily();
-    render(); load();
+    if(window.qadamTasks) { if(next==='today') window.qadamTasks.showDaily(); else if(next==='results') window.qadamTasks.showStatistics(); }
+    render(); if(!['today','results'].includes(next)) load();
   }
   window.qadamDailyChanged=()=>{if(section==='today')render();};
   nav.addEventListener('click',e=>{
     const button=e.target.closest('[data-section]'); if(button)showSection(button.dataset.section);
   });
-  document.getElementById('refreshBtn').addEventListener('click',()=>{load();});
+  document.getElementById('refreshBtn').addEventListener('click',()=>{if(!['today','results'].includes(section))load();});
+  document.getElementById('content').addEventListener('click',e=>{
+    if(e.target.closest('[data-dashboard-add]')) { showSection('add'); }
+    if(e.target.closest('[data-dashboard-stats]')) showSection('results');
+  });
   function openForm(type,id) {
     mode=type; selected=id; formRequest=crypto.randomUUID(); let fields='';
     if(type==='later') {
@@ -1709,6 +1749,7 @@
       return;
     }
     if(action==='section') return showSection(id);
+    if(action==='zikr') { openForm('add'); form.querySelector('[name=kind]').value='zikr'; return; }
     if(action==='task-chat') {
       panel.innerHTML=hero('🎯 VAZIFA','Bugun nima qilmoqchisiz?','Bot chatiga rejangizni yozing yoki ovozli xabar yuboring. Masalan: «Bugun 10 bet kitob o‘qish». Saqlangach, Bugun ro‘yxatidagi 🔔 orqali eslatma qo‘ying. ✅ / ❌ va sababni botda belgilang.')+
         '<div class="j-actions">'+btn('Chatga qaytish','close-app',null,true)+btn('Bugunni ochish','section','today')+'</div>';
@@ -1739,10 +1780,10 @@
       if(ok)dialog.close();
     } catch(error) { err.textContent=error.message; err.hidden=false; }
   });
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!busy)load();});
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!busy&&!['today','results'].includes(section))load();});
   const initialSection=new URLSearchParams(location.search).get('section');
-  showSection(['prayers','habits','qaza','add','results','preferences'].includes(initialSection)?initialSection:'today');
-  setInterval(()=>{if(!document.hidden&&!busy&&!dialog.open)load();},60000);
+  showSection(['prayers','habits','qaza','add','results','preferences','extras'].includes(initialSection)?initialSection:'today');
+  setInterval(()=>{if(!document.hidden&&!busy&&!dialog.open&&!['today','results'].includes(section))load();},60000);
 })();
 </script>
 </body>
