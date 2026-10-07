@@ -23,6 +23,7 @@ from fastapi import (
 from pydantic import BaseModel, Field
 from psycopg2.extras import RealDictCursor
 
+from retention import claim as claim_notification, morning_text, evening_text, weekly_advice
 from database import get_connection
 from bot_identity import register_chat, require_joined, bot_id, verify_webhook
 
@@ -631,7 +632,9 @@ def maybe_notify_day_fully_completed(
         conn.commit()
 
     if claimant:
-
+        remaining = get_today_task_summary(user_id, task_date)
+        carry_buttons = ([[{"text": "📅 Ertagaga vazifa tanlash", "callback_data": "retention_carry_list"}]]
+                         if remaining['failed'] and task_date == get_today() else [])
         telegram_send_message_with_keyboard(
             chat_id,
 
@@ -649,7 +652,7 @@ def maybe_notify_day_fully_completed(
                             }
                         }
                     ]
-                ]
+                ] + carry_buttons
             }
         )
 
@@ -1448,7 +1451,8 @@ def refresh_live_checklist(
     user: dict,
     heading: str = "📋 Bugungi vazifalar",
     force_new: bool = False,
-    instructions: Optional[str] = None
+    instructions: Optional[str] = None,
+    extra_buttons: Optional[list] = None
 ) -> dict:
     """
     DB holatidan checklistni qayta quradi.
@@ -1493,6 +1497,10 @@ def refresh_live_checklist(
         heading,
         instructions=instructions
     )
+    if extra_buttons is None and summary['failed']:
+        extra_buttons = [[{'text':'📅 Ertagaga vazifa tanlash','callback_data':'retention_carry_list'}]]
+    if extra_buttons:
+        keyboard['inline_keyboard'].extend(extra_buttons)
 
     if old_message_id and not force_new:
 
@@ -1814,7 +1822,8 @@ def handle_morning_time(
         f"✅ Ertalabki eslatma belgilandi: {time_value}\n\n"
         "Har tong shu vaqtda bugunga rejalashtirgan vazifalaringizni eslataman. "
         "Rejangiz hali bo‘lmasa, yozishni eslataman.\n\n"
-        "🏠 «Bugun» orqali vazifalaringiz va natijangizni ko‘ring.",
+        "🏠 «Bugun» orqali vazifalaringiz va natijangizni ko‘ring.\n\n"
+        "🌅 Ertangi kunni oldindan rejalashtirish uchun ilovadagi «Ertangi vazifalar» bo‘limiga kirib, vazifa qo‘shishingiz mumkin.",
         {"inline_keyboard": [[{"text": "🏠 Bugun", "web_app": {"url": MINIAPP_URL}}]]}
     )
     with get_connection() as conn:
@@ -3125,14 +3134,8 @@ def handle_weekly_report(
         f"🟩 Bajarildi: {stats['completed']}"
     )
 
-    not_completed = (
-        stats["failed"]
-        + stats["pending"]
-    )
-
-    lines.append(
-        f"🟥 Bajarilmadi: {not_completed}"
-    )
+    lines.append(f"🟥 Bajarilmadi: {stats['failed']}")
+    lines.append(f"⏳ Belgilanmagan: {stats['pending']}")
 
     lines.append(
         f"🎯 {stats['percent']}%"
@@ -3239,6 +3242,11 @@ def handle_weekly_report(
         lines.append(
             top_reason_line
         )
+
+    if tasks:
+        lines.append("━━━━━━━━━━━━━━━━━━━━")
+        lines.append("👣 KEYINGI HAFTA UCHUN")
+        lines.append(weekly_advice(tasks, FAIL_REASONS))
 
     telegram_send_message(
         chat_id,
@@ -4193,12 +4201,14 @@ def handle_day_cycle():
                   AND morning_time IS NOT NULL
                   AND LEFT(morning_time::text, 5) = %s
                   AND (%s = false OR active_bot_id = %s)
+                  AND (last_active_date >= %s - 2 OR EXISTS (
+                      SELECT 1 FROM public.tasks t WHERE t.user_id=public.users.id AND t.task_date=%s))
                 RETURNING
                     id,
                     telegram_chat_id,
                     first_name
                 """,
-                (today, today, current_time, require_joined(), bot_id())
+                (today, today, current_time, require_joined(), bot_id(), today, today)
             )
 
             morning_users = cur.fetchall()
@@ -4223,41 +4233,14 @@ def handle_day_cycle():
                     """, (user["id"], today))
                     today_tasks = cur.fetchall()
 
-            if today_tasks:
-                greeting = (
-                    f"<b>🌅 Assalomu alaykum va rohmatullohi va barokatuh, {safe_first_name}!</b>\n\n"
-                    "Yaxshi dam oldingizmi?\n\n"
-                    "Kecha rejalashtirgan vazifalaringiz:\n\n"
-                    + "\n".join(f"• {html.escape(str(task['task_text']))}" for task in today_tasks)
-                    + "\n\nQo‘shimcha yana vazifalar yuborishingiz mumkin!"
-                )
+            greeting = morning_text(first_name, today_tasks)
+            pending = any(task['status'] == 'pending' for task in today_tasks)
+            if pending:
+                refresh_live_checklist(chat_id, user, heading=html.unescape(re.sub(r'<[^>]+>', '', greeting)), force_new=True,
+                    instructions="Qo‘shimcha vazifangiz bo‘lsa, shu chatga yozing.")
             else:
-                greeting = f"""<b>🌅 Assalomu alaykum va rohmatullohi va barokatuh, {safe_first_name}!</b>
-
-Yaxshi dam oldingizmi?
-
-Kun bo‘yi qanday ishlar qilmoqchisiz?
-
-Bajarishni istagan vazifalaringizni hozir yozib yuboring. 👣
-
-Masalan:
-• Kitobdan 20 bet o‘qish
-• 30 daqiqa piyoda yurish
-• Ingliz tilidan 5 ta so‘z yodlash"""
-
-            with get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("UPDATE public.users SET features_intro_claimed=true WHERE id=%s AND NOT features_intro_claimed RETURNING id", (user["id"],))
-                    introduce = cur.fetchone() is not None
-                conn.commit()
-            if introduce:
-                greeting += "\n\nBugungi rejangiz va progress Mini App’da."
                 telegram_send_message_with_keyboard(chat_id, greeting,
                     {"inline_keyboard": [[{"text": "🏠 Bugun", "web_app": {"url": MINIAPP_URL}}]]}, parse_mode="HTML")
-            else:
-                telegram_send_message(chat_id, greeting, parse_mode="HTML")
-            if today_tasks:
-                refresh_live_checklist(chat_id, user)
 
             results.append(
                 {
@@ -4338,6 +4321,8 @@ def handle_live_checklist_reminders(period: str):
             detail="period must be midday or evening"
         )
 
+    if period == 'evening':
+        return handle_evening_summary()
     today = get_today()
 
     with get_connection() as conn:
@@ -4358,8 +4343,11 @@ def handle_live_checklist_reminders(period: str):
                 WHERE u.telegram_chat_id IS NOT NULL
                   AND u.state != 'blocked'
                   AND (%s = false OR u.active_bot_id = %s)
+                  AND NOT EXISTS (SELECT 1 FROM public.tasks scheduled
+                      WHERE scheduled.user_id=u.id AND scheduled.task_date=%s
+                        AND scheduled.status='pending' AND scheduled.reminder_time IS NOT NULL)
                 """,
-                (today, require_joined(), bot_id())
+                (today, require_joined(), bot_id(), today)
             )
 
             users = cur.fetchall()
@@ -4371,7 +4359,8 @@ def handle_live_checklist_reminders(period: str):
         chat_id = user["telegram_chat_id"]
 
         try:
-
+            if not claim_notification(get_connection, bot_id(), user['id'], 'midday', today):
+                continue
             result = refresh_live_checklist(
                 chat_id,
                 user,
@@ -4457,239 +4446,33 @@ def handle_task_reminders():
 
 
 def handle_reminders():
-
+    """One return invitation per inactivity spell; user activity re-arms it."""
     today = get_today()
-
-    results = []
-
     with get_connection() as conn:
-
-        with conn.cursor(
-            cursor_factory=RealDictCursor
-        ) as cur:
-
-            cur.execute(
-                """
-                SELECT
-                    u.id,
-                    u.telegram_chat_id,
-                    u.first_name,
-                    u.morning_time,
-                    u.state,
-                    u.last_reminder_sent_date,
-                    MAX(t.task_date) AS last_task_date
-
-                FROM public.users u
-
-                LEFT JOIN public.tasks t
-                    ON t.user_id = u.id
-
-                WHERE
-                    u.telegram_chat_id IS NOT NULL
-                    AND u.state != 'blocked'
-                    AND (%s = false OR u.active_bot_id = %s)
-
-                GROUP BY
-                    u.id
-
-                HAVING
-
-                    (
-                        (u.morning_time IS NULL AND NOT COALESCE(u.features_intro_claimed, false)
-                         AND EXISTS (SELECT 1 FROM public.tasks first_task WHERE first_task.user_id=u.id))
-                        OR u.state = 'waiting_morning_time'
-                    )
-
-                    OR
-
-                    (
-                        u.morning_time IS NOT NULL
-
-                        AND
-
-                        (
-                            MAX(t.task_date) IS NULL
-                            OR MAX(t.task_date) <= %s - 2
-                        )
-                    )
-                """,
-                (require_joined(), bot_id(), today)
-            )
-
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""SELECT u.* FROM public.users u
+                WHERE u.telegram_chat_id IS NOT NULL AND u.state != 'blocked'
+                  AND (%s=false OR u.active_bot_id=%s)
+                  AND u.last_active_date <= %s - 3
+                  AND u.last_morning_greeting_date IS DISTINCT FROM %s
+                  AND NOT EXISTS (SELECT 1 FROM public.tasks t
+                      WHERE t.user_id=u.id AND t.task_date >= %s)
+                """, (require_joined(), bot_id(), today, today, today))
             candidates = cur.fetchall()
-
+    results = []
     for user in candidates:
-
-        chat_id = user["telegram_chat_id"]
-
-        if (
-            user["last_reminder_sent_date"]
-            == today
-        ):
-
+        if not claim_notification(get_connection, bot_id(), user['id'], 'return', user['last_active_date']):
             continue
-
-        first_name = (
-            user["first_name"]
-            or "Do‘st"
-        )
-        safe_first_name = html.escape(str(first_name))
-
-        if (
-            user["morning_time"] is None
-            or user["state"] == "waiting_morning_time"
-        ):
-
-            text = f"""<b>👋 Assalomu alaykum, {safe_first_name}!</b>
-
-<b>⏰ Siz ertalabki vaqtingizni hali tanlamagansiz.</b>
-
-🌅 Har tong bugunga rejalashtirgan vazifalaringizni va reja yozishni eslatishim uchun vaqt tanlang. Xohlasangiz, keyinroq sozlashingiz mumkin.
-
-Quyidagi vaqtlardan birini tanlang:"""
-
-            times = [
-                "02:00",
-                "03:00",
-                "04:00",
-                "05:00",
-                "06:00",
-                "07:00",
-                "08:00",
-                "09:00",
-                "10:00"
-            ]
-
-            keyboard = []
-
-            for i in range(
-                0,
-                len(times),
-                3
-            ):
-
-                keyboard.append(
-                    [
-                        {
-                            "text": time,
-                            "callback_data":
-                                f"morning_time|{time}"
-                        }
-
-                        for time in times[i:i + 3]
-                    ]
-                )
-
-            keyboard.append([{"text": "Keyinroq", "callback_data": "morning_skip"}])
-            reply_markup = {
-                "inline_keyboard": keyboard
-            }
-
-        else:
-
-            text = f"""<b>👋 Assalomu alaykum va rohmatullohi va barokatuh, {safe_first_name}!</b>
-
-<b>Bugun kichik bir qadamdan boshlaymizmi? 👣</b>
-
-So‘nggi kunlarda vazifalar yubormayapsiz!
-
-Bajarishni istagan 1 ta vazifangizni yozib yoki 🎙️ ovozli xabar orqali yuboring.
-
-Masalan: Kitobdan 10 bet o‘qish."""
-
-            reply_markup = None
-
         try:
-
-            if reply_markup:
-
-                telegram_send_message_with_keyboard(
-                    chat_id,
-                    text,
-                    reply_markup,
-                    parse_mode="HTML"
-                )
-
-            else:
-
-                telegram_send_message(
-                    chat_id,
-                    text,
-                    parse_mode="HTML"
-                )
-
-            with get_connection() as update_conn:
-
-                with update_conn.cursor() as update_cur:
-
-                    update_cur.execute(
-                        """
-                        UPDATE public.users
-                        SET last_reminder_sent_date = %s
-                        WHERE id = %s
-                          AND last_reminder_sent_date
-                              IS DISTINCT FROM %s
-                        """,
-                        (
-                            today,
-                            user["id"],
-                            today
-                        )
-                    )
-
-                update_conn.commit()
-
-            results.append(
-                {
-                    "chat_id": chat_id,
-                    "sent": True
-                }
-            )
-
+            telegram_send_message_with_keyboard(user['telegram_chat_id'],
+                "👋 Bitta kichik qadamdan davom etamizmi?\n\n"
+                "Bugun qilmoqchi bo‘lgan bitta ishingizni yozing yoki 🎙️ ovozli xabar yuboring. "
+                "Avvalgi natijalaringiz saqlangan.",
+                {"inline_keyboard": [[{"text": "🏠 Bugun", "web_app": {"url": MINIAPP_URL}}]]})
+            results.append({'chat_id': user['telegram_chat_id'], 'sent': True})
         except Exception as error:
-
-            error_text = str(error)
-
-            is_blocked = (
-                "error_code': 403"
-                in error_text
-                and
-                "bot was blocked by the user"
-                in error_text
-            )
-
-            if is_blocked:
-
-                with get_connection() as update_conn:
-
-                    with update_conn.cursor() as update_cur:
-
-                        update_cur.execute(
-                            """
-                            UPDATE public.users
-                            SET state = 'blocked'
-                            WHERE id = %s
-                            """,
-                            (user["id"],)
-                        )
-
-                    update_conn.commit()
-
-            results.append(
-                {
-                    "chat_id": chat_id,
-                    "sent": False,
-                    "blocked": is_blocked,
-                    "error": error_text
-                }
-            )
-
-    return {
-        "ok": True,
-        "date": today,
-        "checked": len(candidates),
-        "results": results
-    }
+            results.append({'chat_id': user['telegram_chat_id'], 'sent': False, 'error': str(error)})
+    return {'ok': True, 'date': today, 'checked': len(candidates), 'results': results}
 
 
 # =========================================================
@@ -5926,6 +5709,8 @@ def telegram_webhook(
             )
 
             management_action, separator, task_id = callback_data.partition("|")
+            if callback_data == 'retention_carry_list' or callback_data.startswith('retention_carry|'):
+                return handle_retention_carry(chat_id, callback_data, callback_query_id)
             if callback_data.startswith("habit|"):
                 return handle_habit_callback(chat_id, callback_data, callback_query_id, callback_message_id)
             if separator and management_action in (
@@ -6510,7 +6295,8 @@ def miniapp_day(
             detail="Foydalanuvchi topilmadi"
         )
 
-    if selected_date > get_today() + timedelta(days=1):
+    today = get_today()
+    if selected_date > today + timedelta(days=1):
 
         raise HTTPException(
             status_code=400,
@@ -6539,6 +6325,7 @@ def miniapp_day(
     return {
         "ok": True,
         "date": selected_date.isoformat(),
+        "can_add": user['state'] != 'blocked' and selected_date == today + timedelta(days=1),
         "stats": calculate_stats(tasks),
         "tasks": _tasks_to_json(tasks),
     }
@@ -7043,3 +6830,182 @@ handle_habit_reminders, handle_habit_callback, handle_habit_chat_summary = insta
     telegram_send_message_with_keyboard, telegram_answer_callback,
     telegram_delete_message, update_user_activity, telegram_edit_message_with_keyboard,
 )
+
+
+def handle_evening_summary():
+    today = get_today()
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""SELECT u.* FROM public.users u WHERE u.state!='blocked'
+                AND u.telegram_chat_id IS NOT NULL AND (%s=false OR u.active_bot_id=%s)
+                AND EXISTS (SELECT 1 FROM public.tasks t WHERE t.user_id=u.id AND t.task_date=%s)
+                """, (require_joined(), bot_id(), today))
+            users = cur.fetchall()
+    results = []
+    for user in users:
+        try:
+            with get_connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("SELECT * FROM public.tasks WHERE user_id=%s AND task_date=%s ORDER BY created_at", (user['id'], today))
+                    tasks = cur.fetchall()
+            if not tasks or not claim_notification(get_connection, bot_id(), user['id'], 'evening', today):
+                continue
+            text = evening_text(tasks)
+            carry_buttons = []
+            if any(task['status'] in ('pending','failed') for task in tasks):
+                text += '\n\nQolgan vazifani ertagaga ham rejalashtirish uchun pastdagi tugmadan tanlang. Bugungi natija saqlanadi.'
+                carry_buttons = [[{'text':'📅 Ertagaga vazifa tanlash','callback_data':'retention_carry_list'}]]
+            if any(task['status']=='pending' for task in tasks):
+                refresh_live_checklist(user['telegram_chat_id'], user,
+                    heading='🌙 Bugungi natijangiz', force_new=True,
+                    instructions=html.unescape(re.sub(r'<[^>]+>', '', text)), extra_buttons=carry_buttons)
+            else:
+                telegram_send_message_with_keyboard(user['telegram_chat_id'], text,
+                    {'inline_keyboard': [[{'text':'🏠 Bugun','web_app':{'url':MINIAPP_URL}}]] + carry_buttons}, parse_mode='HTML')
+            results.append({'chat_id':user['telegram_chat_id'],'sent':True})
+        except Exception as error:
+            results.append({'chat_id':user['telegram_chat_id'],'sent':False,'error':str(error)})
+    return {'ok':True,'period':'evening','processed':len(results),'results':results}
+
+
+def handle_retention_carry(chat_id, data, callback_query_id=None):
+    user = get_user_by_chat_id(chat_id)
+    if not user or user['state']=='blocked' or (require_joined() and user.get('active_bot_id')!=bot_id()):
+        return {'ok':False}
+    today = get_today()
+    if data == 'retention_carry_list':
+        with get_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT id,task_text FROM public.tasks WHERE user_id=%s AND task_date=%s AND status IN ('pending','failed') ORDER BY created_at LIMIT 8", (user['id'],today))
+                tasks=cur.fetchall()
+        if callback_query_id:
+            telegram_answer_callback(callback_query_id, 'Vazifani tanlang' if tasks else 'Qolgan vazifa yo‘q')
+        if tasks:
+            target=(today+timedelta(days=1)).isoformat()
+            telegram_send_message_with_keyboard(chat_id, 'Ertagaga qo‘shiladigan vazifani tanlang (birinchi 8 tasi):',
+                {'inline_keyboard':[[{'text':str(t['task_text'])[:60], 'callback_data':f"retention_carry|{t['id']}|{target}"}] for t in tasks]})
+        return {'ok':True}
+    parts=data.split('|')
+    try:
+        if len(parts)!=3: raise ValueError()
+        target=date.fromisoformat(parts[2])
+        from uuid import UUID
+        task_id=str(UUID(parts[1]))
+        if not today <= target <= today+timedelta(days=1): raise ValueError()
+    except ValueError:
+        if callback_query_id: telegram_answer_callback(callback_query_id, 'Bu tanlov eskirgan.')
+        return {'ok':False}
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # User lock serializes double taps and duplicate task creation.
+            cur.execute('SELECT id FROM public.users WHERE id=%s FOR UPDATE', (user['id'],))
+            cur.execute("SELECT * FROM public.tasks WHERE id=%s AND user_id=%s AND task_date=%s AND status IN ('pending','failed') FOR UPDATE", (task_id,user['id'],target-timedelta(days=1)))
+            task=cur.fetchone()
+            if not task:
+                if callback_query_id: telegram_answer_callback(callback_query_id, 'Vazifa holati o‘zgargan yoki tanlov eskirgan.')
+                return {'ok':False}
+            cur.execute("SELECT task_text FROM public.tasks WHERE user_id=%s AND task_date=%s", (user['id'],target))
+            exists=any(normalize_task(row['task_text'])==normalize_task(task['task_text']) for row in cur.fetchall())
+            if not exists:
+                cur.execute("INSERT INTO public.tasks(user_id,task_text,task_date,status) VALUES(%s,%s,%s,'pending')", (user['id'],task['task_text'],target))
+                if target==today:
+                    cur.execute('UPDATE public.users SET last_completion_notified_date=NULL WHERE id=%s',(user['id'],))
+        conn.commit()
+    if callback_query_id: telegram_answer_callback(callback_query_id, 'Vazifa allaqachon qo‘shilgan' if exists else 'Vazifa qo‘shildi ✅')
+    if not exists:
+        telegram_send_message_with_keyboard(chat_id, f"✅ «{task['task_text']}» {format_uz_date(target)} uchun saqlandi.",
+            {'inline_keyboard':[[{'text':'🏠 Bugun','web_app':{'url':MINIAPP_URL}}]]})
+        if target==today: refresh_live_checklist(chat_id,user,force_new=True)
+    return {'ok':True,'duplicate':exists}
+
+
+def handle_scheduled_weekly_reports():
+    today=get_today()
+    monday=today-timedelta(days=today.weekday())
+    start=monday-timedelta(days=7)
+    end=monday-timedelta(days=1)
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""SELECT u.* FROM public.users u WHERE u.state!='blocked'
+                AND u.telegram_chat_id IS NOT NULL AND (%s=false OR u.active_bot_id=%s)
+                AND u.last_active_date >= %s
+                AND EXISTS(SELECT 1 FROM public.tasks t WHERE t.user_id=u.id AND t.task_date BETWEEN %s AND %s)
+                """, (require_joined(),bot_id(),start,start,end))
+            users=cur.fetchall()
+    results=[]
+    for user in users:
+        if not claim_notification(get_connection,bot_id(),user['id'],'weekly',start): continue
+        try:
+            handle_weekly_report(user['telegram_chat_id'])
+            results.append({'chat_id':user['telegram_chat_id'],'sent':True})
+        except Exception as error:
+            results.append({'chat_id':user['telegram_chat_id'],'sent':False,'error':str(error)})
+    return {'ok':True,'results':results}
+
+
+class MiniappTomorrowTaskRequest(BaseModel):
+    task_text: str = Field(min_length=1, max_length=1000)
+    task_date: date
+    request_id: str = Field(min_length=36, max_length=36)
+
+
+@router.post('/miniapp/tasks')
+def miniapp_create_tomorrow_task(payload: MiniappTomorrowTaskRequest, chat_id: int = Depends(get_miniapp_chat_id)):
+    """Authenticated, idempotent tomorrow planning; chat notifications follow commit."""
+    user = get_user_by_chat_id(chat_id)
+    if not user or user['state']=='blocked' or (require_joined() and user.get('active_bot_id')!=bot_id()):
+        raise HTTPException(status_code=403, detail='Vazifa qo‘shish uchun botda /start bosing.')
+    from uuid import UUID
+    try:
+        request_id=str(UUID(payload.request_id))
+    except ValueError:
+        raise HTTPException(status_code=422, detail='So‘rov identifikatori noto‘g‘ri.')
+    text=uzbek_to_latin(clean_task_text(payload.task_text))
+    if not text or len(text)>1000 or '\n' in payload.task_text or '\r' in payload.task_text:
+        raise HTTPException(status_code=422, detail='Vazifani 1–1000 belgili bitta qatorda yozing.')
+    fingerprint=hashlib.sha256((payload.task_date.isoformat()+'\n'+text).encode()).hexdigest()
+    today=get_today()
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Same user lock as edit/carry operations prevents parallel duplicate saves.
+            cur.execute('SELECT id FROM public.users WHERE id=%s FOR UPDATE', (user['id'],))
+            cur.execute("SELECT input_hash,result FROM public.qadam_miniapp_task_requests WHERE bot_id=%s AND user_id=%s AND request_id=%s", (bot_id(),str(user['id']),request_id))
+            cached=cur.fetchone()
+            if cached:
+                if cached['input_hash']!=fingerprint:
+                    raise HTTPException(status_code=409, detail='O‘zgargan vazifa uchun yangi so‘rov yuboring.')
+                return cached['result']
+            if payload.task_date != today+timedelta(days=1):
+                raise HTTPException(status_code=422, detail='Faqat ertangi kun uchun qo‘shish mumkin. Kun ro‘yxatini qayta oching.')
+            cur.execute('SELECT EXISTS (SELECT 1 FROM public.tasks WHERE user_id=%s) AS has_tasks', (user['id'],))
+            first_task=not cur.fetchone()['has_tasks']
+            cur.execute('SELECT id,task_text FROM public.tasks WHERE user_id=%s AND task_date=%s', (user['id'],payload.task_date))
+            duplicate=next((row for row in cur.fetchall() if normalize_task(row['task_text'])==normalize_task(text)),None)
+            if duplicate:
+                task_id=duplicate['id']
+            else:
+                cur.execute("INSERT INTO public.tasks(user_id,task_text,task_date,status) VALUES(%s,%s,%s,'pending') RETURNING id", (user['id'],text,payload.task_date))
+                task_id=cur.fetchone()['id']
+            offer_morning=first_task and not duplicate and user.get('morning_time') is None
+            cur.execute("UPDATE public.users SET last_active_date=%s, state=CASE WHEN %s THEN 'waiting_morning_time' ELSE state END WHERE id=%s", (today,offer_morning,user['id']))
+            result={'ok':True,'task_id':str(task_id),'task_date':payload.task_date.isoformat(),'duplicate':bool(duplicate),'chat_notified':False}
+            cur.execute("INSERT INTO public.qadam_miniapp_task_requests(bot_id,user_id,request_id,input_hash,result) VALUES(%s,%s,%s,%s,%s::jsonb)", (bot_id(),str(user['id']),request_id,fingerprint,json.dumps(result)))
+        conn.commit()
+    if not duplicate:
+        confirmation=f"✅ Ertangi rejangizga qo‘shildi:\n📋 {text}\n📅 {format_uz_date(payload.task_date)}"
+        if user.get('morning_time') is not None:
+            confirmation+=f"\n\n🌅 Ertaga soat {str(user['morning_time'])[:5]} da rejangizni eslataman."
+        try:
+            telegram_send_message_with_keyboard(chat_id,confirmation,
+                {'inline_keyboard':[[{'text':'🏠 Bugun','web_app':{'url':MINIAPP_URL}}]]})
+            result['chat_notified']=True
+            if offer_morning:
+                telegram_send_morning_keyboard(chat_id,user.get('first_name') or 'Do‘st',task_saved=False)
+        except Exception as error:
+            # Task is committed. Never report a failed save or resend on request replay.
+            print('Tomorrow planning notification failed:',type(error).__name__)
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE public.qadam_miniapp_task_requests SET result=%s::jsonb WHERE bot_id=%s AND user_id=%s AND request_id=%s", (json.dumps(result),bot_id(),str(user['id']),request_id))
+            conn.commit()
+    return result
