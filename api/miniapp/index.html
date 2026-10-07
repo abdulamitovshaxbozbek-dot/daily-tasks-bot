@@ -797,10 +797,11 @@
 
 <dialog id="tomorrowTaskDialog" class="task-dialog" aria-labelledby="tomorrowTaskTitle">
   <form id="tomorrowTaskForm">
-    <h2 id="tomorrowTaskTitle">Ertangi vazifa</h2>
+    <h2 id="tomorrowTaskTitle">Ertangi vazifalar</h2>
     <p id="tomorrowTaskDate"></p>
     <label for="tomorrowTaskInput">Nima qilmoqchisiz?</label>
-    <textarea id="tomorrowTaskInput" maxlength="1000" rows="3" required placeholder="Masalan, 20 daqiqa ingliz tili o‘rganish"></textarea>
+    <p class="j-small">Har bir vazifani yangi qatorda yozing — alohida saqlanadi. Bitta vazifa yozishingiz ham mumkin.</p>
+    <textarea id="tomorrowTaskInput" maxlength="10000" rows="5" required placeholder="Yugurish&#10;Kitob o‘qish&#10;Ingliz tili o‘rganish"></textarea>
     <p id="tomorrowTaskError" class="task-error" role="alert"></p>
     <div class="task-dialog-actions">
       <button id="tomorrowTaskCancel" type="button">Bekor qilish</button>
@@ -1399,8 +1400,9 @@
   tomorrowForm.addEventListener('submit', async event => {
     event.preventDefault(); if (tomorrowBusy) return;
     const text = tomorrowInput.value.trim();
-    if (!text || text.length > 1000 || /[\r\n]/.test(text)) {
-      tomorrowError.textContent = 'Vazifani 1–1000 belgili bitta qatorda yozing.'; return;
+    const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    if (!lines.length || lines.length > 20 || text.length > 10000 || lines.some(line => line.length > 1000)) {
+      tomorrowError.textContent = '20 tagacha vazifa yozing. Har biri yangi qatorda va 1000 belgigacha bo‘lsin.'; return;
     }
     const signature = tomorrowDate + '\n' + text;
     if (signature !== tomorrowPayload) {
@@ -1413,8 +1415,10 @@
         body:JSON.stringify({task_text:text, task_date:tomorrowDate, request_id:tomorrowRequestId})});
       // Invalidate dashboard statistics, but keep the user on the tomorrow sheet.
       Object.keys(cache).forEach(key => delete cache[key]);
-      document.getElementById('taskNotice').textContent = result.duplicate ? 'Bu vazifa ertangi rejangizda allaqachon bor.' :
-        (result.chat_notified ? '✅ Ertangi vazifa saqlandi. Bot chatiga tasdiq yuborildi.' : '✅ Ertangi vazifa saqlandi. Chatga tasdiq yuborilmadi.');
+      const savedText = '✅ ' + (result.added || 1) + ' ta ertangi vazifa saqlandi.';
+      document.getElementById('taskNotice').textContent = result.duplicate ? 'Bu vazifalar ertangi rejangizda allaqachon bor.' :
+        savedText + (result.duplicates ? ' ' + result.duplicates + ' ta takroriy vazifa qo‘shilmadi.' : '') +
+        (result.chat_notified ? ' Bot chatiga tasdiq yuborildi.' : ' Chatga tasdiq yuborilmadi.');
       tomorrowDialog.close();
       if (tg && tg.HapticFeedback) { try { tg.HapticFeedback.notificationOccurred('success'); } catch (_) {} }
       if (openSheetDate === tomorrowDate) openDaySheet(tomorrowDate);
