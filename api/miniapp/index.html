@@ -5,7 +5,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Qadam</title>
-<meta name="qadam-ui-version" content="2026-10-07-task-dialog-v2">
+<meta name="qadam-ui-version" content="2026-10-07-tomorrow-planning-v3">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -795,6 +795,20 @@
   </form>
 </dialog>
 
+<dialog id="tomorrowTaskDialog" class="task-dialog" aria-labelledby="tomorrowTaskTitle">
+  <form id="tomorrowTaskForm">
+    <h2 id="tomorrowTaskTitle">Ertangi vazifa</h2>
+    <p id="tomorrowTaskDate"></p>
+    <label for="tomorrowTaskInput">Nima qilmoqchisiz?</label>
+    <textarea id="tomorrowTaskInput" maxlength="1000" rows="3" required placeholder="Masalan, 20 daqiqa ingliz tili o‘rganish"></textarea>
+    <p id="tomorrowTaskError" class="task-error" role="alert"></p>
+    <div class="task-dialog-actions">
+      <button id="tomorrowTaskCancel" type="button">Bekor qilish</button>
+      <button id="tomorrowTaskSubmit" class="primary" type="submit">Ertagaga saqlash</button>
+    </div>
+  </form>
+</dialog>
+
 <script>
 (function () {
   const tg = window.Telegram && window.Telegram.WebApp;
@@ -846,6 +860,7 @@
   let taskAction = null;
   let taskBusy = false;
   let openSheetDate = null;
+  let daySheetCanAdd = false;
   let dayRequest = 0;
   let periodRequest = 0;
 
@@ -1314,6 +1329,7 @@
 
   function openDaySheet(selectedDate) {
     openSheetDate = selectedDate;
+    daySheetCanAdd = false;
     const request = ++dayRequest;
     haptic('light');
     daySheetTitle.textContent = shortDate(selectedDate);
@@ -1337,14 +1353,16 @@
 
   function renderDaySheet(data) {
     const s = data.stats;
+    daySheetCanAdd = Boolean(data.can_add);
     daySheetTitle.textContent = shortDate(data.date);
     daySheetSubtitle.textContent = s.total ? (s.completed + ' / ' + s.total + ' vazifa bajarildi') : 'Vazifa yo‘q';
 
     let html = '<div class="sheet-summary"><div><strong>' + s.percent + '%</strong><br><span>Kun natijasi</span></div>' +
       '<span>' + s.completed + ' bajarildi · ' + s.failed + ' bajarilmadi · ' + s.pending + ' kutilmoqda</span></div>';
 
+    if (data.can_add) html += '<div class="task-heading"><h2>Ertangi vazifalar</h2><button type="button" class="j-btn" data-add-tomorrow>+ Vazifa</button></div>';
     if (!data.tasks.length) {
-      html += '<div class="state-msg"><span class="state-icon">📝</span>Bu kunda vazifalar bo‘lmagan</div>';
+      html += '<div class="state-msg"><span class="state-icon">📝</span>' + (data.can_add ? 'Ertangi rejangizni shu yerda yozing.' : 'Bu kunda vazifalar bo‘lmagan') + '</div>';
     } else {
       data.tasks.forEach(function (t) {
         const iconClass = t.status === 'completed' ? 'completed' : (t.status === 'failed' ? 'failed' : 'pending');
@@ -1360,6 +1378,52 @@
 
     daySheetContent.innerHTML = html;
   }
+
+  const tomorrowDialog = document.getElementById('tomorrowTaskDialog');
+  const tomorrowForm = document.getElementById('tomorrowTaskForm');
+  const tomorrowInput = document.getElementById('tomorrowTaskInput');
+  const tomorrowError = document.getElementById('tomorrowTaskError');
+  const tomorrowSubmit = document.getElementById('tomorrowTaskSubmit');
+  const tomorrowCancel = document.getElementById('tomorrowTaskCancel');
+  let tomorrowBusy = false, tomorrowDate = null, tomorrowRequestId = null, tomorrowPayload = null;
+  daySheetContent.addEventListener('click', event => {
+    if (!event.target.closest('[data-add-tomorrow]') || !daySheetCanAdd || tomorrowBusy) return;
+    tomorrowDate = openSheetDate;
+    tomorrowRequestId = null; tomorrowPayload = null;
+    tomorrowInput.value = ''; tomorrowError.textContent = '';
+    document.getElementById('tomorrowTaskDate').textContent = '📅 ' + shortDate(tomorrowDate);
+    tomorrowDialog.showModal(); tomorrowInput.focus();
+  });
+  tomorrowCancel.addEventListener('click', () => { if (!tomorrowBusy) tomorrowDialog.close(); });
+  tomorrowDialog.addEventListener('cancel', event => { if (tomorrowBusy) event.preventDefault(); });
+  tomorrowForm.addEventListener('submit', async event => {
+    event.preventDefault(); if (tomorrowBusy) return;
+    const text = tomorrowInput.value.trim();
+    if (!text || text.length > 1000 || /[\r\n]/.test(text)) {
+      tomorrowError.textContent = 'Vazifani 1–1000 belgili bitta qatorda yozing.'; return;
+    }
+    const signature = tomorrowDate + '\n' + text;
+    if (signature !== tomorrowPayload) {
+      tomorrowRequestId = crypto.randomUUID(); tomorrowPayload = signature;
+    }
+    tomorrowBusy = true; tomorrowSubmit.disabled = true; tomorrowCancel.disabled = true; tomorrowInput.disabled = true;
+    tomorrowError.textContent = '';
+    try {
+      const result = await apiFetch('/tasks', {method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({task_text:text, task_date:tomorrowDate, request_id:tomorrowRequestId})});
+      // Invalidate dashboard statistics, but keep the user on the tomorrow sheet.
+      Object.keys(cache).forEach(key => delete cache[key]);
+      document.getElementById('taskNotice').textContent = result.duplicate ? 'Bu vazifa ertangi rejangizda allaqachon bor.' :
+        (result.chat_notified ? '✅ Ertangi vazifa saqlandi. Bot chatiga tasdiq yuborildi.' : '✅ Ertangi vazifa saqlandi. Chatga tasdiq yuborilmadi.');
+      tomorrowDialog.close();
+      if (tg && tg.HapticFeedback) { try { tg.HapticFeedback.notificationOccurred('success'); } catch (_) {} }
+      if (openSheetDate === tomorrowDate) openDaySheet(tomorrowDate);
+    } catch (error) {
+      tomorrowError.textContent = error.message || 'Saqlab bo‘lmadi. Qayta urinib ko‘ring.';
+    } finally {
+      tomorrowBusy = false; tomorrowSubmit.disabled = false; tomorrowCancel.disabled = false; tomorrowInput.disabled = false;
+    }
+  });
 
   function closeDaySheet() {
     openSheetDate = null;
