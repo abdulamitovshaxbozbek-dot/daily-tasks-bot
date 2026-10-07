@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Qadam · Admin</title>
+<meta name="qadam-admin-version" content="2026-10-07-engagement-v2">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -190,6 +191,9 @@
   .reason-text { white-space: pre-wrap; color: var(--text-dim); }
   .refresh-admin { font: inherit; color: var(--accent); background: var(--bg-card); border: 1px solid var(--border); padding: 9px 14px; border-radius: 12px; margin-top: 10px; }
   .refresh-admin:disabled { opacity: .5; }
+  .segment-row[data-segment] { width:100%; text-align:left; color:var(--text); font:inherit; cursor:pointer; }
+  .segment-row.selected { border-color:var(--accent); }
+  .summary-card { border-left:3px solid var(--accent); }
 </style>
 </head>
 <body>
@@ -215,7 +219,7 @@
   </button>
   <button class="nav-btn" data-tab="usage" type="button"><span class="nav-icon">📊</span>Bo‘limlar</button>
   <button class="nav-btn" data-tab="retention" type="button">
-    <span class="nav-icon">🔁</span>Retention
+    <span class="nav-icon">🔁</span>Qaytish
   </button>
   <button class="nav-btn" data-tab="users" type="button">
     <span class="nav-icon">👥</span>Userlar
@@ -242,12 +246,13 @@
     overview: ['Umumiy', "Bugungi umumiy ko'rsatkichlar"],
     usage: ['Bo‘limlardan foydalanish', 'Vazifa, namoz, odat va zikr'],
     activity: ['Faollik', 'Bugungi rejalar va bajarilish holati'],
-    retention: ['Retention', 'D1 / D3 / D7 / D30 saqlanish'],
+    retention: ['Qaytib foydalanish', 'Ro‘yxatdan o‘tgandan keyingi faollik'],
     users: ['Foydalanuvchilar', 'Segmentlar va foydalanuvchi ro\u2018yxati']
   };
 
   let currentTab = 'overview';
   let usersPage = 1;
+  let usersSegment = 'all';
   let usersSearch = '';
   let searchDebounce = null;
   let isAdminVerified = false;
@@ -325,6 +330,20 @@
       kpi(u.all_completed_users, 'Bugungi barcha vazifasi bajarilgan', 'Kamida bitta vazifa bo‘lishi shart') +
       kpi(t.tomorrow_total, 'Ertangi vazifalar', t.tomorrow_users_with_tasks + ' foydalanuvchida') +
       kpi(t.pending_date_choices, 'Sana tanlanmagan so‘rovlar', 'Barcha sanalardagi kutilayotgan yozuvlar') + '</div>';
+    const e = overview.engagement;
+    if (e) {
+      html = '<div class="card summary-card"><strong>QADAMdan foydalanish</strong>' +
+        note('Bloklanmagan ' + e.reachable + ' foydalanuvchi asosida. Bloklanganlar: ' + u.blocked + ' (' + pct(e.blocked_percent) + ' jami hisobdan).') + '</div>' +
+        '<div class="kpi-grid">' +
+        kpi(e.active_today, 'Bugun faol', pct(e.active_today_percent) + ' bloklanmaganlardan') +
+        kpi(e.active_week, 'Oxirgi 7 kunda faol', pct(e.active_week_percent) + ' bloklanmaganlardan') +
+        kpi(e.active_month, 'Oxirgi 30 kunda faol', pct(e.active_month_percent) + ' bloklanmaganlardan') +
+        kpi(e.week_planners, '7 kunlik rejasi bor', pct(e.week_planners_percent) + ' bloklanmaganlardan') +
+        kpi(e.week_completers, '7 kunlik rejasida bajarilgan ish bor', pct(e.week_completers_percent) + ' bloklanmaganlardan') +
+        kpi(e.morning_configured, 'Ertalabki vaqti sozlangan', pct(e.morning_configured_percent) + ' bloklanmaganlardan') + '</div>' +
+        note('7/30 kun bugunni ham o‘z ichiga oladi. Vazifa ko‘rsatkichlari reja sanasi va hozirgi holatga asoslangan; qachon yozilgani yoki bajarilgani ko‘rsatkichi emas.') +
+        '<p class="section-title">BUGUNGI HOLAT VA UMUMIY SONLAR</p>' + html;
+    }
     html += note('Vazifa sanasi uning yozilgan sanasi emas: kecha ertagaga yozilgan vazifa bugungi rejaga kiradi. Barcha vazifalar belgilanishi kunni yopmaydi.');
     html += '<p class="section-title">OXIRGI ' + trends.days.length + ' KUN</p><div class="card">' + trendsChartMarkup(trends) + '</div>';
     html += dataNotes(overview);
@@ -436,7 +455,7 @@
     let html = '<div class="retention-headline">';
     ['d1','d3','d7','d30'].forEach(function (key) {
       const c = data.headline_counts[key];
-      html += kpi(pct(data.headline[key]), key.toUpperCase(), c.retained + ' / ' + c.eligible + ' user');
+      html += kpi(pct(data.headline[key]), ({d1:'1 kundan keyin',d3:'3 kundan keyin',d7:'7 kundan keyin',d30:'30 kundan keyin'})[key], c.retained + ' / ' + c.eligible + ' user');
     });
     html += '</div>' + note(data.retention_note) + note('Hisob oynasi: oxirgi ' + data.window_days + ' kun ichida bazaga qo‘shilgan guruhlar.') +
       note('Faollik jadvalidagi eng eski yozuv: ' + (data.tracking_start ? shortDate(data.tracking_start) : 'yo‘q') +
@@ -471,17 +490,14 @@
     const selection = restoreSearch ? previousSearch.selectionStart : null;
     const s = data.segments;
 
-    let html = '<div class="segment-list">' +
-      segmentRow('🔥 Bugun faol (bloklanmagan)', s.active_today) +
-      segmentRow('🟢 Oxirgi faollik 1–2 kun oldin', s.active_2d) +
-      segmentRow('🟡 Oxirgi faollik 3–7 kun oldin', s.inactive_3_7) +
-      segmentRow('🟠 Oxirgi faollik 8–30 kun oldin', s.inactive_8_30) +
-      segmentRow('🔴 Oxirgi faollik 30 kundan oldin', s.inactive_30_plus) +
-      segmentRow('⚪ Faollik qaydi yo‘q', s.never_active) +
-      segmentRow('🚫 Bloklangan', s.blocked) +
-    '</div>';
-
-    html += note('Segmentlar ustma-ust tushmaydi; yig‘indisi jami ' + s.total + ' user. Qidiruv segmentlarni emas, pastdagi ro‘yxatni filtrlaydi.') + note('Qidiruv natijasi: ' + data.total + ' user.');
+    const groups = [['all','Barcha foydalanuvchilar'],['active_today','🔥 Bugun faol (bloklanmagan)'],
+      ['active_2d','🟢 Oxirgi faollik 1–2 kun oldin'],['inactive_3_7','🟡 Oxirgi faollik 3–7 kun oldin'],
+      ['inactive_8_30','🟠 Oxirgi faollik 8–30 kun oldin'],['inactive_30_plus','🔴 Oxirgi faollik 30 kundan oldin'],
+      ['never_active','⚪ Faollik qaydi yo‘q'],['blocked','🚫 Bloklangan']];
+    let html = '<div class="segment-list">' + groups.map(function(g) {
+      return '<button type="button" class="segment-row' + (usersSegment===g[0]?' selected':'') + '" data-segment="'+g[0]+'"><span class="seg-name">'+g[1]+'</span><span class="seg-count">'+(g[0]==='all'?s.total:s[g[0]])+'</span></button>';
+    }).join('') + '</div>';
+    html += note('Guruhni bosib, shu foydalanuvchilarni ko‘ring. Qidiruv tanlangan guruh ichida ishlaydi. Guruh sonlari qidiruvdan mustaqil.') + note('Tanlangan guruh va qidiruv natijasi: ' + data.total + ' user.');
     html += '<input type="text" class="search-box" id="userSearch" placeholder="Ism, username yoki Telegram ID bo\u2018yicha qidirish" value="' + escapeHtml(usersSearch) + '">';
 
     html += '<div id="userList">';
@@ -540,6 +556,15 @@
     if (nextBtn) nextBtn.addEventListener('click', function () { haptic('light'); usersPage++; loadUsers(); });
   }
 
+  contentEl.addEventListener('click', function(e) {
+    const button = e.target.closest('[data-segment]');
+    if (!button || currentTab !== 'users') return;
+    usersSegment = button.dataset.segment;
+    usersPage = 1;
+    clearTimeout(searchDebounce);
+    loadUsers();
+  });
+
   function segmentRow(name, count) {
     return '<div class="segment-row"><span class="seg-name">' + name + '</span><span class="seg-count">' + count + '</span></div>';
   }
@@ -547,7 +572,7 @@
   function loadUsers() {
     const request = ++loadVersion;
     if (contentEl.querySelector('.segment-list') === null) showSkeleton();
-    const params = '?page=' + usersPage + '&page_size=20' +
+    const params = '?page=' + usersPage + '&page_size=20&segment=' + encodeURIComponent(usersSegment) +
       (usersSearch ? '&search=' + encodeURIComponent(usersSearch) : '');
     apiFetch('/users' + params).then(function (data) {
       if (currentTab !== 'users' || request !== loadVersion) return;
