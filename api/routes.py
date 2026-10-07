@@ -6944,7 +6944,7 @@ def handle_scheduled_weekly_reports():
 
 
 class MiniappTomorrowTaskRequest(BaseModel):
-    task_text: str = Field(min_length=1, max_length=1000)
+    task_text: str = Field(min_length=1, max_length=10000)
     task_date: date
     request_id: str = Field(min_length=36, max_length=36)
 
@@ -6960,10 +6960,10 @@ def miniapp_create_tomorrow_task(payload: MiniappTomorrowTaskRequest, chat_id: i
         request_id=str(UUID(payload.request_id))
     except ValueError:
         raise HTTPException(status_code=422, detail='So‘rov identifikatori noto‘g‘ri.')
-    text=uzbek_to_latin(clean_task_text(payload.task_text))
-    if not text or len(text)>1000 or '\n' in payload.task_text or '\r' in payload.task_text:
-        raise HTTPException(status_code=422, detail='Vazifani 1–1000 belgili bitta qatorda yozing.')
-    fingerprint=hashlib.sha256((payload.task_date.isoformat()+'\n'+text).encode()).hexdigest()
+    tasks = [uzbek_to_latin(clean_task_text(line)) for line in payload.task_text.splitlines() if line.strip()]
+    if not tasks or len(tasks)>20 or len(payload.task_text)>10000 or any(not task or len(task)>1000 for task in tasks):
+        raise HTTPException(status_code=422, detail='Har bir vazifani yangi qatorda yozing: 20 tagacha, har biri 1000 belgigacha.')
+    fingerprint=hashlib.sha256((payload.task_date.isoformat()+'\n'+'\n'.join(tasks)).encode()).hexdigest()
     today=get_today()
     with get_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -6980,19 +6980,27 @@ def miniapp_create_tomorrow_task(payload: MiniappTomorrowTaskRequest, chat_id: i
             cur.execute('SELECT EXISTS (SELECT 1 FROM public.tasks WHERE user_id=%s) AS has_tasks', (user['id'],))
             first_task=not cur.fetchone()['has_tasks']
             cur.execute('SELECT id,task_text FROM public.tasks WHERE user_id=%s AND task_date=%s', (user['id'],payload.task_date))
-            duplicate=next((row for row in cur.fetchall() if normalize_task(row['task_text'])==normalize_task(text)),None)
-            if duplicate:
-                task_id=duplicate['id']
-            else:
-                cur.execute("INSERT INTO public.tasks(user_id,task_text,task_date,status) VALUES(%s,%s,%s,'pending') RETURNING id", (user['id'],text,payload.task_date))
-                task_id=cur.fetchone()['id']
-            offer_morning=first_task and not duplicate and user.get('morning_time') is None
+            existing={normalize_task(row['task_text']):row['id'] for row in cur.fetchall()}
+            task_ids=[]; added_tasks=[]; duplicate_count=0
+            for text in tasks:
+                normalized=normalize_task(text)
+                if normalized in existing:
+                    task_id=existing[normalized]; duplicate_count+=1
+                else:
+                    cur.execute("INSERT INTO public.tasks(user_id,task_text,task_date,status) VALUES(%s,%s,%s,'pending') RETURNING id", (user['id'],text,payload.task_date))
+                    task_id=cur.fetchone()['id']; existing[normalized]=task_id; added_tasks.append(text)
+                task_ids.append(str(task_id))
+            offer_morning=first_task and bool(added_tasks) and user.get('morning_time') is None
             cur.execute("UPDATE public.users SET last_active_date=%s, state=CASE WHEN %s THEN 'waiting_morning_time' ELSE state END WHERE id=%s", (today,offer_morning,user['id']))
-            result={'ok':True,'task_id':str(task_id),'task_date':payload.task_date.isoformat(),'duplicate':bool(duplicate),'chat_notified':False}
+            result={'ok':True,'task_id':task_ids[0],'task_ids':task_ids,'added':len(added_tasks),'duplicates':duplicate_count,
+                    'task_date':payload.task_date.isoformat(),'duplicate':not added_tasks,'chat_notified':False}
             cur.execute("INSERT INTO public.qadam_miniapp_task_requests(bot_id,user_id,request_id,input_hash,result) VALUES(%s,%s,%s,%s,%s::jsonb)", (bot_id(),str(user['id']),request_id,fingerprint,json.dumps(result)))
         conn.commit()
-    if not duplicate:
-        confirmation=f"✅ Ertangi rejangizga qo‘shildi:\n📋 {text}\n📅 {format_uz_date(payload.task_date)}"
+    if added_tasks:
+        confirmation=("✅ Ertangi rejangizga qo‘shildi:" if len(added_tasks)==1 else f"✅ Ertangi rejangizga {len(added_tasks)} ta vazifa qo‘shildi:")
+        confirmation+='\n'+'\n'.join(f"{i}. {text[:120]}{'…' if len(text)>120 else ''}" for i,text in enumerate(added_tasks,1))
+        confirmation+=f"\n📅 {format_uz_date(payload.task_date)}"
+        if duplicate_count: confirmation+=f"\n🔄 {duplicate_count} ta takroriy vazifa qayta qo‘shilmadi."
         if user.get('morning_time') is not None:
             confirmation+=f"\n\n🌅 Ertaga soat {str(user['morning_time'])[:5]} da rejangizni eslataman."
         try:
