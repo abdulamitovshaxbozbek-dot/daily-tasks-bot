@@ -19,6 +19,8 @@ def due_jobs(now):
             jobs.append("midday")
         if local.hour == 23:
             jobs.append("evening")
+        if local.weekday() == 0 and local.hour == 18:
+            jobs.append("weekly")
     return jobs
 
 
@@ -38,6 +40,8 @@ def initialize(conn):
 
     from habits import initialize as initialize_habits
     initialize_habits(conn)
+    from retention import initialize as initialize_retention
+    initialize_retention(conn)
 
 
 def claim(conn, job, slot):
@@ -76,7 +80,7 @@ def run_tick(conn, now, handlers):
 
 def worker(stop):
     import psycopg2
-    from routes import handle_day_cycle, handle_reminders, handle_live_checklist_reminders, handle_task_reminders, handle_habit_reminders
+    from routes import handle_day_cycle, handle_reminders, handle_live_checklist_reminders, handle_task_reminders, handle_habit_reminders, handle_scheduled_weekly_reports
     handlers = {
         'day_cycle': handle_day_cycle,
         'task_reminders': handle_task_reminders,
@@ -84,6 +88,7 @@ def worker(stop):
         'reminders': handle_reminders,
         'midday': lambda: handle_live_checklist_reminders('midday'),
         'evening': lambda: handle_live_checklist_reminders('evening'),
+        'weekly': handle_scheduled_weekly_reports,
     }
     while not stop.is_set():
         conn = None
