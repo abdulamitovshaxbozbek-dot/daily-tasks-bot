@@ -31,7 +31,7 @@ def _context(cur):
     created_date = "(u.created_at AT TIME ZONE 'Asia/Tashkent')::date"
     today = clock["today"]
     params = {"bot": current_bot, "today": today, "yesterday": today - timedelta(days=1),
-              "tomorrow": today + timedelta(days=1), "week_start": today - timedelta(days=6)}
+              "tomorrow": today + timedelta(days=1), "week_start": today - timedelta(days=6), "month_start": today - timedelta(days=29)}
     # Faqat joriy bot userlari. Faollik dublikatlari UNION orqali yo'qotiladi.
     cte = f"""WITH scoped_users AS (
         SELECT u.*, {created_date} AS joined_date
@@ -85,6 +85,21 @@ def admin_overview(_: int = Depends(verify_admin)):
                 FROM scoped_users u
             """, p)
             users = dict(cur.fetchone())
+            cur.execute(cte + """
+                SELECT COUNT(*) AS reachable,
+                    COUNT(*) FILTER (WHERE morning_time IS NOT NULL) AS morning_configured,
+                    COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM recorded_activity a WHERE a.user_id=u.id AND a.activity_date=%(today)s)) AS active_today,
+                    COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM recorded_activity a WHERE a.user_id=u.id AND a.activity_date BETWEEN %(week_start)s AND %(today)s)) AS active_week,
+                    COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM recorded_activity a WHERE a.user_id=u.id AND a.activity_date BETWEEN %(month_start)s AND %(today)s)) AS active_month,
+                    COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM scoped_tasks t WHERE t.user_id=u.id)) AS ever_planned,
+                    COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM scoped_tasks t WHERE t.user_id=u.id AND t.task_date BETWEEN %(week_start)s AND %(today)s)) AS week_planners,
+                    COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM scoped_tasks t WHERE t.user_id=u.id AND t.task_date BETWEEN %(week_start)s AND %(today)s AND t.status='completed')) AS week_completers
+                FROM scoped_users u WHERE state IS DISTINCT FROM 'blocked'
+            """, p)
+            engagement = dict(cur.fetchone())
+            for key in ('active_today', 'active_week', 'active_month', 'ever_planned', 'week_planners', 'week_completers', 'morning_configured'):
+                engagement[key + '_percent'] = _percent(engagement[key], engagement['reachable'])
+            engagement['blocked_percent'] = _percent(users['blocked'], users['total'])
             if not meta["signup_dates_available"]:
                 for key in ("today_new", "yesterday_new", "week_new"):
                     users[key] = None
@@ -121,7 +136,7 @@ def admin_overview(_: int = Depends(verify_admin)):
             """, p)
             trends = {"days": [{"date": r["day"].isoformat(), "new_users": r["new_users"],
                                 "active_users": r["active_users"]} for r in cur.fetchall()]}
-    return {"ok": True, **meta, "users": users, "tasks": tasks, "trends": trends}
+    return {"ok": True, **meta, "users": users, "tasks": tasks, "trends": trends, "engagement": engagement}
 
 
 @router.get("/trends")
@@ -247,7 +262,8 @@ def admin_retention(cohorts: int = Query(60, ge=1, le=90), _: int = Depends(veri
 
 @router.get("/users")
 def admin_users(page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100),
-                search: Optional[str] = Query(None, max_length=100), _: int = Depends(verify_admin)):
+                search: Optional[str] = Query(None, max_length=100),
+                segment: str = Query("all"), _: int = Depends(verify_admin)):
     """Segmentlarni ustma-ust hisoblamaydi; bloklanganlar va kelajak vazifalari alohida ko'rsatiladi."""
     with get_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -268,11 +284,22 @@ def admin_users(page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=
                 FROM user_seen
             """, p)
             segments = dict(cur.fetchone())
-            clause = ""
+            segment_filters = {
+                "all": "true", "blocked": "u.state='blocked'",
+                "active_today": "u.state IS DISTINCT FROM 'blocked' AND u.seen=%(today)s",
+                "active_2d": "u.state IS DISTINCT FROM 'blocked' AND %(today)s-u.seen BETWEEN 1 AND 2",
+                "inactive_3_7": "u.state IS DISTINCT FROM 'blocked' AND %(today)s-u.seen BETWEEN 3 AND 7",
+                "inactive_8_30": "u.state IS DISTINCT FROM 'blocked' AND %(today)s-u.seen BETWEEN 8 AND 30",
+                "inactive_30_plus": "u.state IS DISTINCT FROM 'blocked' AND %(today)s-u.seen > 30",
+                "never_active": "u.state IS DISTINCT FROM 'blocked' AND u.seen IS NULL",
+            }
+            if segment not in segment_filters:
+                raise HTTPException(status_code=422, detail="Noma’lum foydalanuvchi guruhi")
+            clause = "AND (" + segment_filters[segment] + ")"
             if search and search.strip():
                 # % va _ qidiruvda oddiy belgi, yashirin wildcard emas.
                 p["search"] = '%' + search.strip().replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
-                clause = "AND (u.first_name ILIKE %(search)s OR u.telegram_username ILIKE %(search)s OR u.telegram_chat_id::text ILIKE %(search)s)"
+                clause += " AND (u.first_name ILIKE %(search)s OR u.telegram_username ILIKE %(search)s OR u.telegram_chat_id::text ILIKE %(search)s)"
             cur.execute(cte + f"SELECT COUNT(*) AS total FROM user_seen u WHERE true {clause}", p)
             total = cur.fetchone()["total"]
             pages = (total + page_size - 1) // page_size
@@ -297,7 +324,7 @@ def admin_users(page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=
               "morning_time": str(r["morning_time"])[:5] if r["morning_time"] else None,
               "last_morning_greeting_date": r["last_morning_greeting_date"].isoformat() if r["last_morning_greeting_date"] else None,
               "total_tasks": r["total_tasks"], "completed_tasks": r["completed_tasks"], "future_tasks": r["future_tasks"]} for r in rows]
-    return {"ok": True, **meta, "segments": segments, "page": page, "page_size": page_size,
+    return {"ok": True, **meta, "segments": segments, "segment": segment, "page": page, "page_size": page_size,
             "total": total, "total_pages": pages, "users": users}
 
 
