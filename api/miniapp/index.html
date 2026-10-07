@@ -735,6 +735,18 @@
   #journeyPanel:empty { padding:0; }
   button:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
 </style>
+<style>
+  .app { padding-bottom:calc(100px + env(safe-area-inset-bottom, 0px)); }
+  .support-dock { position:fixed; bottom:0; left:0; right:0; z-index:20; display:flex; justify-content:center;
+    padding:10px 18px calc(10px + env(safe-area-inset-bottom, 0px)); background:var(--bg); border-top:1px solid var(--border); }
+  .support-open { width:min(100%,524px); min-height:44px; border:1px solid var(--border); border-radius:13px;
+    background:var(--bg-elevated); color:var(--text); font:inherit; font-size:13px; cursor:pointer; }
+  .support-card { font-size:clamp(16px,4.8vw,23px); font-weight:700; letter-spacing:.04em; text-align:center;
+    padding:16px 8px; border:1px solid var(--border); border-radius:12px; background:var(--bg); white-space:nowrap; }
+  .support-copy { width:100%; }
+  .support-feedback { display:block; margin:16px 0; color:var(--accent); line-height:1.6; }
+  #supportStatus { min-height:20px; font-size:12px; color:var(--text-dim); }
+</style>
 </head>
 <body>
 
@@ -1883,5 +1895,50 @@
   .journey-nav { background:var(--bg-elevated); }
   .journey-nav button[aria-selected="true"] { background:var(--accent); color:var(--bg); }
 </style>
+<div class="support-dock"><button id="supportOpen" class="support-open" type="button">💚 QADAM’ni qo‘llab-quvvatlash</button></div>
+<dialog id="supportDialog" class="task-dialog" aria-labelledby="supportTitle">
+  <h2 id="supportTitle">💚 QADAM’ni qo‘llab-quvvatlash</h2>
+  <p>QADAM bepul ishlaydi. Sizga foydasi tegayotgan bo‘lsa, rivojlanishiga ixtiyoriy hissa qo‘shishingiz mumkin.</p>
+  <p class="support-card" id="supportCard">9860 3501 4038 8124</p>
+  <button id="supportCopy" class="primary support-copy" type="button">📋 Karta raqamini nusxalash</button>
+  <p id="supportStatus" role="status" aria-live="polite"></p>
+  <a class="support-feedback" id="supportChat" href="https://t.me/qadam_chat" target="_blank" rel="noopener noreferrer">💬 Taklif, fikr yoki muammo bo‘lsa: @qadam_chat</a>
+  <p>Har qanday yordam uchun rahmat!</p>
+  <div class="task-dialog-actions"><button id="supportClose" type="button">Yopish</button></div>
+</dialog>
+<script>
+(function () {
+  const dialog = document.getElementById('supportDialog');
+  const status = document.getElementById('supportStatus');
+  const open = document.getElementById('supportOpen');
+  open.addEventListener('click', () => { status.textContent = ''; dialog.showModal(); });
+  document.getElementById('supportClose').addEventListener('click', () => { dialog.close(); open.focus(); });
+  document.getElementById('supportCopy').addEventListener('click', async () => {
+    const number = '9860350140388124';
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(number);
+      } else {
+        const input = document.createElement('textarea');
+        input.value = number; input.readOnly = true;
+        input.style.position = 'fixed'; input.style.opacity = '0';
+        dialog.appendChild(input); input.select(); input.setSelectionRange(0, number.length);
+        let copied = false;
+        try { copied = document.execCommand('copy'); } finally { input.remove(); }
+        if (!copied) throw new Error('copy failed');
+      }
+      status.textContent = '✅ Karta raqami nusxalandi.';
+    } catch (_) {
+      status.textContent = 'Nusxalab bo‘lmadi. Karta raqamini belgilab, qo‘lda nusxalang.';
+    }
+  });
+  document.getElementById('supportChat').addEventListener('click', event => {
+    const tg = window.Telegram && window.Telegram.WebApp;
+    if (tg && typeof tg.openTelegramLink === 'function') {
+      event.preventDefault(); tg.openTelegramLink('https://t.me/qadam_chat');
+    }
+  });
+})();
+</script>
 </body>
 </html>
