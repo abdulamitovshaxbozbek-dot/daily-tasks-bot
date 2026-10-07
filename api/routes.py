@@ -1635,9 +1635,9 @@ def handle_telegram_start(
 
             f"""👋 Assalomu alaykum, {first_name}!
 
-Bugun nima qilmoqchisiz?
+Siz allaqachon ro‘yxatdan o‘tgansiz. ✅
 
-Rejangizni shu chatga yozing yoki ovozli xabar yuboring.""",
+📋 Vazifalaringizni shu chatga yozing yoki 🎙️ ovozli xabar yuboring.""",
             {"inline_keyboard": [[{"text": "🏠 Bugun", "web_app": {"url": MINIAPP_URL}}]]}
         )
 
