@@ -18,6 +18,8 @@ async def lifespan(app):
     from habits import initialize
     with get_connection() as conn:
         initialize(conn)
+        from retention import initialize as initialize_retention
+        initialize_retention(conn)
     stop, thread = start_scheduler()
     yield
     stop.set()
