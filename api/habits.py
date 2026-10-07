@@ -607,12 +607,15 @@ def install(router, get_connection, auth, bot_id, require_joined, send, answer, 
                     # A queued occurrence may have been completed or archived after claiming.
                     with connection() as conn:
                         with conn.cursor() as cur:
-                            cur.execute("""SELECT 1 FROM public.qadam_habit_days d WHERE d.id=%s AND d.status='pending'
+                            cur.execute("""SELECT COALESCE((SELECT h.kind FROM public.qadam_habits h WHERE h.id::text=d.ref AND h.scope=d.scope AND h.chat_id=d.chat_id), 'prayer') AS item_kind FROM public.qadam_habit_days d WHERE d.id=%s AND d.status='pending'
                                 AND d.revision=%s AND ((d.kind='prayer' AND EXISTS(SELECT 1 FROM public.qadam_habit_settings s
                                     WHERE s.scope=d.scope AND s.chat_id=d.chat_id AND s.enabled))
                                 OR (d.kind='habit' AND EXISTS(SELECT 1 FROM public.qadam_habits h
                                     WHERE h.id::text=d.ref AND h.scope=d.scope AND h.chat_id=d.chat_id AND h.active AND (EXTRACT(ISODOW FROM d.day)::int-1)=ANY(h.weekdays))))""", (row["id"], row["revision"]))
-                            eligible = cur.fetchone() is not None
+                            eligible_row = cur.fetchone()
+                            eligible = eligible_row is not None
+                            if eligible:
+                                row["item_kind"] = eligible_row["item_kind"]
                             if not eligible:
                                 cur.execute("UPDATE public.qadam_habit_days SET reminder_state='skipped' WHERE id=%s AND reminder_state='started'", (row["id"],))
                     if not eligible:
@@ -620,8 +623,11 @@ def install(router, get_connection, auth, bot_id, require_joined, send, answer, 
                     prayer = row["kind"] == "prayer"
                     title = html.escape(row["title"])
                     day_label = row["day"].strftime("%d.%m.%Y")
-                    text = (f"<b>🕌 {title} vaqti kirdi.</b>\n{day_label}\n\nO‘qib bo‘lgach, quyida belgilashingiz mumkin."
-                            if prayer else f"<b>⏰ {title}</b>\n\nBugungi kichik qadamingiz uchun vaqt ajrating. 👣")
+                    text = (f"<b>🕌 {title} vaqti kirdi.</b>\n{day_label}\n\nO‘qib bo‘lgach, «✅ O‘qidim» tugmasini bosing."
+                            if prayer else
+                            f"<b>📿 Zikr uchun eslatma: {title}</b>\n\nBajargach, quyida belgilang. Hozir qulay bo‘lmasa, «⏳ Keyinroq»ni tanlang."
+                            if row.get("item_kind") == "zikr" else
+                            f"<b>👣 Odatingiz uchun vaqt: {title}</b>\n\nKichik qadam ham hisob. Bajargach, quyida belgilang.")
                     keyboard = entry_keyboard(row)
                     state = "sent"
                     try:
