@@ -1559,55 +1559,21 @@ def refresh_live_checklist(
 
 def telegram_send_morning_keyboard(
     chat_id: int,
-    first_name: str
+    first_name: str,
+    task_saved: bool = True
 ):
 
-    times = [
-        "02:00",
-        "03:00",
-        "04:00",
-        "05:00",
-        "06:00",
-        "07:00",
-        "08:00",
-        "09:00",
-        "10:00"
-    ]
-
-    keyboard = []
-
-    for i in range(
-        0,
-        len(times),
-        3
-    ):
-
-        keyboard.append(
-            [
-                {
-                    "text": time,
-                    "callback_data":
-                        f"morning_time|{time}"
-                }
-
-                for time in times[i:i + 3]
-            ]
-        )
-
+    times = ["02:00", "03:00", "04:00", "05:00", "06:00", "07:00", "08:00", "09:00", "10:00"]
+    keyboard = [[{"text": value, "callback_data": f"morning_time|{value}"}
+                 for value in times[index:index + 3]] for index in range(0, len(times), 3)]
+    keyboard.append([{"text": "Keyinroq", "callback_data": "morning_skip"}])
     return telegram_send_message_with_keyboard(
         chat_id,
-
-        f"""🌅 Assalomu alaykum, {first_name}!
-
-Bugungi rejangizni yozing. QADAM bajarishingizni kuzatadi.
-
-Avval ertalabki reja eslatmasini tanlang:
-
-🕐 Kuningizni soat nechchida rejalashtirasiz?""",
-
-        {
-            "inline_keyboard": keyboard
-        }
+        ("✅ Vazifangiz saqlandi!\n\n" if task_saved else "") +
+        "🌅 Har tong bugungi rejangizni yozishni eslatib turaymi?\n"
+        "Bugunga rejalashtirgan vazifalaringizni ham eslataman.\n\n"
+        "Sizga qulay vaqtni tanlang 👇",
+        {"inline_keyboard": keyboard}
     )
 
 
@@ -1664,14 +1630,15 @@ def handle_telegram_start(
 
             conn.commit()
 
-        telegram_send_message(
+        telegram_send_message_with_keyboard(
             chat_id,
 
             f"""👋 Assalomu alaykum, {first_name}!
 
 Bugun nima qilmoqchisiz?
 
-Rejangizni shu chatga yozing yoki ovozli xabar yuboring."""
+Rejangizni shu chatga yozing yoki ovozli xabar yuboring.""",
+            {"inline_keyboard": [[{"text": "🏠 Bugun", "web_app": {"url": MINIAPP_URL}}]]}
         )
 
         return {
@@ -1700,7 +1667,7 @@ Rejangizni shu chatga yozing yoki ovozli xabar yuboring."""
                     %s,
                     %s,
                     %s,
-                    'waiting_morning_time',
+                    'active',
                     'trial',
                     (
                         CURRENT_TIMESTAMP
@@ -1719,9 +1686,17 @@ Rejangizni shu chatga yozing yoki ovozli xabar yuboring."""
         conn.commit()
 
     register_chat(chat_id)
-    telegram_send_morning_keyboard(
+    telegram_send_message_with_keyboard(
         chat_id,
-        first_name
+        f"👋 Assalomu alaykum, {html.escape(first_name)}!\n\n"
+        "<b>QADAM rejangizni yozib qo‘yish bilan cheklanmaydi — uni bajarishingizga yordam beradi.</b>\n\n"
+        "🎙 Rejangizni yozing yoki ovozli ayting.\n"
+        "🔔 Kerakli vaqtda eslatma oling.\n"
+        "📊 Bajarilgan ishlaringiz va sizni to‘xtatayotgan sabablarni kuzating.\n\n"
+        "<b>Boshlaymiz: bugun qilmoqchi bo‘lgan bitta ishingizni yuboring.</b>\n"
+        "Masalan: «20 daqiqa ingliz tili o‘rganish».",
+        {"inline_keyboard": [[{"text": "🏠 Bugun", "web_app": {"url": MINIAPP_URL}}]]},
+        parse_mode="HTML"
     )
 
     return {
@@ -1836,14 +1811,10 @@ def handle_morning_time(
 
     telegram_send_message_with_keyboard(
         chat_id,
-        f"""✅ Ertalabki vaqt belgilandi: {time_value}
-
-Bugun nima qilmoqchisiz?
-
-Rejangizni shu chatga yozing yoki 🎙️ ovozli xabar yuboring.
-Masalan: «10 bet kitob o‘qish».
-
-Eslatma vaqtini Mini App’da 🔔 orqali tanlang. Bajarilganda ✅, bajarilmaganda ❌ va sababni belgilang.""",
+        f"✅ Ertalabki eslatma belgilandi: {time_value}\n\n"
+        "Har tong shu vaqtda bugunga rejalashtirgan vazifalaringizni eslataman. "
+        "Rejangiz hali bo‘lmasa, yozishni eslataman.\n\n"
+        "🏠 «Bugun» orqali vazifalaringiz va natijangizni ko‘ring.",
         {"inline_keyboard": [[{"text": "🏠 Bugun", "web_app": {"url": MINIAPP_URL}}]]}
     )
     with get_connection() as conn:
@@ -1851,11 +1822,36 @@ Eslatma vaqtini Mini App’da 🔔 orqali tanlang. Bajarilganda ✅, bajarilmaga
             cur.execute("UPDATE public.users SET features_intro_claimed=true WHERE telegram_chat_id=%s", (chat_id,))
         conn.commit()
 
+    refresh_live_checklist(chat_id, user, force_new=True)
+
     return {
         "ok": True,
         "route": "morning_time",
         "time": time_value
     }
+
+def handle_morning_skip(chat_id, callback_query_id=None):
+    user = get_user_by_chat_id(chat_id)
+    if not user:
+        return {"ok": False}
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE public.users SET state='active', features_intro_claimed=true WHERE id=%s AND morning_time IS NULL AND state='waiting_morning_time' RETURNING id", (user["id"],))
+            changed = cur.fetchone()
+        conn.commit()
+    if not changed:
+        if callback_query_id:
+            telegram_answer_callback(callback_query_id, "Bu tanlov avval bajarilgan.")
+        return {"ok": True, "unchanged": True}
+    if callback_query_id:
+        telegram_answer_callback(callback_query_id, "Keyinroq sozlashingiz mumkin")
+    telegram_send_message_with_keyboard(chat_id,
+        "✅ Vazifangiz saqlangan. Ertalabki eslatmani keyinroq tanlashingiz mumkin.",
+        {"inline_keyboard": [[{"text": "🌅 Ertalabki vaqt", "callback_data": "morning_setup"},
+                              {"text": "🏠 Bugun", "web_app": {"url": MINIAPP_URL}}]]})
+    refresh_live_checklist(chat_id, user, force_new=True)
+    return {"ok": True, "route": "morning_skip"}
+
 
 # =========================================================
 # CREATE TASKS
@@ -2140,7 +2136,16 @@ def _save_tasks_for_date(user, tasks, task_date, from_voice=False):
     if added_count > 0 and task_date != today:
         response_parts.append(f"📅 Sana: {format_uz_date(task_date)}")
 
-    if response_parts:
+    offer_morning = added_count > 0 and is_first_task_ever and user.get("morning_time") is None
+    if offer_morning:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE public.users SET state='waiting_morning_time' WHERE id=%s", (user["id"],))
+            conn.commit()
+        telegram_send_morning_keyboard(chat_id, user.get("first_name") or "Do‘st")
+        if task_date != today:
+            telegram_send_message(chat_id, f"📅 Vazifa saqlangan sana: {format_uz_date(task_date)}")
+    elif response_parts:
 
         telegram_send_message(
             chat_id,
@@ -2150,7 +2155,7 @@ def _save_tasks_for_date(user, tasks, task_date, from_voice=False):
     # Yangi vazifa qo'shilganda eski checklistni pastga ko'chiramiz:
     # eski xabar o'chadi, DB'dagi barcha pending vazifalar bilan yangi
     # checklist tasdiq xabaridan keyin yuboriladi.
-    if added_count > 0 and task_date == today:
+    if added_count > 0 and task_date == today and not offer_morning:
 
         refresh_live_checklist(
             chat_id,
@@ -4490,7 +4495,8 @@ def handle_reminders():
                 HAVING
 
                     (
-                        u.morning_time IS NULL
+                        (u.morning_time IS NULL AND NOT COALESCE(u.features_intro_claimed, false)
+                         AND EXISTS (SELECT 1 FROM public.tasks first_task WHERE first_task.user_id=u.id))
                         OR u.state = 'waiting_morning_time'
                     )
 
@@ -4538,7 +4544,7 @@ def handle_reminders():
 
 <b>⏰ Siz ertalabki vaqtingizni hali tanlamagansiz.</b>
 
-🕐 Iltimos, vaqt tanlashni yakunlang. Shundan so‘ng botdan bemalol foydalanishingiz mumkin. 😊
+🌅 Har tong bugunga rejalashtirgan vazifalaringizni va reja yozishni eslatishim uchun vaqt tanlang. Xohlasangiz, keyinroq sozlashingiz mumkin.
 
 Quyidagi vaqtlardan birini tanlang:"""
 
@@ -4574,6 +4580,7 @@ Quyidagi vaqtlardan birini tanlang:"""
                     ]
                 )
 
+            keyboard.append([{"text": "Keyinroq", "callback_data": "morning_skip"}])
             reply_markup = {
                 "inline_keyboard": keyboard
             }
@@ -5933,6 +5940,22 @@ def telegram_webhook(
                 return handle_late_task_choice(
                     chat_id, choice, callback_query_id, callback_message_id
                 )
+
+            if callback_data == "morning_skip":
+                return handle_morning_skip(chat_id, callback_query_id)
+            if callback_data == "morning_setup":
+                user = get_user_by_chat_id(chat_id)
+                if not user or user.get("morning_time") is not None:
+                    if callback_query_id:
+                        telegram_answer_callback(callback_query_id, "Ertalabki vaqt allaqachon tanlangan.")
+                    return {"ok": True, "unchanged": True}
+                with get_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("UPDATE public.users SET state='waiting_morning_time' WHERE id=%s AND morning_time IS NULL", (user["id"],))
+                    conn.commit()
+                if callback_query_id:
+                    telegram_answer_callback(callback_query_id, "Vaqtni tanlang")
+                return telegram_send_morning_keyboard(chat_id, first_name, task_saved=False)
 
             if callback_data.startswith(
                 "morning_time|"
