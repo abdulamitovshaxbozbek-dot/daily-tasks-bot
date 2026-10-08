@@ -218,7 +218,7 @@ def add_pending_fail_reason(
                 """
                 UPDATE public.tasks
                 SET reason_message_id = %s
-                WHERE id = %s
+                WHERE id = %s AND status = 'failed' AND fail_reason IS NULL
                 """,
                 (
                     message_id,
@@ -226,7 +226,10 @@ def add_pending_fail_reason(
                 )
             )
 
+            attached = cur.rowcount > 0
         conn.commit()
+    if not attached:
+        _remove_task_prompt(chat_id, message_id)
 
 
 # =========================================================
@@ -1446,7 +1449,19 @@ def build_live_checklist(
     )
 
 
-def refresh_live_checklist(
+def refresh_live_checklist(chat_id, user, heading='📋 Bugungi vazifalar', force_new=False,
+                           instructions=None, extra_buttons=None):
+    # A dedicated connection avoids exhausting the request pool while other workers wait.
+    import psycopg2
+    key = int.from_bytes(hashlib.sha256(('qadam-checklist:' + str(chat_id)).encode()).digest()[:8], 'big', signed=True)
+    from contextlib import closing
+    with closing(psycopg2.connect(os.environ['DATABASE_URL'], connect_timeout=10)) as lock_conn:
+        with lock_conn.cursor() as cur:
+            cur.execute('SELECT pg_advisory_xact_lock(%s)', (key,))
+        return _refresh_live_checklist(chat_id, user, heading, force_new, instructions, extra_buttons)
+
+
+def _refresh_live_checklist(
     chat_id: int,
     user: dict,
     heading: str = "📋 Bugungi vazifalar",
@@ -2255,6 +2270,65 @@ def handle_late_task_choice(
 # TASK STATUS
 # =========================================================
 
+def transition_task(user, task_id, status, reason_code=None, reason_text=None, reason_only=False):
+    """Shared chat/Mini App transition; first committed result wins."""
+    if user['state'] == 'blocked' or status not in ('completed', 'failed'):
+        raise HTTPException(status_code=403, detail='Vazifani belgilashga ruxsat yo‘q.')
+    if reason_code is not None:
+        if status != 'failed' or reason_code not in FAIL_REASONS:
+            raise HTTPException(status_code=422, detail='Sabab noto‘g‘ri.')
+        reason_text = (reason_text or '').strip() if reason_code == 'other' else None
+        if reason_code == 'other' and (not reason_text or len(reason_text) > 1000):
+            raise HTTPException(status_code=422, detail='Sababni 1–1000 belgida yozing.')
+    if reason_code is None:
+        reason_text = None
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Same lock order as task creation/editing prevents deadlocks.
+            cur.execute('SELECT id FROM public.users WHERE id=%s FOR UPDATE', (user['id'],))
+            cur.execute('SELECT * FROM public.tasks WHERE id::text=%s AND user_id=%s FOR UPDATE', (str(task_id), user['id']))
+            task = cur.fetchone()
+            if not task:
+                raise HTTPException(status_code=404, detail='Vazifa topilmadi.')
+            original = dict(task)
+            if reason_only and task['status'] != 'failed':
+                return {'changed': False, 'conflict': True, 'task': task, 'original': original}
+            if task['status'] == 'pending':
+                if task['task_date'] != get_today():
+                    raise HTTPException(status_code=409, detail='Faqat bugungi vazifani belgilang.')
+            elif task['status'] != status:
+                return {'changed': False, 'conflict': True, 'task': task, 'original': original}
+            elif reason_code is None or task.get('fail_reason') is not None:
+                same_reason = reason_code is None or (task.get('fail_reason') == reason_code and task.get('fail_reason_text') == reason_text)
+                return {'changed': False, 'conflict': not same_reason, 'task': task, 'original': original}
+            cur.execute("""UPDATE public.tasks SET status=%s,
+                fail_reason=%s, fail_reason_text=%s,
+                reason_message_id=CASE WHEN %s IS NOT NULL THEN NULL ELSE reason_message_id END,
+                reason_text_message_id=CASE WHEN %s IS NOT NULL THEN NULL ELSE reason_text_message_id END
+                WHERE id::text=%s AND user_id=%s RETURNING *""",
+                (status, reason_code, reason_text, reason_code, reason_code, str(task_id), user['id']))
+            task = cur.fetchone()
+        conn.commit()
+    return {'changed': True, 'conflict': False, 'task': task, 'original': original}
+
+
+def sync_task_result(chat_id, user, task):
+    """DB commit is authoritative even when Telegram is unavailable."""
+    synced = True
+    if task['task_date'] == get_today():
+        try:
+            refresh_live_checklist(chat_id, user)
+        except Exception as error:
+            synced = False
+            print('Checklist sync failed:', type(error).__name__)
+    try:
+        if check_unfinished_tasks_count(user['id'], task['task_date']) == 0:
+            maybe_notify_day_fully_completed(chat_id, user['id'], task['task_date'])
+    except Exception as error:
+        print('Completion notification failed:', type(error).__name__)
+    return synced
+
+
 def handle_task_status(
     chat_id: int,
     task_id: str,
@@ -2298,47 +2372,18 @@ def handle_task_status(
 
     today = get_today()
 
-    with get_connection() as conn:
-
-        with conn.cursor(
-            cursor_factory=RealDictCursor
-        ) as cur:
-
-            cur.execute(
-                """
-                UPDATE public.tasks
-                SET status = %s
-                WHERE id = %s
-                  AND user_id = %s
-                  AND status = 'pending'
-                  AND task_date = %s
-                RETURNING *
-                """,
-                (
-                    status,
-                    task_id,
-                    user["id"],
-                    today
-                )
-            )
-
-            task = cur.fetchone()
-
-        conn.commit()
-
-    if not task:
-
+    try:
+        result = transition_task(user, task_id, status)
+    except HTTPException as error:
         if callback_query_id:
-
-            telegram_answer_callback(
-                callback_query_id,
-                "Bu vazifa allaqachon belgilangan yoki eski kun uchun."
-            )
-
-        return {
-            "ok": True,
-            "already_processed": True
-        }
+            telegram_answer_callback(callback_query_id, 'Vazifa topilmadi yoki uni belgilash mumkin emas.')
+        return {'ok': error.status_code in (404, 409), 'already_processed': True}
+    task = result['task']
+    if not result['changed']:
+        if callback_query_id:
+            telegram_answer_callback(callback_query_id, 'Bu vazifa allaqachon belgilangan.')
+        sync_task_result(chat_id, user, task)
+        return {'ok': True, 'already_processed': True, 'status': task['status']}
 
     if callback_query_id:
 
@@ -2364,10 +2409,10 @@ def handle_task_status(
     # Task statusi DB'ga yozilgach, bitta yashovchi checklistni
     # darhol yangilaymiz. Bajarilgan/bajarilmagan task ro'yxatdan
     # chiqadi va qolgan son avtomatik kamayadi.
-    refresh_live_checklist(
-        chat_id,
-        user
-    )
+    try:
+        refresh_live_checklist(chat_id, user)
+    except Exception as error:
+        print('Checklist sync failed:', type(error).__name__)
 
     # ---------------------------------------------------
     # "Bajarilmadi" bosilganda: eski tugmali xabarni o'chirib,
@@ -2453,11 +2498,10 @@ def handle_task_status(
             "pending": unfinished_count
         }
 
-    maybe_notify_day_fully_completed(
-        chat_id,
-        user["id"],
-        today
-    )
+    try:
+        maybe_notify_day_fully_completed(chat_id, user['id'], today)
+    except Exception as error:
+        print('Completion notification failed:', type(error).__name__)
 
     return {
         "ok": True,
@@ -2512,36 +2556,15 @@ def handle_fail_reason(
     if reason_code == "other":
         return start_custom_fail_reason(chat_id, user, task_id, callback_query_id, message_id)
 
-    with get_connection() as conn:
-
-        with conn.cursor(
-            cursor_factory=RealDictCursor
-        ) as cur:
-
-            cur.execute(
-                """
-                UPDATE public.tasks
-                SET
-                    fail_reason = %s,
-                    fail_reason_text = NULL,
-                    reason_text_message_id = NULL,
-                    reason_message_id = NULL
-                WHERE id = %s
-                  AND user_id = %s
-                  AND status = 'failed'
-                  AND fail_reason IS NULL
-                RETURNING *
-                """,
-                (
-                    reason_code,
-                    task_id,
-                    user["id"]
-                )
-            )
-
-            task = cur.fetchone()
-
-        conn.commit()
+    try:
+        result = transition_task(user, task_id, 'failed', reason_code, reason_only=True)
+    except HTTPException:
+        result = None
+    task = result['task'] if result and result['changed'] else None
+    if task:
+        for prompt_id in (result['original'].get('reason_message_id'), result['original'].get('reason_text_message_id')):
+            _remove_task_prompt(chat_id, prompt_id)
+        sync_task_result(chat_id, user, task)
 
     if not task:
 
@@ -5442,16 +5465,14 @@ def handle_custom_fail_reason_reply(chat_id, message):
         return {"ok": False, "invalid_reason": True}
     with get_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
-                UPDATE public.tasks
-                SET fail_reason = 'other', fail_reason_text = %s,
-                    reason_text_message_id = NULL, reason_message_id = NULL
-                WHERE user_id = %s AND status = 'failed' AND fail_reason IS NULL
-                  AND reason_text_message_id = %s
-                RETURNING id, task_date
-            """, (reason, user["id"], reply.get("message_id")))
-            task = cur.fetchone()
-        conn.commit()
+            cur.execute("""SELECT id FROM public.tasks WHERE user_id=%s AND status='failed'
+                AND fail_reason IS NULL AND reason_text_message_id=%s""", (user['id'], reply.get('message_id')))
+            pending = cur.fetchone()
+    result = transition_task(user, pending['id'], 'failed', 'other', reason, reason_only=True) if pending else None
+    task = result['task'] if result and result['changed'] else None
+    if task:
+        _remove_task_prompt(chat_id, result['original'].get('reason_message_id'))
+        sync_task_result(chat_id, user, task)
     if not task:
         telegram_send_message(chat_id, "Bu sabab so‘rovi eskirgan yoki allaqachon saqlangan.")
         return {"ok": True, "expired": True}
@@ -6216,6 +6237,7 @@ def miniapp_me(
         "chat_id": chat_id,
         "first_name": user.get("first_name"),
         "morning_time": user.get("morning_time"),
+        "fail_reasons": miniapp_fail_reasons(),
         "state": user.get("state"),
         "subscription_status": user.get("subscription_status"),
         "created_at": user.get("created_at"),
@@ -6263,6 +6285,8 @@ def _tasks_to_json(tasks) -> list[dict]:
                 "reminder_time": reminder_time,
                 "fail_reason": task.get("fail_reason"),
                 "fail_reason_text": task.get("fail_reason_text"),
+                "can_mark": task["status"] == "pending" and task_date == today.isoformat(),
+                "can_add_reason": task["status"] == "failed" and task.get("fail_reason") is None,
                 "can_manage": task["status"] == "pending" and task_date in (
                     today.isoformat(), (today + timedelta(days=1)).isoformat()
                 ),
@@ -6323,7 +6347,8 @@ def miniapp_day(
     return {
         "ok": True,
         "date": selected_date.isoformat(),
-        "can_add": user['state'] != 'blocked' and selected_date == today + timedelta(days=1),
+        "can_add": user['state'] != 'blocked' and selected_date in (today, today + timedelta(days=1)),
+        "fail_reasons": miniapp_fail_reasons(),
         "stats": calculate_stats(tasks),
         "tasks": _tasks_to_json(tasks),
     }
@@ -6949,7 +6974,7 @@ class MiniappTomorrowTaskRequest(BaseModel):
 
 @router.post('/miniapp/tasks')
 def miniapp_create_tomorrow_task(payload: MiniappTomorrowTaskRequest, chat_id: int = Depends(get_miniapp_chat_id)):
-    """Authenticated, idempotent tomorrow planning; chat notifications follow commit."""
+    """Authenticated, idempotent today/tomorrow planning; notifications follow commit."""
     user = get_user_by_chat_id(chat_id)
     if not user or user['state']=='blocked' or (require_joined() and user.get('active_bot_id')!=bot_id()):
         raise HTTPException(status_code=403, detail='Vazifa qo‘shish uchun botda /start bosing.')
@@ -6973,8 +6998,8 @@ def miniapp_create_tomorrow_task(payload: MiniappTomorrowTaskRequest, chat_id: i
                 if cached['input_hash']!=fingerprint:
                     raise HTTPException(status_code=409, detail='O‘zgargan vazifa uchun yangi so‘rov yuboring.')
                 return cached['result']
-            if payload.task_date != today+timedelta(days=1):
-                raise HTTPException(status_code=422, detail='Faqat ertangi kun uchun qo‘shish mumkin. Kun ro‘yxatini qayta oching.')
+            if payload.task_date not in (today, today+timedelta(days=1)):
+                raise HTTPException(status_code=422, detail='Faqat bugun yoki ertaga qo‘shish mumkin. Kun ro‘yxatini qayta oching.')
             cur.execute('SELECT EXISTS (SELECT 1 FROM public.tasks WHERE user_id=%s) AS has_tasks', (user['id'],))
             first_task=not cur.fetchone()['has_tasks']
             cur.execute('SELECT id,task_text FROM public.tasks WHERE user_id=%s AND task_date=%s', (user['id'],payload.task_date))
@@ -6988,6 +7013,8 @@ def miniapp_create_tomorrow_task(payload: MiniappTomorrowTaskRequest, chat_id: i
                     cur.execute("INSERT INTO public.tasks(user_id,task_text,task_date,status) VALUES(%s,%s,%s,'pending') RETURNING id", (user['id'],text,payload.task_date))
                     task_id=cur.fetchone()['id']; existing[normalized]=task_id; added_tasks.append(text)
                 task_ids.append(str(task_id))
+            if added_tasks and payload.task_date == today:
+                cur.execute('UPDATE public.users SET last_completion_notified_date=NULL WHERE id=%s', (user['id'],))
             offer_morning=first_task and bool(added_tasks) and user.get('morning_time') is None
             cur.execute("UPDATE public.users SET last_active_date=%s, state=CASE WHEN %s THEN 'waiting_morning_time' ELSE state END WHERE id=%s", (today,offer_morning,user['id']))
             result={'ok':True,'task_id':task_ids[0],'task_ids':task_ids,'added':len(added_tasks),'duplicates':duplicate_count,
@@ -6995,11 +7022,12 @@ def miniapp_create_tomorrow_task(payload: MiniappTomorrowTaskRequest, chat_id: i
             cur.execute("INSERT INTO public.qadam_miniapp_task_requests(bot_id,user_id,request_id,input_hash,result) VALUES(%s,%s,%s,%s,%s::jsonb)", (bot_id(),str(user['id']),request_id,fingerprint,json.dumps(result)))
         conn.commit()
     if added_tasks:
-        confirmation=("✅ Ertangi rejangizga qo‘shildi:" if len(added_tasks)==1 else f"✅ Ertangi rejangizga {len(added_tasks)} ta vazifa qo‘shildi:")
+        target_label = 'Bugungi' if payload.task_date == today else 'Ertangi'
+        confirmation=(f"✅ {target_label} rejangizga qo‘shildi:" if len(added_tasks)==1 else f"✅ {target_label} rejangizga {len(added_tasks)} ta vazifa qo‘shildi:")
         confirmation+='\n'+'\n'.join(f"{i}. {text[:120]}{'…' if len(text)>120 else ''}" for i,text in enumerate(added_tasks,1))
         confirmation+=f"\n📅 {format_uz_date(payload.task_date)}"
         if duplicate_count: confirmation+=f"\n🔄 {duplicate_count} ta takroriy vazifa qayta qo‘shilmadi."
-        if user.get('morning_time') is not None:
+        if payload.task_date != today and user.get('morning_time') is not None:
             confirmation+=f"\n\n🌅 Ertaga soat {str(user['morning_time'])[:5]} da rejangizni eslataman."
         try:
             telegram_send_message_with_keyboard(chat_id,confirmation,
@@ -7010,8 +7038,49 @@ def miniapp_create_tomorrow_task(payload: MiniappTomorrowTaskRequest, chat_id: i
         except Exception as error:
             # Task is committed. Never report a failed save or resend on request replay.
             print('Tomorrow planning notification failed:',type(error).__name__)
+        if payload.task_date == today:
+            try:
+                refresh_live_checklist(chat_id, user)
+            except Exception as error:
+                print('Created task checklist sync failed:', type(error).__name__)
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("UPDATE public.qadam_miniapp_task_requests SET result=%s::jsonb WHERE bot_id=%s AND user_id=%s AND request_id=%s", (json.dumps(result),bot_id(),str(user['id']),request_id))
             conn.commit()
     return result
+
+
+def miniapp_fail_reasons():
+    return [{'code': code, 'label': item['label'], 'emoji': item['emoji']} for code, item in FAIL_REASONS.items()]
+
+
+class MiniappTaskStatusRequest(BaseModel):
+    status: str
+    reason_code: Optional[str] = None
+    reason_text: Optional[str] = Field(default=None, max_length=1000)
+
+
+@router.post('/miniapp/tasks/{task_id}/status')
+def miniapp_task_status(task_id: str, payload: MiniappTaskStatusRequest,
+                        chat_id: int = Depends(get_miniapp_chat_id)):
+    user = get_user_by_chat_id(chat_id)
+    if not user or user['state'] == 'blocked':
+        raise HTTPException(status_code=403, detail='Avval botda /start bosing.')
+    if payload.status not in ('completed', 'failed'):
+        raise HTTPException(status_code=422, detail='Status noto‘g‘ri.')
+    if payload.status == 'failed' and payload.reason_code is None:
+        raise HTTPException(status_code=422, detail='Bajarilmaganlik sababini tanlang.')
+    result = transition_task(user, task_id, payload.status, payload.reason_code, payload.reason_text)
+    if result['changed']:
+        for field in ('reason_message_id', 'reason_text_message_id'):
+            try:
+                _remove_task_prompt(chat_id, result['original'].get(field))
+            except Exception as error:
+                print('Reason prompt cleanup failed:', type(error).__name__)
+    synced = sync_task_result(chat_id, user, result['task'])
+    response = {'ok': not result['conflict'], 'changed': result['changed'],
+                'checklist_updated': synced, 'task': _tasks_to_json([result['task']])[0]}
+    if result['conflict']:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=409, content={**response, 'detail': 'Vazifa boshqa interfeysda belgilangan. Joriy holat ko‘rsatildi.'})
+    return response
