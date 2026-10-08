@@ -615,7 +615,7 @@ def install(router, get_connection, auth, bot_id, require_joined, send, answer, 
                             eligible_row = cur.fetchone()
                             eligible = eligible_row is not None
                             if eligible:
-                                row["item_kind"] = eligible_row["item_kind"]
+                                row["item_kind"] = eligible_row[0]
                             if not eligible:
                                 cur.execute("UPDATE public.qadam_habit_days SET reminder_state='skipped' WHERE id=%s AND reminder_state='started'", (row["id"],))
                     if not eligible:
