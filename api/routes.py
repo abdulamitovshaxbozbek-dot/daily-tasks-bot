@@ -5,7 +5,7 @@ import html
 import time
 import hmac
 import hashlib
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, urlsplit, urlunsplit, urlencode
 from datetime import date, timedelta
 from typing import Optional
 
@@ -54,6 +54,13 @@ MINIAPP_URL = os.getenv(
     "MINIAPP_URL",
     "https://daily-tasks-bot-production.up.railway.app/miniapp"
 )
+
+def tomorrow_miniapp_button():
+    parts = urlsplit(MINIAPP_URL)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query['action'] = 'add_tomorrow'
+    return {'text': '📅 Ertaga vazifa qo‘shish', 'web_app': {'url': urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))}}
+
 
 ADMIN_MINIAPP_URL = os.getenv(
     "ADMIN_MINIAPP_URL",
@@ -636,7 +643,7 @@ def maybe_notify_day_fully_completed(
 
     if claimant:
         remaining = get_today_task_summary(user_id, task_date)
-        carry_buttons = ([[{"text": "📅 Ertagaga vazifa tanlash", "callback_data": "retention_carry_list"}]]
+        carry_buttons = ([[tomorrow_miniapp_button()]]
                          if remaining['failed'] and task_date == get_today() else [])
         telegram_send_message_with_keyboard(
             chat_id,
@@ -1513,7 +1520,7 @@ def _refresh_live_checklist(
         instructions=instructions
     )
     if extra_buttons is None and summary['failed']:
-        extra_buttons = [[{'text':'📅 Ertagaga vazifa tanlash','callback_data':'retention_carry_list'}]]
+        extra_buttons = [[tomorrow_miniapp_button()]]
     if extra_buttons:
         keyboard['inline_keyboard'].extend(extra_buttons)
 
@@ -6876,8 +6883,8 @@ def handle_evening_summary():
             text = evening_text(tasks)
             carry_buttons = []
             if any(task['status'] in ('pending','failed') for task in tasks):
-                text += '\n\nQolgan vazifani ertagaga ham rejalashtirish uchun pastdagi tugmadan tanlang. Bugungi natija saqlanadi.'
-                carry_buttons = [[{'text':'📅 Ertagaga vazifa tanlash','callback_data':'retention_carry_list'}]]
+                text += '\n\nErtaga vazifa qo‘shish uchun pastdagi tugmani bosing. Bugungi natija saqlanadi.'
+                carry_buttons = [[tomorrow_miniapp_button()]]
             if any(task['status']=='pending' for task in tasks):
                 refresh_live_checklist(user['telegram_chat_id'], user,
                     heading='🌙 Bugungi natijangiz', force_new=True,
@@ -6897,16 +6904,10 @@ def handle_retention_carry(chat_id, data, callback_query_id=None):
         return {'ok':False}
     today = get_today()
     if data == 'retention_carry_list':
-        with get_connection() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT id,task_text FROM public.tasks WHERE user_id=%s AND task_date=%s AND status IN ('pending','failed') ORDER BY created_at LIMIT 8", (user['id'],today))
-                tasks=cur.fetchall()
         if callback_query_id:
-            telegram_answer_callback(callback_query_id, 'Vazifani tanlang' if tasks else 'Qolgan vazifa yo‘q')
-        if tasks:
-            target=(today+timedelta(days=1)).isoformat()
-            telegram_send_message_with_keyboard(chat_id, 'Ertagaga qo‘shiladigan vazifani tanlang (birinchi 8 tasi):',
-                {'inline_keyboard':[[{'text':str(t['task_text'])[:60], 'callback_data':f"retention_carry|{t['id']}|{target}"}] for t in tasks]})
+            telegram_answer_callback(callback_query_id, 'Mini App orqali ertaga vazifa qo‘shing.')
+        telegram_send_message_with_keyboard(chat_id, 'Ertaga vazifa qo‘shish uchun Mini App’ni oching:',
+            {'inline_keyboard': [[tomorrow_miniapp_button()]]})
         return {'ok':True}
     parts=data.split('|')
     try:
