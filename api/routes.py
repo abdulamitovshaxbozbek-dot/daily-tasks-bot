@@ -4201,14 +4201,12 @@ def handle_day_cycle():
                   AND morning_time IS NOT NULL
                   AND LEFT(morning_time::text, 5) = %s
                   AND (%s = false OR active_bot_id = %s)
-                  AND (last_active_date >= %s - 2 OR EXISTS (
-                      SELECT 1 FROM public.tasks t WHERE t.user_id=public.users.id AND t.task_date=%s))
                 RETURNING
                     id,
                     telegram_chat_id,
                     first_name
                 """,
-                (today, today, current_time, require_joined(), bot_id(), today, today)
+                (today, today, current_time, require_joined(), bot_id())
             )
 
             morning_users = cur.fetchall()
