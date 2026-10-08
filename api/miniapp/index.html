@@ -1116,9 +1116,10 @@
   }
 
   function greetingForHour() {
-    const h = new Date().getHours();
+    const h = Number(new Intl.DateTimeFormat('en-GB', {timeZone:'Asia/Tashkent',hour:'2-digit',hourCycle:'h23'}).format(new Date()));
+    if (h < 5 || h >= 22) return 'Xayrli tun';
     if (h < 12) return 'Xayrli tong';
-    if (h < 18) return 'Assalomu alaykum';
+    if (h < 18) return 'Xayrli kun';
     return 'Xayrli kech';
   }
 
@@ -1193,6 +1194,7 @@
     return html;
   }
 
+  let pendingTomorrowLaunch = new URLSearchParams(window.location.search || "").get("action") === "add_tomorrow";
   function renderDaily(data) {
     contentEl.classList.remove('weekly-layout','monthly-layout','yearly-layout');
     window.qadamDaily = data;
@@ -1201,7 +1203,6 @@
     const pending = s.pending == null ? Math.max(0, s.total - s.completed - (s.failed || 0)) : s.pending;
     const percent = Math.max(0, Math.min(100, Number(s.percent) || 0));
     let html = '<section class="today-overview" aria-label="Bugungi natija">' +
-      '<p class="today-quote"><span class="quote-light">Katta natijalar kichik<br>qadamlardan boshlanadi.</span><span class="quote-dark">Intizom bugungi qulaylikdan<br>kelajakdagi erkinlikni tanlashdir.</span></p>' +
       '<div class="reference-ring"><svg viewBox="0 0 120 120" aria-hidden="true"><defs><linearGradient id="progressEmerald"><stop stop-color="#72dfa2"/><stop offset="1" stop-color="#00c881"/></linearGradient></defs><circle class="overview-ring-track" cx="60" cy="60" r="53"/><circle class="overview-ring-arc" cx="60" cy="60" r="53" pathLength="100" stroke-dasharray="' + percent + ' 100"/></svg><div><strong>' + s.completed + ' / ' + s.total + '</strong><span>' + percent + '%</span></div></div>' +
       '<p class="ring-accessible">' + s.completed + '/' + s.total + ' bajarildi</p>' +
       '<div class="overview-metrics"><div><i class="metric-dot success">✓</i><span><strong>' + s.completed + '</strong>Bajarildi</span></div><div><i class="metric-dot pending">◷</i><span><strong>' + pending + '</strong>Qoldi</span></div><div><i class="metric-dot failed">✕</i><span><strong>' + (s.failed || 0) + '</strong>Bajarilmadi</span></div></div>' +
@@ -1648,6 +1649,7 @@
         refreshBtn.classList.remove('loading');
         if (currentPeriod === period) {
           renderers[period](data);
+          if (period === 'daily' && pendingTomorrowLaunch) { pendingTomorrowLaunch=false; const welcome=document.getElementById('qadamWelcome'); if(welcome && welcome.open) welcome.close(); openAddTasks(data.tomorrow || addDays(data.date,1)); }
         }
       })
       .catch(function (err) {
@@ -1760,6 +1762,7 @@
   });
   let telegramActive = true;
   function refreshVisibleTasks() {
+    greetingEl.textContent = greetingForHour();
     if (!telegramActive || document.hidden || taskBusy || tomorrowBusy || statusBusy || document.querySelector('dialog[open]')) return;
     const view = document.querySelector('.app').getAttribute('data-view');
     if (!['today','results'].includes(view)) return;
@@ -2388,7 +2391,7 @@ body{font-family:var(--font)}.app{max-width:480px;padding:20px 22px 85px}.header
 </style>
 <dialog id="qadamWelcome" aria-labelledby="welcomeTitle"><section class="welcome-content"><div class="welcome-logo"><div class="leaf" aria-hidden="true">❧</div><h1 id="welcomeTitle">QADAM</h1><p>Har kuni maqsad sari<br>bir qadam.</p></div><div class="welcome-features"><div><span>☑</span>Reja tuzing</div><div><span>♧</span>Eslatma oling</div><div><span>✓</span>Bajarilishini kuzating</div><div><span>▥</span>Natijangizni ko‘ring</div></div><button class="welcome-start" id="welcomeStart">➤ Boshlash</button><p class="welcome-note">Kichik qadamlar — katta natijalar</p></section></dialog>
 <script>
-(function(){const dialog=document.getElementById('qadamWelcome');function finish(){dialog.close();try{localStorage.setItem('qadam-welcome-seen','1');}catch(_){}}document.getElementById('welcomeStart').addEventListener('click',finish);dialog.addEventListener('cancel',finish);document.addEventListener('click',event=>{if(event.target.closest('[data-qadam-welcome]'))dialog.showModal();});try{if(!localStorage.getItem('qadam-welcome-seen'))dialog.showModal();}catch(_){}})();
+(function(){const dialog=document.getElementById('qadamWelcome');function finish(){dialog.close();try{localStorage.setItem('qadam-welcome-seen','1');}catch(_){}}document.getElementById('welcomeStart').addEventListener('click',finish);dialog.addEventListener('cancel',finish);document.addEventListener('click',event=>{if(event.target.closest('[data-qadam-welcome]'))dialog.showModal();});try{if(!localStorage.getItem('qadam-welcome-seen') && new URLSearchParams(window.location.search || '').get('action')!=='add_tomorrow')dialog.showModal();}catch(_){}})();
 </script>
 <style id="reference-detail-order">#taskDetailContent{display:flex;flex-direction:column}.detail-task-heading{order:0}#taskDetailContent>.task-actions{order:1}#taskDetailContent>.task-marks{order:2}.detail-reasons{order:3}.task-detail-dialog .task-delete{background:transparent;color:#f32953}.task-detail-dialog .task-marks{margin:12px 0!important}.task-detail-dialog .task-actions{margin:0!important}.task-detail-dialog .task-action-icon{min-height:42px}.detail-reasons h3{margin:14px 0 10px}</style>
 <style>.profile-links button{display:flex;align-items:center;gap:12px}.profile-links button:after{margin-left:auto}.profile-links button svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.6;flex-shrink:0}.profile-links button span{flex:1}.profile-heading .j-btn{font-size:22px}.tab{transition:none}.week-fill{transition:none}.app[data-view=today] .brand-motivation{margin-top:15px}</style>
