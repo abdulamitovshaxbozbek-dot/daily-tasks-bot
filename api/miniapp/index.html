@@ -5,7 +5,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Qadam</title>
-<meta name="qadam-ui-version" content="2026-10-07-support-compact-v4">
+<meta name="qadam-ui-version" content="2026-10-08-task-reminder-time-v5">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -322,6 +322,13 @@
   .task-icon.pending { background: rgba(159,184,179,0.18); color: var(--text-dim); }
 
   .task-body { flex: 1; min-width: 0; }
+  .task-reminder-time {
+    display: inline-flex; align-items: center; gap: 4px;
+    margin-top: 5px; padding: 2px 7px; border-radius: 999px;
+    background: rgba(232,176,75,0.09); color: var(--accent);
+    font-size: 11px; line-height: 1.5; white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
 
   .task-text {
     font-size: 15px;
@@ -877,6 +884,13 @@
   let dayRequest = 0;
   let periodRequest = 0;
 
+  function taskReminderMarkup(task) {
+    if (!task.reminder_time) return '';
+    const value = String(task.reminder_time).slice(0, 5);
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) return '';
+    return '<span class="task-reminder-time" aria-label="Eslatma vaqti: ' + value + '">🔔 ' + value + '</span>';
+  }
+
   function taskActionsMarkup(task) {
     taskRegistry.set(String(task.id), task);
     if (!task.can_manage) return '';
@@ -1135,6 +1149,7 @@
             '<div class="task-icon ' + iconClass + '">' + icon + '</div>' +
             '<div class="task-body">' +
               '<p class="task-text' + (t.status === 'completed' ? ' done' : '') + '">' + escapeHtml(t.task_text) + '</p>' +
+              taskReminderMarkup(t) +
               (t.status === 'failed' ? '<p class="task-reason">' + escapeHtml(t.fail_reason_display || 'sababi yozilmadi') + '</p>' : '') +
               taskActionsMarkup(t) +
             '</div>' +
@@ -1383,6 +1398,7 @@
         html += '<div class="task-card">' +
           '<div class="task-icon ' + iconClass + '">' + icon + '</div>' +
           '<div class="task-body"><p class="task-text' + (t.status === 'completed' ? ' done' : '') + '">' + escapeHtml(t.task_text) + '</p>' +
+              taskReminderMarkup(t) +
           (t.status === 'failed' ? '<p class="task-reason">Sabab: ' + escapeHtml(t.fail_reason_display || 'yozilmagan') + '</p>' : '') +
           taskActionsMarkup(t) +
           '</div></div>';
