@@ -6709,6 +6709,13 @@ def miniapp_monthly(
             "display": fail_reason_display(top_code) if top_count else None,
             "count": top_count,
         } if top_count else None,
+        "reason_summary": {
+            "missing": sum(1 for task in tasks if task["status"] == "failed" and not task.get("fail_reason")),
+            "reasons": [
+                {"code": code, "display": fail_reason_display(code), "count": count}
+                for code, count in sorted(breakdown.items(), key=lambda item: -item[1]) if code
+            ],
+        },
         "motivation": get_motivation(stats["percent"]) if stats["total"] > 0 else None,
     }
 
