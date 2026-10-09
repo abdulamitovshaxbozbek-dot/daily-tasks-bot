@@ -1133,12 +1133,20 @@
     setHeaderName(tgUser.first_name);
   }
 
+  const journeySession=crypto.randomUUID();
+  window.qadamTrack=function(event){
+    const url=API_BASE+'/events?initData='+encodeURIComponent(initData||'');
+    fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({event,session_id:journeySession,event_id:crypto.randomUUID()})}).catch(()=>{});
+  };
+  window.qadamTrack('miniapp_open');
   function apiFetch(path, options) {
     const url = API_BASE + path + (path.includes('?') ? '&' : '?') +
       'initData=' + encodeURIComponent(initData || '');
+    options=Object.assign({},options,{headers:Object.assign({},options&&options.headers,{'X-Qadam-Session':journeySession})});
     return fetch(url, options).then(function (res) {
       if (!res.ok) {
         return res.json().catch(function () { return {}; }).then(function (body) {
+          if(options.method && path!=='/events')window.qadamTrack('task_request_error');
           throw new Error(typeof body.detail === 'string' ? body.detail : ('Xatolik: ' + res.status));
         });
       }
@@ -1525,6 +1533,7 @@
   const tomorrowCancel = document.getElementById('tomorrowTaskCancel');
   let tomorrowBusy = false, tomorrowDate = null, tomorrowRequestId = null, tomorrowPayload = null;
   function openAddTasks(date) {
+    window.qadamTrack('task_form_open');
     if (tomorrowBusy) return;
     tomorrowDate = date;
     tomorrowRequestId = null; tomorrowPayload = null;
@@ -1548,11 +1557,12 @@
     document.querySelectorAll('[data-add-date]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));
   });
   document.getElementById('taskChatShortcut').addEventListener('click', () => { if (tg && tg.close) tg.close(); else tomorrowError.textContent='Telegramdagi QADAM bot chatini oching.'; });
-  tomorrowCancel.addEventListener('click', () => { if (!tomorrowBusy) tomorrowDialog.close(); });
-  document.getElementById('addScreenClose').addEventListener('click',()=>{if(!tomorrowBusy)tomorrowDialog.close();});
-  tomorrowDialog.addEventListener('cancel', event => { if (tomorrowBusy) event.preventDefault(); });
+  tomorrowCancel.addEventListener('click', () => { if (!tomorrowBusy) {window.qadamTrack('task_form_cancel');tomorrowDialog.close();} });
+  document.getElementById('addScreenClose').addEventListener('click',()=>{if(!tomorrowBusy){window.qadamTrack('task_form_cancel');tomorrowDialog.close();}});
+  tomorrowDialog.addEventListener('cancel', event => { if (tomorrowBusy) event.preventDefault(); else window.qadamTrack('task_form_cancel'); });
   tomorrowForm.addEventListener('submit', async event => {
     event.preventDefault(); if (tomorrowBusy) return;
+    window.qadamTrack('task_submit_attempt');
     const text = tomorrowInput.value.trim();
     const selectedReminder=document.getElementById('addReminderTime').value;
     const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
