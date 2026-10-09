@@ -2101,6 +2101,9 @@ def _save_tasks_for_date(user, tasks, task_date, from_voice=False):
                 )
 
         conn.commit()
+    if added_count:
+        from journey import record
+        record(user["id"], "task_saved", "chat")
 
     response_parts = []
 
@@ -2316,6 +2319,8 @@ def transition_task(user, task_id, status, reason_code=None, reason_text=None, r
                 (status, reason_code, reason_text, reason_code, reason_code, str(task_id), user['id']))
             task = cur.fetchone()
         conn.commit()
+    from journey import record
+    record(user['id'], 'task_marked')
     return {'changed': True, 'conflict': False, 'task': task, 'original': original}
 
 
@@ -7055,6 +7060,9 @@ def miniapp_create_tomorrow_task(payload: MiniappTomorrowTaskRequest, chat_id: i
             with conn.cursor() as cur:
                 cur.execute("UPDATE public.qadam_miniapp_task_requests SET result=%s::jsonb WHERE bot_id=%s AND user_id=%s AND request_id=%s", (json.dumps(result),bot_id(),str(user['id']),request_id))
             conn.commit()
+    if result.get("added", 0):
+        from journey import record
+        record(user["id"], "task_saved", "miniapp", request_id)
     return result
 
 
@@ -7092,3 +7100,15 @@ def miniapp_task_status(task_id: str, payload: MiniappTaskStatusRequest,
         from fastapi.responses import JSONResponse
         return JSONResponse(status_code=409, content={**response, 'detail': 'Vazifa boshqa interfeysda belgilangan. Joriy holat ko‘rsatildi.'})
     return response
+
+# Start logging follows the original handler; analytics never changes its result.
+_original_start_handler = handle_telegram_start
+def handle_telegram_start(chat_id, username, first_name):
+    result = _original_start_handler(chat_id, username, first_name)
+    try:
+        from journey import record
+        user = get_user_by_chat_id(chat_id)
+        if user: record(user['id'], 'bot_start', 'chat')
+    except Exception:
+        pass
+    return result
