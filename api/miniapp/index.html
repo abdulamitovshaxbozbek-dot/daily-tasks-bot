@@ -1342,11 +1342,36 @@
     '</div>';
 
     
-    const activeDays=(data.days||[]).filter(d=>d.total>0), best=activeDays.reduce((a,b)=>!a||b.percent>a.percent?b:a,null);
-    html += calendarMarkup(data)+'<div class="reference-summary monthly-summary"><div><span>Bajarilgan kunlar</span><strong>'+activeDays.filter(d=>d.percent===100).length+'</strong></div><div><span>O‘rtacha</span><strong>'+s.percent+'%</strong></div><div><span>Eng yaxshi</span><strong>'+(best?Number(best.date.slice(-2))+' '+monthNames[selectedMonth-1].slice(0,3).toLowerCase():'—')+'</strong><small>'+(best?best.percent+'%':'')+'</small></div></div>';
-
-    html += insightMarkup(data.top_fail_reason, data.motivation) + updatedMarkup();
+    const activeDays=(data.days||[]).filter(d=>d.total>0);
+    const best=activeDays.reduce((a,b)=>!a||b.percent>a.percent?b:a,null);
+    html += calendarMarkup(data)+'<div class="reference-summary monthly-summary"><div><span>100% bajarilgan kunlar</span><strong>'+activeDays.filter(d=>d.completed===d.total).length+'</strong></div><div><span>Vazifalar bajarilishi</span><strong>'+s.percent+'%</strong></div><div><span>Eng yaxshi kun</span>'+(best?'<button type="button" class="month-best" data-day-date="'+escapeHtml(best.date)+'"><strong>'+Number(best.date.slice(-2))+' '+monthNames[selectedMonth-1].slice(0,3).toLowerCase()+'</strong><small>'+best.percent+'% · Tafsilot ›</small></button>':'<strong>—</strong>')+'</div></div>';
+    html += monthlyAnalysisMarkup(data);
+    html += updatedMarkup();
     contentEl.innerHTML = html;
+  }
+
+  function monthlyAnalysisMarkup(data) {
+    const s=data.stats, days=(data.days||[]).filter(d=>d.total>0);
+    const start=new Date(data.start_date+'T12:00:00Z');
+    const offset=(start.getUTCDay()+6)%7;
+    const count=Math.ceil((offset+new Date(Date.UTC(start.getUTCFullYear(),start.getUTCMonth()+1,0)).getUTCDate())/7);
+    const weeks=Array.from({length:count},()=>({total:0,completed:0}));
+    days.forEach(d=>{const i=Math.floor((offset+Number(d.date.slice(-2))-1)/7);weeks[i].total+=d.total;weeks[i].completed+=d.completed;});
+    let html='<section class="month-analysis"><h3>Vazifalar hisoboti</h3><div class="month-counts">'+[['Jami',s.total],['Bajarildi',s.completed],['Bajarilmadi',s.failed||0],['Kutilmoqda',s.pending||0]].map(([label,n])=>'<div><strong>'+n+'</strong><span>'+label+'</span></div>').join('')+'</div><h3>Haftalar bo‘yicha natija</h3><p class="month-note">Dushanba–yakshanba; faqat shu oyga tegishli vazifalar.</p><div class="month-weeks">';
+    weeks.forEach((w,i)=>{const percent=w.total?Math.round(w.completed/w.total*100):0;html+='<div class="month-week"><span>'+(i+1)+'-hafta</span><div class="month-track"><i style="width:'+percent+'%"></i></div><strong>'+(w.total?percent+'%':'—')+'</strong><small>'+w.completed+'/'+w.total+'</small></div>';});
+    const reasonSummary=data.reason_summary;
+    const known=reasonSummary?reasonSummary.reasons:(data.top_fail_reason&&data.top_fail_reason.code?[data.top_fail_reason]:[]);
+    const missing=reasonSummary?reasonSummary.missing:null;
+    html+='</div><h3>Bajarilmaganlik sabablari</h3>';
+    if(known.length)html+='<p class="month-reason"><span>Eng ko‘p: '+escapeHtml(known[0].display)+'</span><strong>'+known[0].count+' ta</strong></p>';
+    else html+='<p class="month-note">'+((s.failed||0)?'Sabablar hali yozilmagan.':'Bajarilmagan vazifa yo‘q.')+'</p>';
+    if(missing!==null)html+='<p class="month-reason"><span>Sababi yozilmagan</span><strong>'+missing+' ta</strong></p>';
+    let bestIndex=-1;weeks.forEach((w,i)=>{if(w.total&&(bestIndex<0||w.completed/w.total>weeks[bestIndex].completed/weeks[bestIndex].total))bestIndex=i;});
+    const bestWeeks=bestIndex<0?[]:weeks.map((w,i)=>w.total&&Math.abs(w.completed/w.total-weeks[bestIndex].completed/weeks[bestIndex].total)<1e-9?i+1:null).filter(Boolean);
+    let summary=s.total?'Jami '+s.total+' vazifadan '+s.completed+' tasi bajarilgan ('+s.percent+'%). ': 'Bu oyda vazifalar hali yo‘q.';
+    if(bestWeeks.length)summary+=bestWeeks.length===1?'Eng yaxshi natija '+bestWeeks[0]+'-haftada qayd etildi.':'Eng yaxshi natija '+bestWeeks.join(', ')+'-haftalarda teng qayd etildi.';
+    html+='<div class="month-conclusion"><h3>Oy xulosasi</h3><p>'+summary+'</p><small>'+escapeHtml(shortDate(data.start_date))+' — '+escapeHtml(shortDate(data.end_date))+' holatiga ko‘ra</small></div></section>';
+    return html;
   }
 
   function calendarMarkup(data) {
@@ -1368,7 +1393,7 @@
     for (let day = 1; day <= daysInMonth; day++) {
       const d = byDay[day];
       let level = '';
-      if (d) level = d.percent >= 80 ? ' high' : (d.percent >= 50 ? ' medium' : ' low');
+      if (d && d.total > 0) level = d.percent >= 80 ? ' high' : (d.percent >= 50 ? ' medium' : ' low');
       const iso = year + '-' + String(month + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
       const todayIso = new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Tashkent',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
       const isToday = iso === todayIso;
@@ -1380,7 +1405,7 @@
 
     html += '</div><div class="calendar-legend">' +
       '<span class="legend-item"><i class="legend-dot"></i>Vazifa yo‘q</span>' +
-      '<span class="legend-item"><i class="legend-dot low"></i>1–49%</span>' +
+      '<span class="legend-item"><i class="legend-dot low"></i>0–49%</span>' +
       '<span class="legend-item"><i class="legend-dot medium"></i>50–79%</span>' +
       '<span class="legend-item"><i class="legend-dot high"></i>80–100%</span>' +
     '</div></div>';
@@ -2401,3 +2426,7 @@ body{font-family:var(--font)}.app{max-width:480px;padding:20px 22px 85px}.header
 </style>
 </body>
 </html>
+
+<style>
+.month-best{border:0;background:none;color:var(--text);width:100%;padding:0;cursor:pointer}.month-best strong{font-size:22px}.month-best:focus-visible{outline:2px solid var(--accent);border-radius:8px}.month-analysis{margin:20px 0 12px}.month-analysis h3{font-size:15px;margin:24px 0 12px}.month-counts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.month-counts>div{background:var(--bg-elevated);border:1px solid var(--border);border-radius:14px;padding:13px 3px;text-align:center}.month-counts strong{display:block;font-size:22px}.month-counts span{display:block;font-size:10px;color:var(--text-dim);margin-top:5px}.month-note{font-size:11px;color:var(--text-dim);line-height:1.6}.month-weeks{display:grid;gap:15px;margin:18px 0}.month-week{display:grid;grid-template-columns:58px 1fr 35px 34px;gap:8px;align-items:center;font-size:11px}.month-week small{color:var(--text-dim);text-align:right}.month-track{height:10px;border-radius:10px;background:var(--bg-elevated);overflow:hidden}.month-track i{display:block;height:100%;background:linear-gradient(90deg,var(--accent-dim),var(--accent));border-radius:10px}.month-reason{display:flex;justify-content:space-between;gap:12px;font-size:12px;padding:13px;background:var(--bg-elevated);border-radius:12px}.month-conclusion{padding:16px;border-radius:16px;background:var(--soft);margin-top:20px}.month-conclusion h3{margin:0 0 10px}.month-conclusion p{font-size:12px;line-height:1.7;margin:0 0 10px}.month-conclusion small{font-size:10px;color:var(--text-dim)}
+</style>
