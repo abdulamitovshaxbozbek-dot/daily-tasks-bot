@@ -195,7 +195,7 @@
   .segment-row.selected { border-color:var(--accent); }
   .summary-card { border-left:3px solid var(--accent); }
 </style>
-<style>.nav-btn{min-width:0;font-size:10px}.card p{line-height:1.6;overflow-wrap:anywhere}#insightDays,#insightAnalyze{padding:12px;border-radius:12px;background:var(--bg-card);color:var(--text);border:1px solid var(--border)}#insightAnalyze{width:100%;margin-bottom:24px}#insightAnalyze:disabled{opacity:.5}</style></head>
+<style>.bottom-nav{overflow-x:auto}.nav-btn{min-width:62px;font-size:10px;flex-shrink:0}.card p{line-height:1.6;overflow-wrap:anywhere}#insightDays,#insightAnalyze{padding:12px;border-radius:12px;background:var(--bg-card);color:var(--text);border:1px solid var(--border)}#insightAnalyze{width:100%;margin-bottom:24px}#insightAnalyze:disabled{opacity:.5}</style></head>
 <body>
 
 <div class="app">
@@ -221,6 +221,7 @@
   <button class="nav-btn" data-tab="retention" type="button">
     <span class="nav-icon">🔁</span>Qaytish
   </button>
+  <button class="nav-btn" data-tab="journey" type="button"><span class="nav-icon">👣</span>Qadamlar</button>
   <button class="nav-btn" data-tab="insights" type="button"><span class="nav-icon">✦</span>SI tahlili</button>
   <button class="nav-btn" data-tab="users" type="button">
     <span class="nav-icon">👥</span>Userlar
@@ -583,6 +584,21 @@
 
   // ---------- Tab wiring ----------
 
+  async function loadJourney() {
+    const version=++loadVersion;showSkeleton();
+    try {
+      const data=await apiFetch('/journey?days=30');
+      if(currentTab!=='journey'||version!==loadVersion)return;
+      if(!data.available){contentEl.innerHTML='<p>'+escapeHtml(data.note)+'</p>';return;}
+      const labels={bot_start:'Botni boshladi',miniapp_open:'Mini App ochildi',task_form_open:'Qo‘shish oynasi ochildi',task_submit_attempt:'Saqlashga urinish',task_saved:'Vazifa saqlandi (server)',task_marked:'Natija belgilandi (server)',task_form_cancel:'Qo‘shish bekor qilindi',task_request_error:'So‘rovda xato qaydi'};
+      const f=data.form_outcomes;
+      let html='<div class="card"><h3>Oxirgi 30 kun — yangi kuzatuv</h3><p>'+escapeHtml(data.start_date)+' — '+escapeHtml(data.end_date)+'</p><p>Bu mustaqil amallar hisoboti; barcha satrlar bir xil userlar ketma-ketligi emas.</p></div>';
+      html+='<div class="card"><h3>Qo‘shish oynasidan keyingi natija</h3><p>24 soat o‘tgan sessiyalar: '+f.mature_sessions+'</p><p>24 soatda shu sessiyada saqlagan: '+f.saved_sessions+'</p><p>Saqlash qaydi yo‘q: '+f.without_save+'</p><p>'+(f.mature_sessions?'Saqlashga davom etish: '+Math.round(f.saved_sessions/f.mature_sessions*100)+'%. Saqlash qaydi yo‘q sessiyalarni xato qaydlari bilan tekshiring.':'Xulosa uchun hali 24 soat o‘tgan sessiyalar yo‘q.')+'</p></div>';
+      data.counts.forEach(r=>{html+='<div class="card"><strong>'+escapeHtml(labels[r.event]||r.event)+'</strong><p>'+escapeHtml(r.source)+' · '+r.users+' user · '+r.occurrences+' amal</p></div>';});
+      html+='<div class="card"><h3>Hisobning chegaralari</h3>'+data.limitations.map(x=>'<p>'+escapeHtml(x)+'</p>').join('')+'<p>Ushbu workerda yo‘qotilgan jurnal qaydlari: '+data.dropped_events_this_worker+'</p></div>';
+      contentEl.innerHTML=html;
+    }catch(err){if(currentTab==='journey')handleLoadError(err);}
+  }
   let insightDays=7, insightBusy=false;
   async function loadInsights(analyze=false) {
     if(insightBusy)return;
@@ -603,6 +619,7 @@
 
   const loaders = {
     insights: loadInsights,
+    journey: loadJourney,
     overview: loadOverview,
     activity: loadActivity,
     usage: loadUsage,
@@ -622,7 +639,7 @@
     if (!isAdminVerified) return;
     clearTimeout(searchDebounce);
     currentTab = tab;
-    const meta = tab==='insights'?['SI tahlili','Faktlar, taxminlar va takliflar']:titles[tab];
+    const meta = tab==='journey'?['Qadamlar','Qayerda davom etish kamaymoqda?']:tab==='insights'?['SI tahlili','Faktlar, taxminlar va takliflar']:titles[tab];
     titleEl.textContent = meta[0];
     subtitleEl.textContent = meta[1];
 
