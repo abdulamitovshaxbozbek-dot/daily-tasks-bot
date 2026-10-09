@@ -195,7 +195,7 @@
   .segment-row.selected { border-color:var(--accent); }
   .summary-card { border-left:3px solid var(--accent); }
 </style>
-</head>
+<style>.nav-btn{min-width:0;font-size:10px}.card p{line-height:1.6;overflow-wrap:anywhere}#insightDays,#insightAnalyze{padding:12px;border-radius:12px;background:var(--bg-card);color:var(--text);border:1px solid var(--border)}#insightAnalyze{width:100%;margin-bottom:24px}#insightAnalyze:disabled{opacity:.5}</style></head>
 <body>
 
 <div class="app">
@@ -221,6 +221,7 @@
   <button class="nav-btn" data-tab="retention" type="button">
     <span class="nav-icon">🔁</span>Qaytish
   </button>
+  <button class="nav-btn" data-tab="insights" type="button"><span class="nav-icon">✦</span>SI tahlili</button>
   <button class="nav-btn" data-tab="users" type="button">
     <span class="nav-icon">👥</span>Userlar
   </button>
@@ -270,10 +271,10 @@
     }
   }
 
-  function apiFetch(path) {
+  function apiFetch(path, options) {
     const url = API_BASE + path + (path.includes('?') ? '&' : '?') +
       'initData=' + encodeURIComponent(initData || '');
-    return fetch(url, {cache: 'no-store'}).then(function (res) {
+    return fetch(url, Object.assign({cache:'no-store'}, options || {})).then(function (res) {
       if (!res.ok) {
         return res.json().catch(function () { return {}; }).then(function (body) {
           const err = new Error(typeof body.detail === 'string' ? body.detail : ('Xatolik: ' + res.status));
@@ -582,7 +583,26 @@
 
   // ---------- Tab wiring ----------
 
+  let insightDays=7, insightBusy=false;
+  async function loadInsights(analyze=false) {
+    if(insightBusy)return;
+    insightBusy=true;const version=++loadVersion;showSkeleton();
+    try {
+      const data=await apiFetch('/insights'+(analyze?'/analyze':'')+'?days='+insightDays,analyze?{method:'POST'}:undefined);
+      if(currentTab!=='insights'||version!==loadVersion)return;
+      const snap=data.snapshot;
+      let html='<div class="card"><label>Davr <select id="insightDays">'+[1,7,30].map(d=>'<option value="'+d+'" '+(d===insightDays?'selected':'')+'>'+d+' kun</option>').join('')+'</select></label><p>'+escapeHtml(snap.start_date)+' — '+escapeHtml(snap.end_date)+'</p><p>Faol: '+snap.users.active+' / jami '+snap.users.total_users+' foydalanuvchi. Rejasi bor: '+snap.users.planners+'. Natija belgilagan: '+snap.users.markers+'.</p><small>'+(data.source==='ai'?'SI xulosasi — raqamlar bilan tekshiring':'Mavjud raqamlardan lokal xulosa — SI chaqirilmagan')+'</small></div>';
+      if(data.warning)html+='<p>'+escapeHtml(data.warning)+'</p>';
+      [['facts','Faktlar'],['hypotheses','Ehtimoliy sabablar'],['experiments','Sinab ko‘rish uchun takliflar']].forEach(([key,title])=>{html+='<section class="card"><h3>'+title+'</h3>'+data.report[key].map(x=>'<p>'+escapeHtml(x)+'</p>').join('')+'</section>';});
+      html+='<section class="card"><h3>Ma’lumot cheklovlari</h3>'+snap.limitations.map(x=>'<p>'+escapeHtml(x)+'</p>').join('')+'</section><p>SI tugmasi bosilganda faqat umumlashtirilgan sonlar Groq xizmatiga yuboriladi. Ism, ID va vazifa matni yuborilmaydi.</p><button id="insightAnalyze" type="button" '+(!data.ai_available&&data.source!=='ai'?'disabled':'')+'>SI bilan tahlil qilish</button>';
+      contentEl.innerHTML=html;
+      document.getElementById('insightDays').addEventListener('change',e=>{insightDays=Number(e.target.value);loadInsights();});
+      document.getElementById('insightAnalyze').addEventListener('click',()=>loadInsights(true));
+    } catch(err){if(currentTab==='insights'&&version===loadVersion)handleLoadError(err);} finally {insightBusy=false;}
+  }
+
   const loaders = {
+    insights: loadInsights,
     overview: loadOverview,
     activity: loadActivity,
     usage: loadUsage,
@@ -602,7 +622,7 @@
     if (!isAdminVerified) return;
     clearTimeout(searchDebounce);
     currentTab = tab;
-    const meta = titles[tab];
+    const meta = tab==='insights'?['SI tahlili','Faktlar, taxminlar va takliflar']:titles[tab];
     titleEl.textContent = meta[0];
     subtitleEl.textContent = meta[1];
 
