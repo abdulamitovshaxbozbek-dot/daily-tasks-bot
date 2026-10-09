@@ -371,3 +371,7 @@ def admin_usage(days: int = Query(1, ge=1, le=30), _: int = Depends(verify_admin
     return {'ok': True, **meta, 'days': days, 'start': p['start'].isoformat(), 'tasks': tasks,
             'sections': sections, 'configured': configured, 'prayer_settings': prayer_settings,
             'usage_note': 'Davr yozuvning belgilangan kuni bo‘yicha. Faol sozlamalar hozirgi holat. Userlar bo‘limlar orasida takrorlanishi mumkin. O‘chirilgan odat va zikr tarixi hisobga kirmaydi. Eslatma sonlari har bir yozuvning oxirgi yuborish holati; qayta eslatish urinishlari jami emas. Qazo natijasi namozning asl kuni bo‘yicha.'}
+
+# Aggregate-only insights share the existing admin authentication and bot scope.
+from admin_insights import install as install_admin_insights
+install_admin_insights(router, verify_admin, get_connection, _context)
