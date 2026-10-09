@@ -375,3 +375,7 @@ def admin_usage(days: int = Query(1, ge=1, le=30), _: int = Depends(verify_admin
 # Aggregate-only insights share the existing admin authentication and bot scope.
 from admin_insights import install as install_admin_insights
 install_admin_insights(router, verify_admin, get_connection, _context)
+
+from journey import install as install_journey
+from routes import router as user_router, get_user_by_chat_id
+journey_report = install_journey(user_router, router, get_miniapp_chat_id, get_user_by_chat_id, verify_admin, get_connection, bot_id)
