@@ -20,9 +20,13 @@ async def lifespan(app):
         initialize(conn)
         from retention import initialize as initialize_retention
         initialize_retention(conn)
+    from journey import start as start_journey
+    from bot_identity import bot_id
+    stop_journey = start_journey(get_connection, bot_id)
     stop, thread = start_scheduler()
     yield
     stop.set()
+    stop_journey()
 
 
 app = FastAPI(
@@ -84,3 +88,12 @@ def admin_miniapp_page():
 app.include_router(router)
 app.include_router(migration_router)
 app.include_router(admin_router)
+
+from journey import session as journey_session, valid_session
+@app.middleware("http")
+async def journey_context(request, call_next):
+    token = journey_session.set(valid_session(request.headers.get('X-Qadam-Session')))
+    try:
+        return await call_next(request)
+    finally:
+        journey_session.reset(token)
