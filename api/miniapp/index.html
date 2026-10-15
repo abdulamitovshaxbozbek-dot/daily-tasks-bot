@@ -1913,8 +1913,8 @@
   const tabs = app.querySelector('.tabs');
   const nav = document.createElement('nav');
   nav.className = 'journey-nav'; nav.setAttribute('aria-label', 'Asosiy bo‘limlar');
-  const navIcons={today:'<path class="home-roof" d="M2.5 10.5 12 2.8l9.5 7.7"/><path class="home-house" d="M5.5 9v12h5v-7h3v7h5V9L12 4z"/>',results:'<path d="M5 21V13M12 21V3M19 21V8"/>',habits:'<circle cx="12" cy="12" r="9"/><path d="M12 6v6h5"/>',extras:'<circle cx="12" cy="7" r="4"/><path d="M4 21v-3a8 8 0 0 1 16 0v3z"/>'};
-  nav.innerHTML = [['today','Bugun'],['results','Tahlil'],['habits','Odatlar'],['extras','Profil']].map(([key,label]) =>
+  const navIcons={goals:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',today:'<path class="home-roof" d="M2.5 10.5 12 2.8l9.5 7.7"/><path class="home-house" d="M5.5 9v12h5v-7h3v7h5V9L12 4z"/>',results:'<path d="M5 21V13M12 21V3M19 21V8"/>',habits:'<circle cx="12" cy="12" r="9"/><path d="M12 6v6h5"/>',extras:'<circle cx="12" cy="7" r="4"/><path d="M4 21v-3a8 8 0 0 1 16 0v3z"/>'};
+  nav.innerHTML = [['today','Bugun'],['goals','Maqsadlar'],['results','Tahlil'],['habits','Odatlar'],['extras','Profil']].map(([key,label]) =>
     '<button type="button" role="tab" data-section="'+key+'" aria-selected="'+(key==='today')+'"><svg viewBox="0 0 24 24" aria-hidden="true">'+navIcons[key]+'</svg><span>'+label+'</span></button>').join('');
   nav.setAttribute('role','tablist');
   app.insertBefore(nav, tabs);
@@ -1973,7 +1973,7 @@
       const user=tg&&tg.initDataUnsafe&&tg.initDataUnsafe.user||{},name=document.getElementById('userName').textContent||'QADAM';
       const themeLabel={light:'Yorug‘ rejim',dark:'Tungi rejim',auto:'Avtomatik'}[window.qadamTheme.mode()];
       panel.innerHTML='<div class="profile-heading"><h2>Profil</h2>'+btn(icons.gear,'section','preferences')+'</div><div class="profile-person"><span class="profile-avatar">'+esc(name.slice(0,1))+'</span><div><h3>'+esc(name)+'</h3>'+(user.username?'<p class="profile-handle">@'+esc(user.username)+'</p>':'')+'<p>Har kuni maqsad sari bir qadam.</p></div></div>'+ 
-        '<div class="profile-links">'+row('Eslatma vaqti',icons.bell,'section','reminders')+row('Statistika',icons.stats,'section','results')+row('Ertangi vazifalar',icons.calendar,'tomorrow-tasks')+row('Odatlar',icons.habit,'section','habits')+row('Rejalar',icons.calendar,'open-plans')+row('Dizayn',icons.design,'section','preferences',themeLabel)+'</div>'+ 
+        '<div class="profile-links">'+row('Eslatma vaqti',icons.bell,'section','reminders')+row('Statistika',icons.stats,'section','results')+row('Ertangi vazifalar',icons.calendar,'tomorrow-tasks')+row('Odatlar',icons.habit,'section','habits')+row('Dizayn',icons.design,'section','preferences',themeLabel)+'</div>'+ 
         '<button type="button" class="profile-menu-row" id="profileSupport">'+icons.support+'<span>Loyihani qo‘llab-quvvatlash</span><i>›</i></button>'+ 
         '<button type="button" class="profile-menu-row" data-qadam-welcome>'+icons.help+'<span>Yordam</span><i>›</i></button>'+ 
         '<div class="profile-links profile-exit">'+row('Chiqish',icons.exit,'close-app')+'</div>'+ 
@@ -2068,6 +2068,7 @@
     catch(e) { if(token!==request) return; panel.innerHTML='<p class="j-warning" role="alert">'+esc(e.message)+'</p>'+btn('Qayta urinish','retry'); }
   }
   function showSection(next) {
+    if(next==='goals') { location.href='/plans-miniapp'+location.hash; return; }
     if(next==='add') { showSection('today'); openForm('task-chat'); return; }
     section=next; notice='';
     if(window.scrollTo)window.scrollTo({top:0,behavior:'instant'});
@@ -2081,7 +2082,7 @@
     render(); if(!['today','results'].includes(next)) load();
   }
   window.qadamDailyChanged=()=>{if(section==='today')render();};
-  panel.addEventListener('click',e=>{if(e.target.closest('[data-action="open-plans"]')){location.href='/plans-miniapp';return;}if(e.target.closest('[data-action="tomorrow-tasks"]')&&window.qadamDaily&&window.qadamTasks){showSection('today');window.qadamTasks.addTomorrow();}});
+  panel.addEventListener('click',e=>{if(e.target.closest('[data-action="open-plans"]')){location.href='/plans-miniapp'+location.hash;return;}if(e.target.closest('[data-action="tomorrow-tasks"]')&&window.qadamDaily&&window.qadamTasks){showSection('today');window.qadamTasks.addTomorrow();}});
   nav.addEventListener('click',e=>{
     const button=e.target.closest('[data-section]'); if(button)showSection(button.dataset.section);
   });
@@ -2164,6 +2165,21 @@
   });
   document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!busy&&!['today','results'].includes(section))load();});
   document.getElementById('addHabitShortcut').addEventListener('click',async()=>{if(document.getElementById('tomorrowTaskSubmit').disabled)return;document.getElementById('tomorrowTaskDialog').close();showSection('habits');await load();if(model)openForm('add');});
+  function handleTelegramBack() {
+    if(busy) return;
+    const opened=Array.from(document.querySelectorAll('dialog[open]')).pop();
+    if(opened) {
+      if(typeof opened.requestClose==='function') opened.requestClose();
+      else if(opened.dispatchEvent(new Event('cancel',{cancelable:true}))) opened.close();
+      return;
+    }
+    if(section!=='today') { showSection('today'); return; }
+    if(tg && typeof tg.close==='function') tg.close();
+  }
+  if(tg && tg.BackButton && typeof tg.BackButton.onClick==='function') {
+    tg.BackButton.onClick(handleTelegramBack);
+    tg.BackButton.show();
+  }
   const initialSection=new URLSearchParams(location.search).get('section');
   showSection(['prayers','habits','qaza','add','results','preferences','extras'].includes(initialSection)?initialSection:'today');
   setInterval(()=>{if(!document.hidden&&!busy&&!dialog.open&&!['today','results'].includes(section))load();},60000);
