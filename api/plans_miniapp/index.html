@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<title>Rejalar · QADAM</title>
+<title>Maqsadlar · QADAM</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
 :root{--bg:#f4f6f8;--card:#fff;--text:#16202a;--muted:#6b7a89;--line:#e3e8ee;--accent:#00b96a;--accent-d:#009a58;--accent-bg:#e5f8ee;--warn:#b26a00;--warn-bg:#fff3dc;--danger:#d64545;--shadow:0 1px 3px rgba(20,30,40,.08);color-scheme:light}
@@ -57,11 +57,20 @@ input:focus,textarea:focus{border-color:var(--accent)}textarea{min-height:92px;r
 #toast.on{opacity:.95}
 .spin{width:28px;height:28px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:r .8s linear infinite;margin:0 auto}@keyframes r{to{transform:rotate(360deg)}}
 .dotdot span{animation:b 1.2s infinite;display:inline-block}.dotdot span:nth-child(2){animation-delay:.2s}.dotdot span:nth-child(3){animation-delay:.4s}@keyframes b{50%{opacity:.2}}
+
+#app{padding-bottom:110px}
+.goals-nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:min(480px,100%);z-index:30;display:flex;padding:7px 8px calc(7px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--bg);}
+.goals-nav button{flex:1;min-width:0;min-height:42px;border:0;background:none;color:var(--muted);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;font:10px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;cursor:pointer}
+.goals-nav button[aria-current=page]{color:var(--accent);font-weight:800}
+.goals-nav svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.composer{bottom:calc(60px + env(safe-area-inset-bottom))}
+#toast{bottom:calc(150px + env(safe-area-inset-bottom))}
 </style>
 </head>
 <body>
 <div id="app"></div>
 <div id="toast"></div>
+<nav id="goalsNav" class="goals-nav" aria-label="Asosiy bo‘limlar"></nav>
 <script>
 (function(){
 'use strict';
@@ -75,6 +84,17 @@ const KINDS={volume:{icon:'📊',name:'Hajmi bor ish',hint:'Kitob, darslar, so�
 const EXAMPLES=['500 betli kitob o‘qish','IELTS ga tayyorlanish','Yugurishni boshlash','40 ta dars ko‘rish'];
 const esc=v=>String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let S={screen:'list',data:null,wiz:null,planId:null,chat:[],busy:false,showAll:false,sheet:false};
+const navIcons={today:'<path d="M3 10 12 3l9 7M6 9v12h5v-7h3v7h4V9"/>',goals:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',results:'<path d="M5 21V13M12 21V3M19 21V8"/>',habits:'<circle cx="12" cy="12" r="9"/><path d="M12 6v6h5"/>',extras:'<circle cx="12" cy="7" r="4"/><path d="M4 21v-3a8 8 0 0 1 16 0v3z"/>'};
+const goalsNav=document.getElementById('goalsNav');
+goalsNav.innerHTML=[['today','Bugun'],['goals','Maqsadlar'],['results','Tahlil'],['habits','Odatlar'],['extras','Profil']].map(([key,label])=>'<button type="button" data-destination="'+key+'" '+(key==='goals'?'aria-current="page"':'')+'><svg viewBox="0 0 24 24" aria-hidden="true">'+navIcons[key]+'</svg><span>'+label+'</span></button>').join('');
+goalsNav.addEventListener('click',e=>{
+  const button=e.target.closest('[data-destination]');if(!button)return;
+  const section=button.dataset.destination;
+  if(section==='goals'){if(!S.busy)go('list');return;}
+  if(S.busy){toast('Amal tugashini kuting.');return;}
+  location.href='/miniapp?section='+encodeURIComponent(section)+location.hash;
+});
+
 
 function toast(t){$toast.textContent=t;$toast.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>$toast.classList.remove('on'),2600);}
 function dateLabel(iso,today){
@@ -119,9 +139,9 @@ async function loadPlans(){
   return S.data;
 }
 function renderList(){
-  setBack(()=>{location.href='/miniapp';});
+  setBack(()=>{location.href='/miniapp'+location.hash;});
   const d=S.data,active=d.plans.filter(p=>p.status!=='archived');
-  let h='<div class="top"><div class="grow"><h1>🎯 Rejalar</h1><p class="muted small">Katta maqsadni kichik qadamlarga bo‘lamiz</p></div></div>';
+  let h='<div class="top"><div class="grow"><h1>Katta maqsadlarni rejalashtirish</h1><p class="muted small">Maqsadingizni kunlik kichik qadamlarga bo‘ling.</p></div></div>';
   if(!d.ai.available)h+='<div class="alert small">AI yordamchi hozir band. Hajmli rejalar ishlayveradi; bosqichli reja va suhbat uchun <a href="'+esc(d.ai.admin_url)+'" data-act="admin" data-url="'+esc(d.ai.admin_url)+'">adminga murojaat qiling</a>.</div>';
   if(!active.length){
     h+='<div class="card hero"><div class="big">🧭</div><h2>Maqsadingizni yozing</h2><p class="muted" style="margin:6px 0 14px">Masalan, 500 betli kitob. Bir necha savol beraman va uni kunlarga bo‘lib beraman.</p>'+
@@ -140,7 +160,7 @@ function renderList(){
     }
     h+='</div>';
   });
-  if(active.length)h+='<div style="margin-top:14px"><button class="btn primary" data-act="new">＋ Yangi reja</button></div>';
+  h+='<div style="margin-top:14px"><button class="btn primary" data-act="new">+ Maqsad qo‘shish</button></div>';
   $app.innerHTML=h;
 }
 
@@ -151,7 +171,7 @@ function questionList(){
 }
 function renderGoal(){
   setBack(()=>go('list'));
-  $app.innerHTML='<div class="top"><button class="icon-btn" data-act="back">‹</button><div class="grow"><h2>Yangi reja</h2></div></div>'+
+  $app.innerHTML='<div class="top"><button class="icon-btn" data-act="back">‹</button><div class="grow"><h2>Yangi maqsad</h2></div></div>'+
     '<div class="card"><h3>Qanday maqsadingiz bor?</h3><p class="muted small" style="margin:4px 0 10px">Qisqa yozing yoki namunani tanlang.</p>'+
     '<textarea id="goal" maxlength="300" placeholder="Masalan: 500 betli kitob o‘qimoqchiman">'+esc(S.wiz.goal)+'</textarea>'+
     '<div class="opts">'+EXAMPLES.map(e=>'<button class="opt" data-act="example" data-goal="'+esc(e)+'">'+esc(e)+'</button>').join('')+'</div></div>'+
