@@ -12,7 +12,11 @@ ZONE = ZoneInfo("Asia/Tashkent")
 def due_jobs(now):
     local = now.astimezone(ZONE)
     jobs = ["day_cycle", "task_reminders", "habit_reminders"]
+    if local.minute % 10 == 0:
+        jobs.append("plan_daily")
     if local.minute == 0:
+        if local.hour == 20:
+            jobs.append("plan_checkin")
         if local.hour == 11:
             jobs.append("reminders")
         if local.hour == 14:
@@ -40,6 +44,8 @@ def initialize(conn):
 
     from habits import initialize as initialize_habits
     initialize_habits(conn)
+    from plans import initialize as initialize_plans
+    initialize_plans(conn)
     from retention import initialize as initialize_retention
     initialize_retention(conn)
 
@@ -80,11 +86,13 @@ def run_tick(conn, now, handlers):
 
 def worker(stop):
     import psycopg2
-    from routes import handle_day_cycle, handle_reminders, handle_live_checklist_reminders, handle_task_reminders, handle_habit_reminders, handle_scheduled_weekly_reports
+    from routes import handle_day_cycle, handle_reminders, handle_live_checklist_reminders, handle_task_reminders, handle_habit_reminders, handle_scheduled_weekly_reports, plan_jobs
     handlers = {
         'day_cycle': handle_day_cycle,
         'task_reminders': handle_task_reminders,
         'habit_reminders': handle_habit_reminders,
+        'plan_daily': plan_jobs['daily'],
+        'plan_checkin': plan_jobs['checkin'],
         'reminders': handle_reminders,
         'midday': lambda: handle_live_checklist_reminders('midday'),
         'evening': lambda: handle_live_checklist_reminders('evening'),

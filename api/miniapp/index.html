@@ -1973,7 +1973,7 @@
       const user=tg&&tg.initDataUnsafe&&tg.initDataUnsafe.user||{},name=document.getElementById('userName').textContent||'QADAM';
       const themeLabel={light:'Yorug‘ rejim',dark:'Tungi rejim',auto:'Avtomatik'}[window.qadamTheme.mode()];
       panel.innerHTML='<div class="profile-heading"><h2>Profil</h2>'+btn(icons.gear,'section','preferences')+'</div><div class="profile-person"><span class="profile-avatar">'+esc(name.slice(0,1))+'</span><div><h3>'+esc(name)+'</h3>'+(user.username?'<p class="profile-handle">@'+esc(user.username)+'</p>':'')+'<p>Har kuni maqsad sari bir qadam.</p></div></div>'+ 
-        '<div class="profile-links">'+row('Eslatma vaqti',icons.bell,'section','reminders')+row('Statistika',icons.stats,'section','results')+row('Ertangi vazifalar',icons.calendar,'tomorrow-tasks')+row('Odatlar',icons.habit,'section','habits')+row('Dizayn',icons.design,'section','preferences',themeLabel)+'</div>'+ 
+        '<div class="profile-links">'+row('Eslatma vaqti',icons.bell,'section','reminders')+row('Statistika',icons.stats,'section','results')+row('Ertangi vazifalar',icons.calendar,'tomorrow-tasks')+row('Odatlar',icons.habit,'section','habits')+row('Rejalar',icons.calendar,'open-plans')+row('Dizayn',icons.design,'section','preferences',themeLabel)+'</div>'+ 
         '<button type="button" class="profile-menu-row" id="profileSupport">'+icons.support+'<span>Loyihani qo‘llab-quvvatlash</span><i>›</i></button>'+ 
         '<button type="button" class="profile-menu-row" data-qadam-welcome>'+icons.help+'<span>Yordam</span><i>›</i></button>'+ 
         '<div class="profile-links profile-exit">'+row('Chiqish',icons.exit,'close-app')+'</div>'+ 
@@ -1988,7 +1988,7 @@
     }
     if(section==='reminders') {
       panel.innerHTML=hero('SOZLAMALAR','Rejangizni boshqaring','Vazifa eslatmasini Bugun ro‘yxatidagi 🔔 orqali sozlang.')+
-        '<div class="j-actions">'+btn('👣 Odatlarni boshqarish','section','habits')+btn('🕌 Namoz: hudud va eslatma','settings')+'</div>'+
+        '<div class="j-actions">'+btn('👣 Odatlarni boshqarish','section','habits')+btn('🎯 Katta maqsadni rejalash','open-plans')+btn('🕌 Namoz: hudud va eslatma','settings')+'</div>'+
         '<p class="j-small">Zikrni odat sifatida qo‘shing. Qazo hisobi Namoz bo‘limida.</p>';
       return;
     }
@@ -2081,7 +2081,7 @@
     render(); if(!['today','results'].includes(next)) load();
   }
   window.qadamDailyChanged=()=>{if(section==='today')render();};
-  panel.addEventListener('click',e=>{if(e.target.closest('[data-action="tomorrow-tasks"]')&&window.qadamDaily&&window.qadamTasks){showSection('today');window.qadamTasks.addTomorrow();}});
+  panel.addEventListener('click',e=>{if(e.target.closest('[data-action="open-plans"]')){location.href='/plans-miniapp';return;}if(e.target.closest('[data-action="tomorrow-tasks"]')&&window.qadamDaily&&window.qadamTasks){showSection('today');window.qadamTasks.addTomorrow();}});
   nav.addEventListener('click',e=>{
     const button=e.target.closest('[data-section]'); if(button)showSection(button.dataset.section);
   });

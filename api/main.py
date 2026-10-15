@@ -49,6 +49,13 @@ ADMIN_MINIAPP_HTML_PATH = os.path.join(
 )
 
 
+PLANS_MINIAPP_HTML_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "plans_miniapp",
+    "index.html"
+)
+
+
 @app.get("/health")
 def health():
     return {
@@ -81,6 +88,14 @@ def miniapp_page():
 def admin_miniapp_page():
     return FileResponse(
         ADMIN_MINIAPP_HTML_PATH,
+        media_type="text/html"
+    )
+
+
+@app.get("/plans-miniapp")
+def plans_miniapp_page():
+    return FileResponse(
+        PLANS_MINIAPP_HTML_PATH,
         media_type="text/html"
     )
 

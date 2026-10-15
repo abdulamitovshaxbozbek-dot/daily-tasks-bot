@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from psycopg2.extras import RealDictCursor
 
 from retention import claim as claim_notification, morning_text, evening_text, weekly_advice
+import ai as ai_module
 from database import get_connection
 from bot_identity import register_chat, require_joined, bot_id, verify_webhook
 
@@ -4633,9 +4634,7 @@ def groq_transcribe_telegram_voice(
         )
 
     if not GROQ_API_KEY:
-        raise RuntimeError(
-            "GROQ_API_KEY sozlanmagan"
-        )
+        ai_module.fail("no_key", "voice transcribe")
 
     print(
         "VOICE: Telegram getFile chaqirilmoqda..."
@@ -4772,6 +4771,8 @@ def groq_transcribe_telegram_voice(
         groq_response.status_code
     )
 
+    ai_module.check_response(groq_response, "voice transcribe")
+
     if groq_response.status_code != 200:
 
         print(
@@ -4821,7 +4822,7 @@ def groq_parse_tasks(
 
     if not GROQ_API_KEY:
         print("VOICE TASK PARSER ERROR: GROQ_API_KEY yo‘q")
-        raise RuntimeError("GROQ_API_KEY sozlanmagan")
+        ai_module.fail("no_key", "voice parser")
 
     print("VOICE TASK PARSER: Groq API'ga yuborilmoqda...")
 
@@ -4968,6 +4969,8 @@ Hech qanday qo‘shimcha matn yozmang.
         "VOICE TASK PARSER STATUS:",
         groq_response.status_code
     )
+
+    ai_module.check_response(groq_response, "voice parser")
 
     if groq_response.status_code != 200:
         print(
@@ -5273,6 +5276,30 @@ def handle_voice_message(
         print("========================================")
 
         return result
+
+    except ai_module.AIUnavailable as ai_error:
+
+        print("VOICE AI UNAVAILABLE:", ai_error.reason)
+
+        try:
+
+            telegram_send_message_with_keyboard(
+                chat_id,
+                ai_module.user_text(ai_error),
+                ai_module.admin_button()
+            )
+
+        except Exception as telegram_error:
+
+            print(
+                "VOICE AI MESSAGE SEND ERROR:",
+                repr(telegram_error)
+            )
+
+        return {
+            "ok": False,
+            "ai_unavailable": ai_error.reason
+        }
 
     except Exception as error:
 
@@ -5719,6 +5746,9 @@ def telegram_webhook(
             section = {"/qazo": "qaza", "/namoz": "prayers", "/odatlar": "habits"}[habit_command[0].split("@", 1)[0]]
             return handle_habit_chat_summary(chat_id, section)
 
+        if message_text.split(maxsplit=1)[0:1] and message_text.split(maxsplit=1)[0].split("@", 1)[0] == "/reja":
+            return send_plans_link(chat_id)
+
         if message_text.split(maxsplit=1)[0:1] == ["/start"]:
 
             return handle_telegram_start(
@@ -5742,6 +5772,8 @@ def telegram_webhook(
             management_action, separator, task_id = callback_data.partition("|")
             if callback_data == 'retention_carry_list' or callback_data.startswith('retention_carry|'):
                 return handle_retention_carry(chat_id, callback_data, callback_query_id)
+            if callback_data.startswith("plan|"):
+                return handle_plan_callback(chat_id, callback_data, callback_query_id, callback_message_id)
             if callback_data.startswith("habit|"):
                 return handle_habit_callback(chat_id, callback_data, callback_query_id, callback_message_id)
             if separator and management_action in (
@@ -6872,6 +6904,34 @@ handle_habit_reminders, handle_habit_callback, handle_habit_chat_summary = insta
     telegram_send_message_with_keyboard, telegram_answer_callback,
     telegram_delete_message, update_user_activity, telegram_edit_message_with_keyboard,
 )
+
+
+# Plan builder: the conversation lives in its own Mini App page, the chat only gets reminders.
+from plans import install as install_plans
+
+ai_module.configure(
+    lambda text: telegram_send_message(int(ADMIN_CHAT_ID), text),
+    lambda kind, key: claim_notification(get_connection, bot_id(), ADMIN_CHAT_ID, kind, key),
+)
+PLANS_MINIAPP_URL = os.getenv("PLANS_MINIAPP_URL") or MINIAPP_URL.rsplit("/", 1)[0] + "/plans-miniapp"
+plan_jobs, handle_plan_callback, send_plans_link = install_plans(
+    router, get_connection, get_miniapp_chat_id, bot_id, require_joined,
+    telegram_send_message_with_keyboard, telegram_answer_callback, update_user_activity,
+    get_today, get_user_by_chat_id, transition_task, sync_task_result, refresh_live_checklist,
+    claim_notification, PLANS_MINIAPP_URL,
+)
+
+
+@router.post("/plans/daily/run")
+def run_plans_daily(_: None = Depends(verify_api_key)):
+    reject_external_scheduler()
+    return plan_jobs["daily"]()
+
+
+@router.post("/plans/checkin/run")
+def run_plans_checkin(_: None = Depends(verify_api_key)):
+    reject_external_scheduler()
+    return plan_jobs["checkin"]()
 
 
 def handle_evening_summary():
