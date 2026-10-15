@@ -17,15 +17,19 @@ class ScheduleTests(unittest.TestCase):
         self.assertEqual(len(actual['day_cycle']), 1440)
         self.assertEqual(len(actual['habit_reminders']), 1440)
         self.assertEqual(len(actual['task_reminders']), 1440)
+        self.assertEqual(len(actual['plan_daily']), 144)
+        self.assertEqual(actual['plan_checkin'], ['20:00'])
         self.assertEqual(actual['reminders'], ['11:00'])
         self.assertEqual(actual['midday'], ['14:00'])
         self.assertEqual(actual['evening'], ['23:00'])
 
     def test_utc_conversion_and_day_boundary(self):
-        self.assertEqual(due_jobs(datetime(2026, 9, 20, 21, tzinfo=timezone.utc)), ['day_cycle', 'task_reminders', 'habit_reminders'])
-        self.assertEqual(due_jobs(datetime(2026, 9, 21, 6, tzinfo=timezone.utc)), ['day_cycle', 'task_reminders', 'habit_reminders', 'reminders'])
-        self.assertEqual(due_jobs(datetime(2026, 9, 21, 9, tzinfo=timezone.utc)), ['day_cycle', 'task_reminders', 'habit_reminders', 'midday'])
-        self.assertEqual(due_jobs(datetime(2026, 9, 21, 18, tzinfo=timezone.utc)), ['day_cycle', 'task_reminders', 'habit_reminders', 'evening'])
+        self.assertEqual(due_jobs(datetime(2026, 9, 20, 21, tzinfo=timezone.utc)), ['day_cycle', 'task_reminders', 'habit_reminders', 'plan_daily'])
+        self.assertEqual(due_jobs(datetime(2026, 9, 21, 6, tzinfo=timezone.utc)), ['day_cycle', 'task_reminders', 'habit_reminders', 'plan_daily', 'reminders'])
+        self.assertEqual(due_jobs(datetime(2026, 9, 21, 9, tzinfo=timezone.utc)), ['day_cycle', 'task_reminders', 'habit_reminders', 'plan_daily', 'midday'])
+        self.assertEqual(due_jobs(datetime(2026, 9, 21, 18, tzinfo=timezone.utc)), ['day_cycle', 'task_reminders', 'habit_reminders', 'plan_daily', 'evening'])
+        self.assertEqual(due_jobs(datetime(2026, 9, 21, 15, tzinfo=timezone.utc)), ['day_cycle', 'task_reminders', 'habit_reminders', 'plan_daily', 'plan_checkin'])
+        self.assertEqual(due_jobs(datetime(2026, 9, 21, 15, 5, tzinfo=timezone.utc)), ['day_cycle', 'task_reminders', 'habit_reminders'])
 
 
 if __name__ == '__main__':
