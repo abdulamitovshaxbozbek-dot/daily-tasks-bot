@@ -5,6 +5,7 @@ per occurrence. Failed/uncertain sends remain visible for operator review.
 """
 import html
 import logging
+import os
 import re
 import threading
 from contextlib import contextmanager
@@ -78,7 +79,7 @@ ALTER TABLE public.qadam_habit_days ADD COLUMN IF NOT EXISTS snooze_count INTEGE
 UPDATE public.qadam_habit_days d SET item_kind=h.kind FROM public.qadam_habits h
  WHERE d.kind='habit' AND d.ref=h.id::text AND d.scope=h.scope AND d.chat_id=h.chat_id AND d.item_kind IS NULL;
 """
-_ready = False
+_ready = os.environ.get("QADAM_HABITS_SCHEMA_PREPARED") == "1"
 _schema_lock = threading.Lock()
 _fetch_lock = threading.Lock()
 _retry_after = {}
