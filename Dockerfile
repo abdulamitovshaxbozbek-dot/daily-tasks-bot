@@ -4,4 +4,4 @@ WORKDIR /app
 COPY api/requirements.txt /app/api/requirements.txt
 RUN pip install --no-cache-dir -r api/requirements.txt
 COPY api /app/api
-CMD ["sh", "-c", "cd api && exec python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 4"]
+CMD ["sh", "-c", "cd api && exec python -m start_server"]
