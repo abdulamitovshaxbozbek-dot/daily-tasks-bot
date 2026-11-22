@@ -248,7 +248,13 @@ def verify_api_key(
     x_api_key: Optional[str] = Header(default=None)
 ):
 
-    if API_KEY and x_api_key != API_KEY:
+    if not API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="API_KEY is not configured"
+        )
+
+    if x_api_key != API_KEY:
 
         raise HTTPException(
             status_code=401,
@@ -402,20 +408,25 @@ def verify_telegram_init_data(
     return user
 
 
-def get_miniapp_chat_id(
+def get_miniapp_user(
     init_data: str = Query(
         ...,
         alias="initData",
         description="Telegram WebApp.initData qiymati"
     )
+) -> dict:
+    """Return the user identity from signed, unexpired Telegram initData."""
+    return verify_telegram_init_data(init_data)
+
+
+def get_miniapp_chat_id(
+    user: dict = Depends(get_miniapp_user)
 ) -> int:
     """
     FastAPI dependency: initData'ni tekshiradi va undan
     telegram chat_id (foydalanuvchi id) ni chiqarib beradi.
     Mini App endpointlari shuni Depends() orqali ishlatadi.
     """
-
-    user = verify_telegram_init_data(init_data)
 
     chat_id = user.get("id")
 
@@ -426,7 +437,16 @@ def get_miniapp_chat_id(
             detail="initData user.id topilmadi"
         )
 
-    return int(chat_id)
+    try:
+        return int(chat_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="initData user.id noto'g'ri")
+
+
+def require_matching_chat_id(requested_chat_id: int, authenticated_chat_id: int) -> None:
+    """A client-supplied chat ID cannot select another user's data."""
+    if requested_chat_id != authenticated_chat_id:
+        raise HTTPException(status_code=403, detail="Boshqa foydalanuvchiga kirish taqiqlangan")
 
 
 # =========================================================
@@ -6143,13 +6163,19 @@ def get_users(
 
 @router.post("/start")
 def start_api(
-    data: StartUserRequest
+    data: StartUserRequest,
+    authenticated_user: dict = Depends(get_miniapp_user)
 ):
+    try:
+        authenticated_chat_id = int(authenticated_user.get("id"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="initData user.id noto'g'ri")
+    require_matching_chat_id(data.chat_id, authenticated_chat_id)
 
     return handle_telegram_start(
-        data.chat_id,
-        data.username,
-        data.first_name
+        authenticated_chat_id,
+        authenticated_user.get("username"),
+        authenticated_user.get("first_name")
     )
 
 
@@ -6159,8 +6185,10 @@ def start_api(
 
 @router.post("/morning-time")
 def morning_time_api(
-    data: MorningTimeRequest
+    data: MorningTimeRequest,
+    authenticated_chat_id: int = Depends(get_miniapp_chat_id)
 ):
+    require_matching_chat_id(data.chat_id, authenticated_chat_id)
 
     return handle_morning_time(
         data.chat_id,
@@ -6174,8 +6202,10 @@ def morning_time_api(
 
 @router.post("/tasks")
 def tasks_api(
-    data: CreateTasksRequest
+    data: CreateTasksRequest,
+    authenticated_chat_id: int = Depends(get_miniapp_chat_id)
 ):
+    require_matching_chat_id(data.chat_id, authenticated_chat_id)
 
     return handle_create_tasks(
         data.chat_id,
@@ -6189,8 +6219,10 @@ def tasks_api(
 
 @router.post("/tasks/status")
 def task_status_api(
-    data: TaskStatusRequest
+    data: TaskStatusRequest,
+    authenticated_chat_id: int = Depends(get_miniapp_chat_id)
 ):
+    require_matching_chat_id(data.chat_id, authenticated_chat_id)
 
     return handle_task_status(
         data.chat_id,
@@ -6207,8 +6239,10 @@ def task_status_api(
     "/reports/daily/{chat_id}"
 )
 def daily_report_api(
-    chat_id: int
+    chat_id: int,
+    authenticated_chat_id: int = Depends(get_miniapp_chat_id)
 ):
+    require_matching_chat_id(chat_id, authenticated_chat_id)
 
     return handle_daily_report(
         chat_id
@@ -6219,8 +6253,10 @@ def daily_report_api(
     "/reports/weekly/{chat_id}"
 )
 def weekly_report_api(
-    chat_id: int
+    chat_id: int,
+    authenticated_chat_id: int = Depends(get_miniapp_chat_id)
 ):
+    require_matching_chat_id(chat_id, authenticated_chat_id)
 
     return handle_weekly_report(
         chat_id
@@ -6231,8 +6267,10 @@ def weekly_report_api(
     "/reports/monthly/{chat_id}"
 )
 def monthly_report_api(
-    chat_id: int
+    chat_id: int,
+    authenticated_chat_id: int = Depends(get_miniapp_chat_id)
 ):
+    require_matching_chat_id(chat_id, authenticated_chat_id)
 
     return handle_monthly_report(
         chat_id
@@ -6243,8 +6281,10 @@ def monthly_report_api(
     "/reports/yearly/{chat_id}"
 )
 def yearly_report_api(
-    chat_id: int
+    chat_id: int,
+    authenticated_chat_id: int = Depends(get_miniapp_chat_id)
 ):
+    require_matching_chat_id(chat_id, authenticated_chat_id)
 
     return handle_yearly_report(
         chat_id
