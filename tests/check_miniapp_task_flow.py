@@ -14,17 +14,16 @@ def main():
     if os.environ.get("TELEGRAM_TOKEN"):
         raise RuntimeError("This check requires Telegram to be disabled")
 
-    from main import app
     from miniapp_reminders import MiniappTaskReminderRequest
     from miniapp_task_creation import MiniappTomorrowTaskRequest
     from miniapp_task_status import MiniappTaskStatusRequest
     from retention import initialize
-    from routes import get_today
+    from routes import get_today, router
     from unittest.mock import patch
 
     action = {
         (method, route.path): route.endpoint
-        for route in app.routes
+        for route in router.routes
         for method in getattr(route, "methods", ())
     }
     with psycopg2.connect(os.environ["DATABASE_URL"]) as conn:
