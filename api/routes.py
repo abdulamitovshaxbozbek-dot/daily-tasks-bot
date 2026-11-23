@@ -26,7 +26,9 @@ from psycopg2.extras import RealDictCursor
 from retention import claim as claim_notification, morning_text, evening_text, weekly_advice
 import ai as ai_module
 from miniapp_reminders import install as install_miniapp_reminders
+from miniapp_task_creation import install as install_miniapp_task_creation
 from miniapp_task_edits import install as install_miniapp_task_edits
+from miniapp_task_status import install as install_miniapp_task_status
 from database import get_connection
 from bot_identity import register_chat, require_joined, bot_id, verify_webhook
 
@@ -6989,127 +6991,39 @@ def handle_scheduled_weekly_reports():
     return {'ok':True,'results':results}
 
 
-class MiniappTomorrowTaskRequest(BaseModel):
-    task_text: str = Field(min_length=1, max_length=10000)
-    task_date: date
-    request_id: str = Field(min_length=36, max_length=36)
-
-
-@router.post('/miniapp/tasks')
-def miniapp_create_tomorrow_task(payload: MiniappTomorrowTaskRequest, chat_id: int = Depends(get_miniapp_chat_id)):
-    """Authenticated, idempotent today/tomorrow planning; notifications follow commit."""
-    user = get_user_by_chat_id(chat_id)
-    if not user or user['state']=='blocked' or (require_joined() and user.get('active_bot_id')!=bot_id()):
-        raise HTTPException(status_code=403, detail='Vazifa qo‘shish uchun botda /start bosing.')
-    from uuid import UUID
-    try:
-        request_id=str(UUID(payload.request_id))
-    except ValueError:
-        raise HTTPException(status_code=422, detail='So‘rov identifikatori noto‘g‘ri.')
-    tasks = [uzbek_to_latin(clean_task_text(line)) for line in payload.task_text.splitlines() if line.strip()]
-    if not tasks or len(tasks)>20 or len(payload.task_text)>10000 or any(not task or len(task)>1000 for task in tasks):
-        raise HTTPException(status_code=422, detail='Har bir vazifani yangi qatorda yozing: 20 tagacha, har biri 1000 belgigacha.')
-    fingerprint=hashlib.sha256((payload.task_date.isoformat()+'\n'+'\n'.join(tasks)).encode()).hexdigest()
-    today=get_today()
-    with get_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # Same user lock as edit/carry operations prevents parallel duplicate saves.
-            cur.execute('SELECT id FROM public.users WHERE id=%s FOR UPDATE', (user['id'],))
-            cur.execute("SELECT input_hash,result FROM public.qadam_miniapp_task_requests WHERE bot_id=%s AND user_id=%s AND request_id=%s", (bot_id(),str(user['id']),request_id))
-            cached=cur.fetchone()
-            if cached:
-                if cached['input_hash']!=fingerprint:
-                    raise HTTPException(status_code=409, detail='O‘zgargan vazifa uchun yangi so‘rov yuboring.')
-                return cached['result']
-            if payload.task_date not in (today, today+timedelta(days=1)):
-                raise HTTPException(status_code=422, detail='Faqat bugun yoki ertaga qo‘shish mumkin. Kun ro‘yxatini qayta oching.')
-            cur.execute('SELECT EXISTS (SELECT 1 FROM public.tasks WHERE user_id=%s) AS has_tasks', (user['id'],))
-            first_task=not cur.fetchone()['has_tasks']
-            cur.execute('SELECT id,task_text FROM public.tasks WHERE user_id=%s AND task_date=%s', (user['id'],payload.task_date))
-            existing={normalize_task(row['task_text']):row['id'] for row in cur.fetchall()}
-            task_ids=[]; added_tasks=[]; duplicate_count=0
-            for text in tasks:
-                normalized=normalize_task(text)
-                if normalized in existing:
-                    task_id=existing[normalized]; duplicate_count+=1
-                else:
-                    cur.execute("INSERT INTO public.tasks(user_id,task_text,task_date,status) VALUES(%s,%s,%s,'pending') RETURNING id", (user['id'],text,payload.task_date))
-                    task_id=cur.fetchone()['id']; existing[normalized]=task_id; added_tasks.append(text)
-                task_ids.append(str(task_id))
-            if added_tasks and payload.task_date == today:
-                cur.execute('UPDATE public.users SET last_completion_notified_date=NULL WHERE id=%s', (user['id'],))
-            offer_morning=first_task and bool(added_tasks) and user.get('morning_time') is None
-            cur.execute("UPDATE public.users SET last_active_date=%s, state=CASE WHEN %s THEN 'waiting_morning_time' ELSE state END WHERE id=%s", (today,offer_morning,user['id']))
-            result={'ok':True,'task_id':task_ids[0],'task_ids':task_ids,'added':len(added_tasks),'duplicates':duplicate_count,
-                    'task_date':payload.task_date.isoformat(),'duplicate':not added_tasks,'chat_notified':False}
-            cur.execute("INSERT INTO public.qadam_miniapp_task_requests(bot_id,user_id,request_id,input_hash,result) VALUES(%s,%s,%s,%s,%s::jsonb)", (bot_id(),str(user['id']),request_id,fingerprint,json.dumps(result)))
-        conn.commit()
-    if added_tasks:
-        target_label = 'Bugungi' if payload.task_date == today else 'Ertangi'
-        confirmation=(f"✅ {target_label} rejangizga qo‘shildi:" if len(added_tasks)==1 else f"✅ {target_label} rejangizga {len(added_tasks)} ta vazifa qo‘shildi:")
-        confirmation+='\n'+'\n'.join(f"{i}. {text[:120]}{'…' if len(text)>120 else ''}" for i,text in enumerate(added_tasks,1))
-        confirmation+=f"\n📅 {format_uz_date(payload.task_date)}"
-        if duplicate_count: confirmation+=f"\n🔄 {duplicate_count} ta takroriy vazifa qayta qo‘shilmadi."
-        if payload.task_date != today and user.get('morning_time') is not None:
-            confirmation+=f"\n\n🌅 Ertaga soat {str(user['morning_time'])[:5]} da rejangizni eslataman."
-        try:
-            telegram_send_message_with_keyboard(chat_id,confirmation,
-                {'inline_keyboard':[[{'text':'🏠 Bugun','web_app':{'url':MINIAPP_URL}}]]})
-            result['chat_notified']=True
-            if offer_morning:
-                telegram_send_morning_keyboard(chat_id,user.get('first_name') or 'Do‘st',task_saved=False)
-        except Exception as error:
-            # Task is committed. Never report a failed save or resend on request replay.
-            print('Tomorrow planning notification failed:',type(error).__name__)
-        if payload.task_date == today:
-            try:
-                refresh_live_checklist(chat_id, user)
-            except Exception as error:
-                print('Created task checklist sync failed:', type(error).__name__)
-        with get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("UPDATE public.qadam_miniapp_task_requests SET result=%s::jsonb WHERE bot_id=%s AND user_id=%s AND request_id=%s", (json.dumps(result),bot_id(),str(user['id']),request_id))
-            conn.commit()
-    if result.get("added", 0):
-        from journey import record
-        record(user["id"], "task_saved", "miniapp", request_id)
-    return result
+install_miniapp_task_creation(
+    router,
+    get_miniapp_chat_id=get_miniapp_chat_id,
+    get_user_by_chat_id=get_user_by_chat_id,
+    require_joined=require_joined,
+    bot_id=bot_id,
+    uzbek_to_latin=uzbek_to_latin,
+    clean_task_text=clean_task_text,
+    get_today=get_today,
+    get_connection=get_connection,
+    normalize_task=normalize_task,
+    format_uz_date=format_uz_date,
+    telegram_send_message_with_keyboard=telegram_send_message_with_keyboard,
+    MINIAPP_URL=MINIAPP_URL,
+    telegram_send_morning_keyboard=telegram_send_morning_keyboard,
+    refresh_live_checklist=refresh_live_checklist,
+)
 
 
 def miniapp_fail_reasons():
     return [{'code': code, 'label': item['label'], 'emoji': item['emoji']} for code, item in FAIL_REASONS.items()]
 
 
-class MiniappTaskStatusRequest(BaseModel):
-    status: str
-    reason_code: Optional[str] = None
-    reason_text: Optional[str] = Field(default=None, max_length=1000)
+install_miniapp_task_status(
+    router,
+    get_miniapp_chat_id=get_miniapp_chat_id,
+    get_user_by_chat_id=get_user_by_chat_id,
+    transition_task=transition_task,
+    _remove_task_prompt=_remove_task_prompt,
+    sync_task_result=sync_task_result,
+    _tasks_to_json=_tasks_to_json,
+)
 
-
-@router.post('/miniapp/tasks/{task_id}/status')
-def miniapp_task_status(task_id: str, payload: MiniappTaskStatusRequest,
-                        chat_id: int = Depends(get_miniapp_chat_id)):
-    user = get_user_by_chat_id(chat_id)
-    if not user or user['state'] == 'blocked':
-        raise HTTPException(status_code=403, detail='Avval botda /start bosing.')
-    if payload.status not in ('completed', 'failed'):
-        raise HTTPException(status_code=422, detail='Status noto‘g‘ri.')
-    if payload.status == 'failed' and payload.reason_code is None:
-        raise HTTPException(status_code=422, detail='Bajarilmaganlik sababini tanlang.')
-    result = transition_task(user, task_id, payload.status, payload.reason_code, payload.reason_text)
-    if result['changed']:
-        for field in ('reason_message_id', 'reason_text_message_id'):
-            try:
-                _remove_task_prompt(chat_id, result['original'].get(field))
-            except Exception as error:
-                print('Reason prompt cleanup failed:', type(error).__name__)
-    synced = sync_task_result(chat_id, user, result['task'])
-    response = {'ok': not result['conflict'], 'changed': result['changed'],
-                'checklist_updated': synced, 'task': _tasks_to_json([result['task']])[0]}
-    if result['conflict']:
-        from fastapi.responses import JSONResponse
-        return JSONResponse(status_code=409, content={**response, 'detail': 'Vazifa boshqa interfeysda belgilangan. Joriy holat ko‘rsatildi.'})
-    return response
 
 # Start logging follows the original handler; analytics never changes its result.
 _original_start_handler = handle_telegram_start
