@@ -29,7 +29,6 @@ def install(
     format_uz_date,
     telegram_send_message_with_keyboard,
     MINIAPP_URL,
-    telegram_send_morning_keyboard,
     refresh_live_checklist,
 ):
     """Register task creation using the bot's shared services."""
@@ -77,7 +76,7 @@ def install(
                 if added_tasks and payload.task_date == today:
                     cur.execute('UPDATE public.users SET last_completion_notified_date=NULL WHERE id=%s', (user['id'],))
                 offer_morning=first_task and bool(added_tasks) and user.get('morning_time') is None
-                cur.execute("UPDATE public.users SET last_active_date=%s, state=CASE WHEN %s THEN 'waiting_morning_time' ELSE state END WHERE id=%s", (today,offer_morning,user['id']))
+                cur.execute("UPDATE public.users SET last_active_date=%s WHERE id=%s", (today, user["id"]))
                 result={'ok':True,'task_id':task_ids[0],'task_ids':task_ids,'added':len(added_tasks),'duplicates':duplicate_count,
                         'task_date':payload.task_date.isoformat(),'duplicate':not added_tasks,'chat_notified':False}
                 cur.execute("INSERT INTO public.qadam_miniapp_task_requests(bot_id,user_id,request_id,input_hash,result) VALUES(%s,%s,%s,%s,%s::jsonb)", (bot_id(),str(user['id']),request_id,fingerprint,json.dumps(result)))
@@ -90,12 +89,12 @@ def install(
             if duplicate_count: confirmation+=f"\n🔄 {duplicate_count} ta takroriy vazifa qayta qo‘shilmadi."
             if payload.task_date != today and user.get('morning_time') is not None:
                 confirmation+=f"\n\n🌅 Ertaga soat {str(user['morning_time'])[:5]} da rejangizni eslataman."
+            keyboard = [[{"text": "🏠 Bugun", "web_app": {"url": MINIAPP_URL}}]]
+            if offer_morning:
+                keyboard.append([{"text": "🌅 Ertalabki eslatma", "callback_data": "morning_setup"}])
             try:
-                telegram_send_message_with_keyboard(chat_id,confirmation,
-                    {'inline_keyboard':[[{'text':'🏠 Bugun','web_app':{'url':MINIAPP_URL}}]]})
-                result['chat_notified']=True
-                if offer_morning:
-                    telegram_send_morning_keyboard(chat_id,user.get('first_name') or 'Do‘st',task_saved=False)
+                telegram_send_message_with_keyboard(chat_id, confirmation, {"inline_keyboard": keyboard})
+                result['chat_notified'] = True
             except Exception as error:
                 # Task is committed. Never report a failed save or resend on request replay.
                 print('Tomorrow planning notification failed:',type(error).__name__)
