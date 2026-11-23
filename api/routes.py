@@ -2201,9 +2201,6 @@ def _save_tasks_for_date(user, tasks, task_date, from_voice=False):
             with conn.cursor() as cur:
                 cur.execute("UPDATE public.users SET state='waiting_morning_time' WHERE id=%s", (user["id"],))
             conn.commit()
-        telegram_send_morning_keyboard(chat_id, user.get("first_name") or "Do‘st")
-        if task_date != today:
-            telegram_send_message(chat_id, f"📅 Vazifa saqlangan sana: {format_uz_date(task_date)}")
     elif response_parts:
 
         telegram_send_message(
@@ -2214,7 +2211,7 @@ def _save_tasks_for_date(user, tasks, task_date, from_voice=False):
     # Yangi vazifa qo'shilganda eski checklistni pastga ko'chiramiz:
     # eski xabar o'chadi, DB'dagi barcha pending vazifalar bilan yangi
     # checklist tasdiq xabaridan keyin yuboriladi.
-    if added_count > 0 and task_date == today and not offer_morning:
+    if added_count > 0 and task_date == today:
 
         refresh_live_checklist(
             chat_id,
@@ -2225,6 +2222,13 @@ def _save_tasks_for_date(user, tasks, task_date, from_voice=False):
             ),
             force_new=True
         )
+
+    if offer_morning:
+        telegram_send_morning_keyboard(
+            chat_id, user.get("first_name") or "Do‘st", task_saved=task_date != today
+        )
+        if task_date != today:
+            telegram_send_message(chat_id, f"📅 Vazifa saqlangan sana: {format_uz_date(task_date)}")
 
     return {
         "ok": True,
