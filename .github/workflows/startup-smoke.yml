@@ -1,0 +1,91 @@
+name: Startup smoke test
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  startup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: qadam
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: qadam
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U qadam -d qadam"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://qadam:ci-only@127.0.0.1:5432/qadam
+      SCHEDULER_ENABLED: "false"
+      TELEGRAM_TOKEN: ""
+      PORT: "8000"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r api/requirements.txt
+      - name: Prepare test database
+        run: |
+          python - <<'PY'
+          import os
+          import psycopg2
+
+          with psycopg2.connect(os.environ["DATABASE_URL"]) as conn:
+              with conn.cursor() as cur:
+                  cur.execute("CREATE TABLE public.users (id bigint PRIMARY KEY)")
+          PY
+      - name: Start four workers and verify database health
+        working-directory: api
+        run: |
+          log=$(mktemp)
+          python -m start_server >"$log" 2>&1 &
+          server_pid=$!
+          cleanup() {
+            status=$?
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+            if [ "$status" -ne 0 ]; then cat "$log"; fi
+            rm -f "$log"
+          }
+          trap cleanup EXIT
+          python - "$server_pid" "$log" <<'PY'
+          import json
+          import os
+          import sys
+          import time
+          from pathlib import Path
+          from urllib.request import urlopen
+
+          pid, log = int(sys.argv[1]), Path(sys.argv[2])
+          deadline = time.monotonic() + 45
+          while time.monotonic() < deadline:
+              os.kill(pid, 0)
+              output = log.read_text()
+              if "Application startup failed" in output or "deadlock detected" in output:
+                  raise SystemExit("A worker failed during startup")
+              if output.count("Application startup complete.") >= 4:
+                  try:
+                      with urlopen("http://127.0.0.1:8000/health/db", timeout=2) as response:
+                          health = json.load(response)
+                  except (OSError, ValueError):
+                      pass
+                  else:
+                      if health.get("status") == "ok" and health.get("database") is True:
+                          print("Four workers ready and PostgreSQL healthy")
+                          break
+              time.sleep(0.5)
+          else:
+              raise SystemExit("Four workers and PostgreSQL did not become ready")
+          PY
