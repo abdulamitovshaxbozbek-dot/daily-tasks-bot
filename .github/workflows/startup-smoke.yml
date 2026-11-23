@@ -46,6 +46,9 @@ jobs:
               with conn.cursor() as cur:
                   cur.execute("CREATE TABLE public.users (id bigint PRIMARY KEY)")
           PY
+      - name: Verify Mini App task actions in PostgreSQL
+        working-directory: api
+        run: python ../tests/check_miniapp_task_flow.py
       - name: Start four workers and verify database health
         working-directory: api
         run: |
