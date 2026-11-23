@@ -1886,7 +1886,7 @@ def handle_morning_time(
         "time": time_value
     }
 
-def handle_morning_skip(chat_id, callback_query_id=None):
+def handle_morning_skip(chat_id, callback_query_id=None, message_id=None):
     user = get_user_by_chat_id(chat_id)
     if not user:
         return {"ok": False}
@@ -1895,17 +1895,12 @@ def handle_morning_skip(chat_id, callback_query_id=None):
             cur.execute("UPDATE public.users SET state='active', features_intro_claimed=true WHERE id=%s AND morning_time IS NULL AND state='waiting_morning_time' RETURNING id", (user["id"],))
             changed = cur.fetchone()
         conn.commit()
-    if not changed:
-        if callback_query_id:
-            telegram_answer_callback(callback_query_id, "Bu tanlov avval bajarilgan.")
-        return {"ok": True, "unchanged": True}
+    _remove_task_prompt(chat_id, message_id)
     if callback_query_id:
-        telegram_answer_callback(callback_query_id, "Keyinroq sozlashingiz mumkin")
-    telegram_send_message_with_keyboard(chat_id,
-        "✅ Vazifangiz saqlangan. Ertalabki eslatmani keyinroq tanlashingiz mumkin.",
-        {"inline_keyboard": [[{"text": "🌅 Ertalabki vaqt", "callback_data": "morning_setup"},
-                              {"text": "🏠 Bugun", "web_app": {"url": MINIAPP_URL}}]]})
-    refresh_live_checklist(chat_id, user, force_new=True)
+        telegram_answer_callback(
+            callback_query_id,
+            "Keyinroq sozlashingiz mumkin" if changed else "Bu tanlov avval bajarilgan.",
+        )
     return {"ok": True, "route": "morning_skip"}
 
 
@@ -2196,17 +2191,13 @@ def _save_tasks_for_date(user, tasks, task_date, from_voice=False):
         response_parts.append(f"📅 Sana: {format_uz_date(task_date)}")
 
     offer_morning = added_count > 0 and is_first_task_ever and user.get("morning_time") is None
-    if offer_morning:
-        with get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("UPDATE public.users SET state='waiting_morning_time' WHERE id=%s", (user["id"],))
-            conn.commit()
-    elif response_parts:
-
-        telegram_send_message(
-            chat_id,
-            "\n\n".join(response_parts)
+    morning_button = {"text": "🌅 Ertalabki eslatma", "callback_data": "morning_setup"}
+    if offer_morning and task_date != today:
+        telegram_send_message_with_keyboard(
+            chat_id, "\n\n".join(response_parts), {"inline_keyboard": [[morning_button]]}
         )
+    elif response_parts and not offer_morning:
+        telegram_send_message(chat_id, "\n\n".join(response_parts))
 
     # Yangi vazifa qo'shilganda eski checklistni pastga ko'chiramiz:
     # eski xabar o'chadi, DB'dagi barcha pending vazifalar bilan yangi
@@ -2220,15 +2211,9 @@ def _save_tasks_for_date(user, tasks, task_date, from_voice=False):
                 f"📋 Bugungi reja — "
                 f"{added_count} ta yangi vazifa qo‘shildi"
             ),
-            force_new=True
+            force_new=True,
+            extra_buttons=[[morning_button]] if offer_morning else None,
         )
-
-    if offer_morning:
-        telegram_send_morning_keyboard(
-            chat_id, user.get("first_name") or "Do‘st", task_saved=task_date != today
-        )
-        if task_date != today:
-            telegram_send_message(chat_id, f"📅 Vazifa saqlangan sana: {format_uz_date(task_date)}")
 
     return {
         "ok": True,
@@ -5726,7 +5711,7 @@ def telegram_webhook(
                 )
 
             if callback_data == "morning_skip":
-                return handle_morning_skip(chat_id, callback_query_id)
+                return handle_morning_skip(chat_id, callback_query_id, callback_message_id)
             if callback_data == "morning_setup":
                 user = get_user_by_chat_id(chat_id)
                 if not user or user.get("morning_time") is not None:
@@ -7009,7 +6994,6 @@ install_miniapp_task_creation(
     format_uz_date=format_uz_date,
     telegram_send_message_with_keyboard=telegram_send_message_with_keyboard,
     MINIAPP_URL=MINIAPP_URL,
-    telegram_send_morning_keyboard=telegram_send_morning_keyboard,
     refresh_live_checklist=refresh_live_checklist,
 )
 
