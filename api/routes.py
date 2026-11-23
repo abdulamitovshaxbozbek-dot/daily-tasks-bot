@@ -64,7 +64,7 @@ def tomorrow_miniapp_button():
     parts = urlsplit(MINIAPP_URL)
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
     query['action'] = 'add_tomorrow'
-    return {'text': '📅 Ertaga vazifa qo‘shish', 'web_app': {'url': urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))}}
+    return {'text': '📅 Ertaga bitta vazifa qo‘shish', 'web_app': {'url': urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))}}
 
 
 ADMIN_MINIAPP_URL = os.getenv(
@@ -6894,17 +6894,24 @@ def handle_evening_summary():
             if not tasks or not claim_notification(get_connection, bot_id(), user['id'], 'evening', today):
                 continue
             text = evening_text(tasks)
-            carry_buttons = []
-            if any(task['status'] in ('pending','failed') for task in tasks):
-                text += '\n\nErtaga vazifa qo‘shish uchun pastdagi tugmani bosing. Bugungi natija saqlanadi.'
-                carry_buttons = [[tomorrow_miniapp_button()]]
+            plan_buttons = [[tomorrow_miniapp_button()]]
+            tomorrow = (today + timedelta(days=1)).isoformat()
+            unfinished = [task for task in tasks if task['status'] in ('pending', 'failed')]
+            for task in unfinished[:3]:
+                label = task['task_text']
+                if len(label) > 35:
+                    label = label[:34] + '…'
+                plan_buttons.append([{
+                    'text': f'↪️ Ertaga: {label}',
+                    'callback_data': f"retention_carry|{task['id']}|{tomorrow}",
+                }])
             if any(task['status']=='pending' for task in tasks):
                 refresh_live_checklist(user['telegram_chat_id'], user,
                     heading='🌙 Bugungi natijangiz', force_new=True,
-                    instructions=html.unescape(re.sub(r'<[^>]+>', '', text)), extra_buttons=carry_buttons)
+                    instructions=html.unescape(re.sub(r'<[^>]+>', '', text)), extra_buttons=plan_buttons)
             else:
                 telegram_send_message_with_keyboard(user['telegram_chat_id'], text,
-                    {'inline_keyboard': [[{'text':'🏠 Bugun','web_app':{'url':MINIAPP_URL}}]] + carry_buttons}, parse_mode='HTML')
+                    {'inline_keyboard': [[{'text':'🏠 Bugun','web_app':{'url':MINIAPP_URL}}]] + plan_buttons}, parse_mode='HTML')
             results.append({'chat_id':user['telegram_chat_id'],'sent':True})
         except Exception as error:
             results.append({'chat_id':user['telegram_chat_id'],'sent':False,'error':str(error)})
